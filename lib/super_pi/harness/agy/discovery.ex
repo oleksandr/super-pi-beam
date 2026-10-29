@@ -71,7 +71,6 @@ defmodule SuperPi.Harness.AGY.Discovery do
   """
   def discover_rule_files(workspace_dirs, opts \\ []) when is_list(workspace_dirs) do
     global_dir = Keyword.get(opts, :global_config_dir, default_global_config_dir())
-    allowed_roots = Enum.map(workspace_dirs, &Path.expand/1) ++ [Path.expand(global_dir)]
 
     workspace_candidates =
       workspace_dirs
@@ -94,17 +93,12 @@ defmodule SuperPi.Harness.AGY.Discovery do
     ]
 
     (workspace_candidates ++ global_candidates)
-    |> Enum.filter(&File.regular?/1)
-    |> Enum.filter(&within_allowed_roots?(&1, allowed_roots))
+    |> Enum.filter(&valid_rule_file?/1)
     |> deduplicate_by_canonical_path()
   end
 
-  defp within_allowed_roots?(path, roots) do
-    real = canonical_realpath(path)
-
-    Enum.any?(roots, fn root ->
-      real == root or String.starts_with?(real, root <> "/")
-    end)
+  defp valid_rule_file?(path) do
+    File.regular?(path) and String.ends_with?(canonical_realpath(path), [".md", ".markdown"])
   end
 
   @doc """
@@ -130,7 +124,7 @@ defmodule SuperPi.Harness.AGY.Discovery do
     tier2_entries =
       for dir <- ancestors, dot <- @dot_dirs do
         manifest = Path.join([dir, dot, "skills.json"])
-        resolve_json_manifest(manifest, repo_root)
+        resolve_json_manifest(manifest, dir)
       end
       |> List.flatten()
 
@@ -171,24 +165,64 @@ defmodule SuperPi.Harness.AGY.Discovery do
         %{} = data ->
           base_dir = Path.dirname(expanded)
 
+          manifest_repo_root =
+            case find_git_root(base_dir) do
+              {:ok, root} -> root
+              _ -> repo_root || base_dir
+            end
+
+          raw_inherits =
+            case Map.get(data, "inherits") do
+              list when is_list(list) -> list
+              _ -> []
+            end
+
           inherited =
-            data
-            |> Map.get("inherits", [])
+            raw_inherits
             |> Enum.flat_map(fn item ->
-              inc_path = resolve_custom_path(Map.get(item, "path", ""), base_dir, repo_root)
-              sub = resolve_json_manifest(inc_path, repo_root, visited)
-              filter_manifest_items(sub, Map.get(item, "include_only"), Map.get(item, "exclude"))
+              {item_path, inc_only, exc} =
+                cond do
+                  is_binary(item) -> {item, nil, nil}
+                  is_map(item) -> {Map.get(item, "path", ""), Map.get(item, "include_only"), Map.get(item, "exclude")}
+                  true -> {"", nil, nil}
+                end
+
+              if is_binary(item_path) and item_path != "" do
+                inc_path = resolve_custom_path(item_path, base_dir, manifest_repo_root)
+                sub = resolve_json_manifest(inc_path, manifest_repo_root, visited)
+                filter_manifest_items(sub, sanitize_patterns(inc_only), sanitize_patterns(exc))
+              else
+                []
+              end
             end)
 
+          raw_entries =
+            case Map.get(data, "entries") do
+              list when is_list(list) -> list
+              _ -> []
+            end
+
           own_entries =
-            data
-            |> Map.get("entries", [])
-            |> Enum.map(fn item ->
-              %{
-                path: resolve_custom_path(Map.get(item, "path", ""), base_dir, repo_root),
-                include_only: Map.get(item, "include_only"),
-                exclude: Map.get(item, "exclude")
-              }
+            raw_entries
+            |> Enum.flat_map(fn item ->
+              {item_path, inc_only, exc} =
+                cond do
+                  is_binary(item) -> {item, nil, nil}
+                  is_map(item) -> {Map.get(item, "path", ""), Map.get(item, "include_only"), Map.get(item, "exclude")}
+                  true -> {"", nil, nil}
+                end
+
+              if is_binary(item_path) and item_path != "" do
+                [
+                  %{
+                    path: resolve_custom_path(item_path, base_dir, manifest_repo_root),
+                    include_only: sanitize_patterns(inc_only),
+                    exclude: sanitize_patterns(exc)
+                  }
+                ]
+              else
+                []
+              end
             end)
 
           inherited ++ own_entries
@@ -199,16 +233,27 @@ defmodule SuperPi.Harness.AGY.Discovery do
     end
   end
 
+  defp sanitize_patterns(patterns) when is_list(patterns) do
+    Enum.filter(patterns, &is_binary/1)
+  end
+
+  defp sanitize_patterns(pat) when is_binary(pat), do: [pat]
+  defp sanitize_patterns(_), do: nil
+
   @doc """
   Parses YAML frontmatter (`name` and `description`) from a `SKILL.md` file.
   """
   def parse_skill_md(skill_md_path) when is_binary(skill_md_path) do
     case File.read(skill_md_path) do
-      {:ok, content} ->
+      {:ok, raw_content} ->
+        content = String.trim_leading(raw_content, "\uFEFF")
+
         case String.split(content, ~r/^---\s*$/m, parts: 3) do
           ["", yaml_block, body] ->
-            name = extract_yaml_field(yaml_block, "name") || Path.basename(Path.dirname(skill_md_path))
-            desc = extract_yaml_field(yaml_block, "description") || ""
+            dir_name = Path.basename(Path.dirname(skill_md_path))
+            parsed_name = extract_top_level_yaml_field(yaml_block, "name")
+            name = if is_nil(parsed_name) or parsed_name == "", do: dir_name, else: parsed_name
+            desc = extract_top_level_yaml_field(yaml_block, "description") || ""
             {:ok, %{name: name, description: desc, path: Path.expand(skill_md_path), body: String.trim(body)}}
 
           _ ->
@@ -217,6 +262,53 @@ defmodule SuperPi.Harness.AGY.Discovery do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp extract_top_level_yaml_field(yaml, key) do
+    lines = String.split(yaml, "\n")
+
+    case Enum.find_index(lines, &Regex.match?(~r/^#{key}:\s*/, &1)) do
+      nil ->
+        nil
+
+      idx ->
+        line = Enum.at(lines, idx)
+        after_colon = line |> String.split(":", parts: 2) |> List.last() |> String.trim()
+        clean_val = unquote_yaml_value(after_colon)
+
+        continuation_lines =
+          lines
+          |> Enum.drop(idx + 1)
+          |> Enum.take_while(fn l -> String.starts_with?(l, " ") or String.starts_with?(l, "\t") end)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+
+        cond do
+          clean_val in [">-", ">", "|", "|-", ""] and continuation_lines != [] ->
+            Enum.join(continuation_lines, " ")
+
+          continuation_lines != [] and clean_val != "" ->
+            Enum.join([clean_val | continuation_lines], " ")
+
+          true ->
+            clean_val
+        end
+    end
+  end
+
+  defp unquote_yaml_value(val) do
+    trimmed = String.trim(val)
+
+    cond do
+      String.starts_with?(trimmed, "\"") and String.ends_with?(trimmed, "\"") and byte_size(trimmed) >= 2 ->
+        binary_part(trimmed, 1, byte_size(trimmed) - 2)
+
+      String.starts_with?(trimmed, "'") and String.ends_with?(trimmed, "'") and byte_size(trimmed) >= 2 ->
+        binary_part(trimmed, 1, byte_size(trimmed) - 2)
+
+      true ->
+        trimmed
     end
   end
 
