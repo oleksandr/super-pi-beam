@@ -151,19 +151,20 @@ defmodule SuperPi.Harness do
 end
 ```
 
-### Built-in Harnesses
+### Built-in Harnesses & Declarative Showcase
 
 - **`SuperPi.Harness.Default` (`super-pi-agent`)**:
-  Clean, unopinionated autonomous coding agent with full workspace access (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `tool_search`) and normative 10-rule context derivation.
+  Clean, unopinionated autonomous coding agent with standard workspace tools and normative 10-rule context derivation.
+- **`SuperPi.Harness.Autonomous` (`super-pi-auto`)**:
+  Enterprise autonomous showcase declaratively assembled from safety, rollback, and cost-reduction plugins:
+  `[ProtectedPaths, ConfirmDestructive, GitCheckpoint, AutoCommit, JevRouter, Todo, PromptCustomizer]`.
+- **`SuperPi.Harness.Interactive` (`super-pi-interactive`)**:
+  Human-collaborative interactive showcase declaratively assembled from:
+  `[Questionnaire, InlineBash, StructuredOutput, Handoff, Subagent]`.
 - **`SuperPi.Harness.AGY` (`super-pi-agy`)**:
-  Antigravity workflow harness. Dynamically loads the 5-tier customization extensions:
-  - `Rules`: Hierarchical rule ingestion (`GEMINI.md`, `AGENTS.md`).
-  - `Skills`: Modular skill discovery and progressive disclosure.
-  - `HooksJson`: Lifecycle event triggers and pre-tool execution overrides.
-  - `Permissions`: Workspace boundary and tool security policies.
-  - `SlashCommands`: Client-facing interactive slash commands.
+  Antigravity workflow persona with 5-tier discovery (`Rules`, `Skills`, `HooksJson`, `Permissions`, `SlashCommands`).
 - **`SuperPi.Harness.Planner` (`super-pi-planner`)**:
-  Read-only architectural planning specialist. Restricts tool exposure to read-only tools and enforces planning prompts.
+  Read-only architectural planning specialist with write protection.
 
 ### Listing Harnesses via CLI
 
@@ -173,10 +174,13 @@ bin/super-pi harness list
 
 Output:
 ```text
-Available Super-Pi Harnesses:
-  * super-pi-agent    Super-Pi Autonomous Agent (Default) - Pure, unopinionated agent with standard tools and 10-rule context derivation
-  * super-pi-agy      Super-Pi Antigravity Harness - Antigravity workflow harness loading Rules, Skills, Hooks, Permissions, and Slash Commands
-  * super-pi-planner  Super-Pi Architecture Planner - Read-only architecture planner with restricted tool exposure
+HARNESS ID            NAME                                                  DESCRIPTION
+--------------------------------------------------------------------------------------------------------------------------------------------------
+super-pi-agent        Super-Pi Standard Agent                               Autonomous coding agent with 10-rule context derivation and safe sandbox
+super-pi-auto         Super-Pi Autonomous Enterprise Harness                Composed of security shields, git rollbacks, Jev cascading, and task ledger
+super-pi-interactive  Super-Pi Human-Collaborative Interactive Harness      Composed of clarification questionnaires, inline shell, terminating outputs, and handoff
+super-pi-agy          Antigravity (AGY) Harness                             Antigravity persona with 5-tier skill discovery, rules, and hooks.json
+super-pi-planner      Super-Pi Architecture Planner                         Read-only architectural analysis, planning, and verification harness
 ```
 
 ### General-Purpose Engine vs Coding Default
@@ -189,6 +193,43 @@ While Super-Pi-BEAM ships with software engineering defaults (`super-pi-agent`),
   - **Financial Intelligence**: Binds Actual Budget or banking APIs for transaction reconciliation, tag audits, and cash-flow reporting.
   - **Research & Synthesis**: Binds web search, HTTP scrapers, and PDF extractors with write/edit tools disabled.
   - **Support & Policy Guidance**: Binds FAQ and knowledge-base search with PII sanitization and sentiment escalation hooks.
+
+### Declarative Plugins Ecosystem (`SuperPi.Plugins`)
+
+Super-Pi-BEAM includes a library of **13 modular plugins** migrated from the Pi ecosystem and native BEAM patterns. Plugins implement the 12-hook `SuperPi.Extension` behaviour and can be assembled declaratively into any harness (even in separate external repositories):
+
+| Plugin | Module | Impact / Feature |
+| :--- | :--- | :--- |
+| **`JevRouter`** | `SuperPi.Plugins.JevRouter` | **60–80% token cost reduction**: routes to reasoning model (`pro`) for planning, then cascades to fast model (`flash`) on first edit. |
+| **`Handoff`** | `SuperPi.Plugins.Handoff` | **Resets active context to 0 tokens**: distills conversation decisions into a clean, focused child thread. |
+| **`InlineBash`** | `SuperPi.Plugins.InlineBash` | **Saves 1 round-trip turn**: pre-evaluates `!{command}` expressions in user prompts directly on input. |
+| **`StructuredOutput`** | `SuperPi.Plugins.StructuredOutput` | **Zero-waste completion**: provides terminating `structured_output` tool (`control: %{"terminate" => true}`). |
+| **`Subagent`** | `SuperPi.Plugins.Subagent` | **Isolated context delegation**: spawns concurrent worker tasks under OTP supervision without polluting parent context. |
+| **`Questionnaire`** | `SuperPi.Plugins.Questionnaire` | **Human-in-the-loop alignment**: structured multi-choice clarification tool with recommended defaults. |
+| **`CustomCompaction`** | `SuperPi.Plugins.CustomCompaction` | **Tiered off-model summarization**: offloads compaction to fast models, preserving key decisions and tool cut-points. |
+| **`Todo`** | `SuperPi.Plugins.Todo` | **Stateful task ledger**: manages task checklists stored in durable session documents (`pi.live`), surviving branch forks. |
+| **`PromptCustomizer`** | `SuperPi.Plugins.PromptCustomizer` | **Adaptive guidance**: injects operational rules tailored specifically to active tools, keeping base prompts compact. |
+| **`ProtectedPaths`** | `SuperPi.Plugins.ProtectedPaths` | **Safety shield**: blocks write/edit/read operations on `.env`, `.git/`, private keys, and credentials. |
+| **`ConfirmDestructive`** | `SuperPi.Plugins.ConfirmDestructive` | **Execution gate**: intercepts dangerous bash operations (`rm -rf`, `DROP TABLE`, `git reset --hard`). |
+| **`GitCheckpoint`** | `SuperPi.Plugins.GitCheckpoint` | **Atomic rollback**: takes git stash checkpoints before tool mutations to support clean fork recovery. |
+| **`AutoCommit`** | `SuperPi.Plugins.AutoCommit` | **Turn finalization**: automatically stages and commits modified files when an agent run finishes. |
+
+```elixir
+# Declarative assembly in custom harnesses:
+defmodule MyCompanyHarness do
+  @behaviour SuperPi.Harness
+
+  @impl true
+  def extensions(opts) do
+    SuperPi.Plugins.resolve_all([
+      SuperPi.Plugins.ProtectedPaths,
+      SuperPi.Plugins.ConfirmDestructive,
+      SuperPi.Plugins.JevRouter,
+      SuperPi.Plugins.StructuredOutput
+    ])
+  end
+end
+```
 
 ### Adding a Custom Harness
 

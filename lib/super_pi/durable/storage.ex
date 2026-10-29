@@ -94,6 +94,8 @@ defmodule SuperPi.Durable.Storage do
   def create_conversation!(opts \\ []) do
     owner_kind = Keyword.get(opts, :owner_kind, "ownerless")
     owner_task_id = Keyword.get(opts, :owner_task_id)
+    parent_conversation_id = Keyword.get(opts, :parent_conversation_id)
+    parent_entry_id = Keyword.get(opts, :parent_entry_id)
     agent_override = Keyword.get(opts, :agent, %{})
     explicit_id = Keyword.get(opts, :id)
 
@@ -101,6 +103,8 @@ defmodule SuperPi.Durable.Storage do
       attrs = %{
         owner_kind: owner_kind,
         owner_task_id: owner_task_id,
+        parent_conversation_id: parent_conversation_id,
+        parent_entry_id: parent_entry_id,
         created_seq: seq
       }
 

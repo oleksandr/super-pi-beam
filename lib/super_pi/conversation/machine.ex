@@ -326,21 +326,33 @@ defmodule SuperPi.Conversation.Machine do
     ctx = hook_ctx(data)
     results = Enum.reverse(data.completed_tool_results)
 
-    case Extension.run_after_tools(data.extensions, results, ctx) do
-      {:steer, steer_msg} ->
-        Storage.append_entry!(data.conversation_id, "pi.message", %{
-          "role" => "user",
-          "content" => [%{"type" => "text", "text" => steer_msg}]
-        })
+    has_terminate? =
+      Enum.any?(results, fn res ->
+        get_in(res, ["control", "terminate"]) == true
+      end)
 
-        {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
+    if has_terminate? do
+      {:next_state, :settling_run, data, [{:next_event, :internal, :settle}]}
+    else
+      case Extension.run_after_tools(data.extensions, results, ctx) do
+        {:steer, steer_msg} ->
+          Storage.append_entry!(data.conversation_id, "pi.message", %{
+            "role" => "user",
+            "content" => [%{"type" => "text", "text" => steer_msg}]
+          })
 
-      {:handoff, handoff_cfg} ->
-        Storage.configure_agent!(data.conversation_id, handoff_cfg)
-        {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
+          {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
 
-      :continue ->
-        {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
+        {:handoff, handoff_cfg} ->
+          Storage.configure_agent!(data.conversation_id, handoff_cfg)
+          {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
+
+        :terminate ->
+          {:next_state, :settling_run, data, [{:next_event, :internal, :settle}]}
+
+        :continue ->
+          {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
+      end
     end
   end
 

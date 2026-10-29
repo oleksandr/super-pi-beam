@@ -31,7 +31,11 @@ defmodule SuperPi.Harness do
     "antigravity" => SuperPi.Harness.AGY,
     "super-pi-agy" => SuperPi.Harness.AGY,
     "planner" => SuperPi.Harness.Planner,
-    "super-pi-planner" => SuperPi.Harness.Planner
+    "super-pi-planner" => SuperPi.Harness.Planner,
+    "auto" => SuperPi.Harness.Autonomous,
+    "super-pi-auto" => SuperPi.Harness.Autonomous,
+    "interactive" => SuperPi.Harness.Interactive,
+    "super-pi-interactive" => SuperPi.Harness.Interactive
   }
 
   @doc """
@@ -40,6 +44,8 @@ defmodule SuperPi.Harness do
   def list do
     [
       SuperPi.Harness.Default,
+      SuperPi.Harness.Autonomous,
+      SuperPi.Harness.Interactive,
       SuperPi.Harness.AGY,
       SuperPi.Harness.Planner
     ]
