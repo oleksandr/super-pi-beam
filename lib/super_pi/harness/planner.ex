@@ -5,6 +5,10 @@ defmodule SuperPi.Harness.Planner do
 
   @behaviour SuperPi.Harness
 
+  use SuperPi.Extension
+
+  @read_only_tools ["read", "grep", "find", "ls", "tool_search"]
+
   @impl true
   def id, do: "super-pi-planner"
 
@@ -17,7 +21,16 @@ defmodule SuperPi.Harness.Planner do
   end
 
   @impl true
-  def extensions(_opts \\ []), do: []
+  def extensions(_opts \\ []), do: [__MODULE__]
+
+  @impl true
+  def before_tool(tool_name, _args, _ctx) do
+    if tool_name in @read_only_tools do
+      :allow
+    else
+      {:block, "Tool '#{tool_name}' is not permitted in read-only Planner mode"}
+    end
+  end
 
   @impl true
   def agent_defaults(opts \\ []) do

@@ -17,7 +17,7 @@ defmodule SuperPi.Harness do
   @callback description() :: String.t()
 
   @doc "List of SuperPi.Extension modules active in this harness"
-  @callback extensions(opts :: keyword()) :: list(module())
+  @callback extensions(opts :: keyword()) :: list(module() | {module(), term()})
 
   @doc "Default document configuration for the conversation agent"
   @callback agent_defaults(opts :: keyword()) :: map()
@@ -60,8 +60,11 @@ defmodule SuperPi.Harness do
   Returns true if the given model name or ID corresponds to a registered harness.
   """
   def harness?(module) when is_atom(module) do
+    extra = Application.get_env(:super_pi, :extra_harnesses, [])
+
     (Code.ensure_loaded?(module) and function_exported?(module, :id, 0)) or
-      Map.has_key?(@registry, to_string(module))
+      Map.has_key?(@registry, to_string(module)) or
+      Enum.member?(extra, module)
   end
 
   def harness?(name_or_id) when is_binary(name_or_id) do
@@ -70,7 +73,13 @@ defmodule SuperPi.Harness do
       |> String.downcase()
       |> String.replace_prefix("super-pi/", "")
 
-    Map.has_key?(@registry, key)
+    extra = Application.get_env(:super_pi, :extra_harnesses, [])
+
+    Map.has_key?(@registry, key) or
+      Enum.any?(extra, fn mod ->
+        function_exported?(mod, :id, 0) and mod.id() == key
+      end) or
+      match_module_string?(name_or_id)
   end
 
   def harness?(_), do: false
@@ -93,19 +102,47 @@ defmodule SuperPi.Harness do
       |> String.downcase()
       |> String.replace_prefix("super-pi/", "")
 
-    case Map.get(@registry, key) do
-      nil ->
-        try do
-          mod = String.to_existing_atom(name_or_id)
-          if Code.ensure_loaded?(mod) and function_exported?(mod, :id, 0), do: mod, else: SuperPi.Harness.Default
-        rescue
-          _ -> SuperPi.Harness.Default
-        end
+    extra = Application.get_env(:super_pi, :extra_harnesses, [])
 
-      mod ->
-        mod
+    extra_match =
+      Enum.find(extra, fn mod ->
+        function_exported?(mod, :id, 0) and (mod.id() == key or mod.id() == name_or_id)
+      end)
+
+    cond do
+      extra_match != nil ->
+        extra_match
+
+      Map.has_key?(@registry, key) ->
+        Map.get(@registry, key)
+
+      true ->
+        resolve_module_string(name_or_id)
     end
   end
 
   def resolve(_), do: SuperPi.Harness.Default
+
+  defp match_module_string?(str) do
+    case resolve_module_string(str) do
+      SuperPi.Harness.Default -> false
+      _ -> true
+    end
+  end
+
+  defp resolve_module_string(name_or_id) do
+    candidates = [
+      name_or_id,
+      "Elixir." <> name_or_id
+    ]
+
+    Enum.find_value(candidates, SuperPi.Harness.Default, fn cand ->
+      try do
+        mod = String.to_existing_atom(cand)
+        if Code.ensure_loaded?(mod) and function_exported?(mod, :id, 0), do: mod, else: nil
+      rescue
+        _ -> nil
+      end
+    end)
+  end
 end

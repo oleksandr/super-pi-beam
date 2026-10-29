@@ -94,10 +94,20 @@ defmodule SuperPi.Plugins do
   end
 
   def resolve(module) when is_atom(module) do
-    if Code.ensure_loaded?(module) and function_exported?(module, :id, 0) do
-      module
-    else
-      Map.get(@aliases, to_string(module))
+    _ = Code.ensure_loaded?(module)
+
+    cond do
+      function_exported?(module, :agent_defaults, 1) or function_exported?(module, :extensions, 1) ->
+        nil
+
+      module in @built_in_plugins ->
+        module
+
+      function_exported?(module, :id, 0) ->
+        module
+
+      true ->
+        Map.get(@aliases, to_string(module))
     end
   end
 
@@ -115,9 +125,12 @@ defmodule SuperPi.Plugins do
     specs
     |> Enum.map(&resolve/1)
     |> Enum.reject(&is_nil/1)
-    |> Enum.uniq_by(fn
+    |> Enum.group_by(fn
       {mod, _opts} -> mod
       mod -> mod
+    end)
+    |> Enum.map(fn {_mod, entries} ->
+      Enum.find(entries, &is_tuple/1) || hd(entries)
     end)
   end
 

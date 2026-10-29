@@ -17,7 +17,6 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
   alias SuperPi.Plugins
   alias SuperPi.TestSupport.Faults
 
-  @moduletag :known_bug
 
   setup do
     Process.flag(:trap_exit, true)

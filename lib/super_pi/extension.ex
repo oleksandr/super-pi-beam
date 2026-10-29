@@ -53,7 +53,7 @@ defmodule SuperPi.Extension do
               {:ok, map()}
 
   @callback after_tools(batch_results :: list(map()), context()) ::
-              :continue | {:steer, String.t()} | {:handoff, map()}
+              :continue | {:steer, String.t()} | {:handoff, map()} | :terminate
 
   @callback on_yield(yield_info :: map(), context()) ::
               :ok
@@ -151,10 +151,14 @@ defmodule SuperPi.Extension do
       {mod, _opts} = unpack_ext(ext)
       mod_ctx = ext_ctx(ext, ctx)
 
-      case mod.on_input(cur_input, mod_ctx) do
-        :continue -> {:cont, {:continue, cur_input, cur_media}}
-        {:transform, new_input, new_media} -> {:cont, {:continue, new_input, cur_media ++ new_media}}
-        :handled -> {:halt, :handled}
+      if function_exported?(mod, :on_input, 2) do
+        case mod.on_input(cur_input, mod_ctx) do
+          :continue -> {:cont, {:continue, cur_input, cur_media}}
+          {:transform, new_input, new_media} -> {:cont, {:continue, new_input, cur_media ++ new_media}}
+          :handled -> {:halt, :handled}
+        end
+      else
+        {:cont, {:continue, cur_input, cur_media}}
       end
     end)
   end
@@ -163,8 +167,15 @@ defmodule SuperPi.Extension do
     Enum.reduce(extensions, agent_cfg, fn ext, acc ->
       {mod, _opts} = unpack_ext(ext)
       mod_ctx = ext_ctx(ext, ctx)
-      {:ok, next} = mod.before_agent_start(acc, mod_ctx)
-      next
+
+      if function_exported?(mod, :before_agent_start, 2) do
+        case mod.before_agent_start(acc, mod_ctx) do
+          {:ok, next} -> next
+          other -> other
+        end
+      else
+        acc
+      end
     end)
   end
 
@@ -173,10 +184,14 @@ defmodule SuperPi.Extension do
       {mod, _opts} = unpack_ext(ext)
       mod_ctx = ext_ctx(ext, ctx)
 
-      case mod.before_compact(req, mod_ctx) do
-        :default -> {:cont, :default}
-        {:compacted, summary, data} -> {:halt, {:compacted, summary, data}}
-        :cancel -> {:halt, :cancel}
+      if function_exported?(mod, :before_compact, 2) do
+        case mod.before_compact(req, mod_ctx) do
+          :default -> {:cont, :default}
+          {:compacted, summary, data} -> {:halt, {:compacted, summary, data}}
+          :cancel -> {:halt, :cancel}
+        end
+      else
+        {:cont, :default}
       end
     end)
   end
@@ -185,8 +200,15 @@ defmodule SuperPi.Extension do
     Enum.reduce(extensions, derived, fn ext, acc ->
       {mod, _opts} = unpack_ext(ext)
       mod_ctx = ext_ctx(ext, ctx)
-      {:ok, next} = mod.before_request(acc, mod_ctx)
-      next
+
+      if function_exported?(mod, :before_request, 2) do
+        case mod.before_request(acc, mod_ctx) do
+          {:ok, next} -> next
+          other -> other
+        end
+      else
+        acc
+      end
     end)
   end
 
@@ -195,9 +217,13 @@ defmodule SuperPi.Extension do
       {mod, _opts} = unpack_ext(ext)
       mod_ctx = ext_ctx(ext, ctx)
 
-      case mod.before_provider_request(acc, mod_ctx) do
-        {:ok, next} -> {:cont, {:ok, next}}
-        {:abort, reason} -> {:halt, {:abort, reason}}
+      if function_exported?(mod, :before_provider_request, 2) do
+        case mod.before_provider_request(acc, mod_ctx) do
+          {:ok, next} -> {:cont, {:ok, next}}
+          {:abort, reason} -> {:halt, {:abort, reason}}
+        end
+      else
+        {:cont, {:ok, acc}}
       end
     end)
   end
@@ -206,8 +232,15 @@ defmodule SuperPi.Extension do
     Enum.reduce(extensions, msg, fn ext, acc ->
       {mod, _opts} = unpack_ext(ext)
       mod_ctx = ext_ctx(ext, ctx)
-      {:ok, next} = mod.after_response(acc, mod_ctx)
-      next
+
+      if function_exported?(mod, :after_response, 2) do
+        case mod.after_response(acc, mod_ctx) do
+          {:ok, next} -> next
+          other -> other
+        end
+      else
+        acc
+      end
     end)
   end
 
@@ -216,24 +249,28 @@ defmodule SuperPi.Extension do
       {mod, _opts} = unpack_ext(ext)
       mod_ctx = ext_ctx(ext, ctx)
 
-      case mod.before_tool(tool_name, cur_args, mod_ctx) do
-        :allow ->
-          {:cont, {:allow, cur_args, overwritten_keys}}
+      if function_exported?(mod, :before_tool, 3) do
+        case mod.before_tool(tool_name, cur_args, mod_ctx) do
+          :allow ->
+            {:cont, {:allow, cur_args, overwritten_keys}}
 
-        {:mutate_input, new_args} ->
-          {:cont, {:allow, new_args, overwritten_keys}}
+          {:mutate_input, new_args} ->
+            {:cont, {:allow, new_args, overwritten_keys}}
 
-        {:overwrite, patch_map} when is_map(patch_map) ->
-          changed =
-            patch_map
-            |> Enum.filter(fn {k, v} -> Map.get(cur_args, k) != v end)
-            |> Enum.map(fn {k, _v} -> to_string(k) end)
+          {:overwrite, patch_map} when is_map(patch_map) ->
+            changed =
+              patch_map
+              |> Enum.filter(fn {k, v} -> Map.get(cur_args, k) != v end)
+              |> Enum.map(fn {k, _v} -> to_string(k) end)
 
-          merged = Map.merge(cur_args, patch_map)
-          {:cont, {:allow, merged, Enum.uniq(overwritten_keys ++ changed)}}
+            merged = Map.merge(cur_args, patch_map)
+            {:cont, {:allow, merged, Enum.uniq(overwritten_keys ++ changed)}}
 
-        {:block, reason} ->
-          {:halt, {:block, reason}}
+          {:block, reason} ->
+            {:halt, {:block, reason}}
+        end
+      else
+        {:cont, {:allow, cur_args, overwritten_keys}}
       end
     end)
     |> case do
@@ -249,7 +286,12 @@ defmodule SuperPi.Extension do
       |> Enum.reduce(core_exec_fun, fn ext, next_fn ->
         {mod, _opts} = unpack_ext(ext)
         mod_ctx = ext_ctx(ext, ctx)
-        fn current_args -> mod.wrap_tool(tool_name, current_args, next_fn, mod_ctx) end
+
+        if function_exported?(mod, :wrap_tool, 4) do
+          fn current_args -> mod.wrap_tool(tool_name, current_args, next_fn, mod_ctx) end
+        else
+          next_fn
+        end
       end)
 
     chain.(args)
@@ -259,8 +301,15 @@ defmodule SuperPi.Extension do
     Enum.reduce(extensions, result, fn ext, acc ->
       {mod, _opts} = unpack_ext(ext)
       mod_ctx = ext_ctx(ext, ctx)
-      {:ok, next} = mod.after_tool(tool_name, args, acc, mod_ctx)
-      next
+
+      if function_exported?(mod, :after_tool, 4) do
+        case mod.after_tool(tool_name, args, acc, mod_ctx) do
+          {:ok, next} -> next
+          other -> other
+        end
+      else
+        acc
+      end
     end)
   end
 
@@ -269,9 +318,13 @@ defmodule SuperPi.Extension do
       {mod, _opts} = unpack_ext(ext)
       mod_ctx = ext_ctx(ext, ctx)
 
-      case mod.after_tools(results, mod_ctx) do
-        :continue -> {:cont, :continue}
-        other -> {:halt, other}
+      if function_exported?(mod, :after_tools, 2) do
+        case mod.after_tools(results, mod_ctx) do
+          :continue -> {:cont, :continue}
+          other -> {:halt, other}
+        end
+      else
+        {:cont, :continue}
       end
     end)
   end
@@ -281,9 +334,13 @@ defmodule SuperPi.Extension do
       {mod, _opts} = unpack_ext(ext)
       mod_ctx = ext_ctx(ext, ctx)
 
-      case mod.after_run(summary, mod_ctx) do
-        :accept -> {:cont, :accept}
-        {:continue, follow_up} -> {:halt, {:continue, follow_up}}
+      if function_exported?(mod, :after_run, 2) do
+        case mod.after_run(summary, mod_ctx) do
+          :accept -> {:cont, :accept}
+          {:continue, follow_up} -> {:halt, {:continue, follow_up}}
+        end
+      else
+        {:cont, :accept}
       end
     end)
   end

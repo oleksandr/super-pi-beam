@@ -23,6 +23,7 @@ defmodule SuperPi.Harness.Fast do
 
   @impl true
   def agent_defaults(opts \\ []) do
+    model = Keyword.get(opts, :model, "gemini-3-flash-preview")
     custom_sections = Keyword.get(opts, :system_sections, [])
 
     base_sections =
@@ -33,7 +34,7 @@ defmodule SuperPi.Harness.Fast do
       end
 
     %{
-      "model" => "gemini-3-flash-preview",
+      "model" => model,
       "effort" => "low",
       "executionMode" => "auto",
       "workspacePaths" => [File.cwd!()],
