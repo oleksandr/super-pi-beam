@@ -26,9 +26,34 @@ defmodule SuperPi.Tools do
   def ensure_catalog_ets! do
     case :ets.whereis(@catalog_ets) do
       :undefined ->
-        tid = :ets.new(@catalog_ets, [:named_table, :public, :set, read_concurrency: true])
-        seed_builtin_tools!()
-        tid
+        heir = Process.whereis(SuperPi.Durable.DeferredFlusher)
+
+        opts = [
+          :named_table,
+          :public,
+          :set,
+          read_concurrency: true
+        ]
+
+        opts = if heir, do: [{:heir, heir, :catalog} | opts], else: opts
+
+        try do
+          tid = :ets.new(@catalog_ets, opts)
+          seed_builtin_tools!()
+
+          if heir && heir != self() do
+            try do
+              :ets.give_away(tid, heir, :catalog)
+            rescue
+              _ -> :ok
+            end
+          end
+
+          tid
+        rescue
+          ArgumentError ->
+            :ets.whereis(@catalog_ets)
+        end
 
       tid ->
         tid
@@ -63,29 +88,44 @@ defmodule SuperPi.Tools do
   tool schemas along with a `control: %{"add_tools" => matches}` directive that activates them
   in `pi.agent` (`Decision 06`).
   """
-  def tool_search(query, max_results \\ 10) when is_binary(query) do
+  def tool_search(query, max_results \\ 10)
+
+  def tool_search(query, _max_results) when not is_binary(query) do
+    error_result("tool_search", "Query must be a string")
+  end
+
+  def tool_search(query, max_results) when is_binary(query) do
     ensure_catalog_ets!()
     q_down = String.downcase(String.trim(query))
 
-    matches =
-      :ets.tab2list(@catalog_ets)
-      |> Enum.map(&elem(&1, 1))
-      |> Enum.filter(fn tool ->
-        tool["exposure"] in ["deferred", "direct", "codemode"] and
-          (String.contains?(String.downcase(tool["name"]), q_down) or
-             String.contains?(String.downcase(Map.get(tool, "description", "")), q_down))
-      end)
-      |> Enum.sort_by(& &1["name"])
-      |> Enum.take(max_results)
+    if q_down == "" do
+      %{
+        "output" => "No search query provided.",
+        "structured_output" => %{"matches" => [], "count" => 0},
+        "details" => %{"query" => query, "activated_names" => []},
+        "control" => %{"add_tools" => []}
+      }
+    else
+      matches =
+        :ets.tab2list(@catalog_ets)
+        |> Enum.map(&elem(&1, 1))
+        |> Enum.filter(fn tool ->
+          tool["exposure"] in ["deferred", "direct"] and
+            (String.contains?(String.downcase(tool["name"]), q_down) or
+               String.contains?(String.downcase(Map.get(tool, "description", "")), q_down))
+        end)
+        |> Enum.sort_by(& &1["name"])
+        |> Enum.take(max_results)
 
-    names = Enum.map(matches, & &1["name"])
+      names = Enum.map(matches, & &1["name"])
 
-    %{
-      "output" => "Activated #{length(matches)} matching tools: #{Enum.join(names, ", ")}",
-      "structured_output" => %{"matches" => matches, "count" => length(matches)},
-      "details" => %{"query" => query, "activated_names" => names},
-      "control" => %{"add_tools" => matches}
-    }
+      %{
+        "output" => "Activated #{length(matches)} matching tools: #{Enum.join(names, ", ")}",
+        "structured_output" => %{"matches" => matches, "count" => length(matches)},
+        "details" => %{"query" => query, "activated_names" => names},
+        "control" => %{"add_tools" => matches}
+      }
+    end
   end
 
   @doc """
@@ -241,13 +281,16 @@ defmodule SuperPi.Tools do
 
       name when name in ["find", "find_files"] ->
         root = fetch_arg(args, [:path, "path", :dir, "dir"], File.cwd!())
+        pattern = fetch_arg(args, [:pattern, "pattern", :glob, "glob"])
 
         case Local.list_files(root) do
           {:ok, files} ->
+            filtered = filter_files_by_pattern(files, pattern)
+
             %{
-              "output" => Enum.join(files, "\n"),
-              "structured_output" => %{"files" => files, "count" => length(files)},
-              "details" => %{"file_count" => length(files)}
+              "output" => Enum.join(filtered, "\n"),
+              "structured_output" => %{"files" => filtered, "count" => length(filtered)},
+              "details" => %{"file_count" => length(filtered)}
             }
 
           {:error, reason} ->
@@ -295,6 +338,35 @@ defmodule SuperPi.Tools do
   end
 
   defp resolve_path(path, _args), do: path
+
+  defp filter_files_by_pattern(files, nil), do: files
+  defp filter_files_by_pattern(files, ""), do: files
+
+  defp filter_files_by_pattern(files, pattern) when is_binary(pattern) do
+    tokens =
+      Regex.scan(~r/(\*\*|\*|\?|[^\*\?]+)/, pattern)
+      |> Enum.map(fn [_, t] ->
+        case t do
+          "**" -> ".*"
+          "*" -> "[^/]*"
+          "?" -> "[^/]"
+          other -> Regex.escape(other)
+        end
+      end)
+      |> Enum.join()
+
+    case Regex.compile("(?:^|/)" <> tokens <> "$") do
+      {:ok, regex} ->
+        Enum.filter(files, fn file ->
+          Regex.match?(regex, file) or Regex.match?(regex, Path.basename(file))
+        end)
+
+      _ ->
+        files
+    end
+  end
+
+  defp filter_files_by_pattern(files, _pattern), do: files
 
   defp fetch_arg(args, keys, default \\ nil) when is_map(args) and is_list(keys) do
     Enum.find_value(keys, default, fn k ->

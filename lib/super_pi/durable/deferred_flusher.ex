@@ -75,6 +75,11 @@ defmodule SuperPi.Durable.DeferredFlusher do
   end
 
   @impl true
+  def handle_info({:"ETS-TRANSFER", _tab, _from_pid, _data}, state) do
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info(:flush_tick, state) do
     try do
       flush_now!()

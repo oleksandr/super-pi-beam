@@ -11,7 +11,6 @@ defmodule SuperPi.ToolsDefectsTest do
 
   alias SuperPi.Tools
 
-  @moduletag :known_bug
   @table :super_pi_tool_catalog
 
   setup do
