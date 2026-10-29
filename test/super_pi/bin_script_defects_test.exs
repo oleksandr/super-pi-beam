@@ -10,7 +10,6 @@ defmodule SuperPi.BinScriptDefectsTest do
   """
   use ExUnit.Case, async: false
 
-  @moduletag :known_bug
 
   @repo File.cwd!()
   @script Path.join(@repo, "bin/super-pi")

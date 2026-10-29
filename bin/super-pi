@@ -58,11 +58,15 @@ case "${CMD}" in
     ;;
 
   mcp)
-    exec mise exec -- mix run --no-halt -e "SuperPi.MCP.Server.run_stdio()"
+    exec mise exec -- mix run -e "SuperPi.MCP.Server.run_stdio()"
     ;;
 
   rpc)
     PORT="${1:-4001}"
+    if ! [[ "${PORT}" =~ ^[0-9]+$ ]]; then
+      echo "Error: port must be a valid numeric integer, got: ${PORT}" >&2
+      exit 1
+    fi
     echo "Starting SuperPi.RPC.Server on port ${PORT}..." >&2
     exec mise exec -- mix run --no-halt -e "SuperPi.RPC.Server.start_link(port: ${PORT}); Process.sleep(:infinity)"
     ;;
@@ -109,8 +113,8 @@ case "${CMD}" in
         ;;
       show)
         CONV_ID="${1:-}"
-        if [[ -z "${CONV_ID}" ]]; then
-          echo "Usage: super-pi session show <ID>" >&2
+        if [[ -z "${CONV_ID}" ]] || ! [[ "${CONV_ID}" =~ ^[0-9]+$ ]]; then
+          echo "Usage: super-pi session show <ID> (ID must be numeric)" >&2
           exit 1
         fi
         exec mise exec -- mix run -e "
