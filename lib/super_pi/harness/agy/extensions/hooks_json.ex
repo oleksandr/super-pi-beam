@@ -18,6 +18,8 @@ defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
 
   use SuperPi.Extension
 
+  @max_stop_continues 3
+
   alias SuperPi.Harness.AGY.Discovery
   alias SuperPi.Durable.Doc
 
@@ -147,32 +149,93 @@ defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
   end
 
   @impl true
-  def after_run(summary, ctx) do
+  def after_tools(batch_results, ctx) do
     agent_cfg = Doc.snapshot("conversation", ctx.conversation_id, "pi.agent") || %{}
     hooks_files = resolve_hooks_files(agent_cfg)
 
     input_payload =
-      build_common_payload(agent_cfg, ctx)
-      |> Map.merge(%{
-        "executionNum" => 1,
-        "terminationReason" => "NO_TOOL_CALL",
-        "error" => "",
-        "fullyIdle" => true,
-        "lastAssistantMessage" => summary.last_message
+      Map.merge(build_common_payload(agent_cfg, ctx), %{
+        "invocationNum" => 1,
+        "numToolResults" => length(batch_results)
       })
 
     hooks_files
-    |> load_merged_handlers("Stop")
-    |> Enum.reduce_while(:accept, fn {hook_dir, handler}, :accept ->
+    |> load_merged_handlers("PostInvocation")
+    |> Enum.reduce_while(:continue, fn {hook_dir, handler}, :continue ->
       case run_hook_command(handler, input_payload, hook_dir) do
-        {:ok, %{"decision" => "continue"} = out} ->
-          reason = Map.get(out, "reason", "Continue requested by Stop hook.")
-          {:halt, {:continue, reason}}
-
-        _ ->
-          {:cont, :accept}
+        {:ok, %{"terminationBehavior" => "force_continue"}} -> {:cont, :continue}
+        _ -> {:cont, :continue}
       end
     end)
+  end
+
+  @impl true
+  def on_input(_input, ctx) do
+    reset_stop_count(ctx)
+    :continue
+  end
+
+  @impl true
+  def after_run(summary, ctx) do
+    agent_cfg = Doc.snapshot("conversation", ctx.conversation_id, "pi.agent") || %{}
+    hooks_files = resolve_hooks_files(agent_cfg)
+    count = stop_count(ctx)
+
+    input_payload =
+      build_common_payload(agent_cfg, ctx)
+      |> Map.merge(%{
+        "executionNum" => count + 1,
+        "terminationReason" => "NO_TOOL_CALL",
+        "error" => "",
+        "fullyIdle" => true,
+        "stopHookActive" => count > 0,
+        "lastAssistantMessage" => summary.last_message
+      })
+
+    result =
+      hooks_files
+      |> load_merged_handlers("Stop")
+      |> Enum.reduce_while(:accept, fn {hook_dir, handler}, :accept ->
+        case run_hook_command(handler, input_payload, hook_dir) do
+          {:ok, %{"decision" => "continue"} = out} ->
+            reason = Map.get(out, "reason", "Continue requested by Stop hook.")
+            {:halt, {:continue, reason}}
+
+          _ ->
+            {:cont, :accept}
+        end
+      end)
+
+    case result do
+      {:continue, _} when count >= @max_stop_continues ->
+        reset_stop_count(ctx)
+        :accept
+
+      {:continue, _} = cont ->
+        put_stop_count(ctx, count + 1)
+        cont
+
+      :accept ->
+        reset_stop_count(ctx)
+        :accept
+    end
+  end
+
+  @state_kind "pi.agy_hooks"
+
+  defp stop_count(ctx) do
+    doc = Doc.snapshot("conversation", ctx.conversation_id, @state_kind) || %{}
+    Map.get(doc, "stopHookCount", 0)
+  end
+
+  defp reset_stop_count(ctx), do: if(stop_count(ctx) != 0, do: put_stop_count(ctx, 0))
+
+  defp put_stop_count(ctx, n) do
+    SuperPi.Durable.Storage.commit(fn seq ->
+      Doc.put_doc("conversation", ctx.conversation_id, @state_kind, %{"stopHookCount" => n}, seq)
+    end)
+
+    :ok
   end
 
   # --- Helpers & Public Inspection ---
