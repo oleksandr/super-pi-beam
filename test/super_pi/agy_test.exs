@@ -80,17 +80,23 @@ defmodule SuperPi.AGYTest do
       end
     end
 
-    test "discovers real machine skills and rules from ~/.gemini/config and ~/.gemini/antigravity-cli/builtin" do
-      skills = Discovery.discover_skills(["/home/oleksandr/Work"])
+    test "discovers skills and rules from workspace directories" do
+      tmp_ws = Path.join(System.tmp_dir!(), "agy_ws_discovery_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(tmp_ws, ".agents/skills/custom-skill"))
+      File.write!(Path.join(tmp_ws, ".agents/skills/custom-skill/SKILL.md"), """
+      ---
+      name: custom-skill
+      description: A test skill for discovery
+      ---
+      # Custom Skill
+      """)
+      File.write!(Path.join(tmp_ws, "AGENTS.md"), "# Project Agent Rules\n")
+
+      skills = Discovery.discover_skills([tmp_ws])
       skill_names = Enum.map(skills, & &1.name)
+      assert "custom-skill" in skill_names
 
-      # Verify real skills on this machine are discovered
-      assert "go-modern-guidelines" in skill_names
-      assert "asd-ste100" in skill_names
-      assert "antigravity-guide" in skill_names
-      assert "agy-customizations" in skill_names
-
-      rule_files = Discovery.discover_rule_files(["/home/oleksandr/Work"])
+      rule_files = Discovery.discover_rule_files([tmp_ws])
       assert Enum.any?(rule_files, &String.ends_with?(&1, "AGENTS.md"))
     end
 

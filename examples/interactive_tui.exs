@@ -1,7 +1,7 @@
 # Interactive Owl TUI powered by live Google Gemini (`examples/interactive_tui.exs`)
 #
 # Run with:
-#   cd /home/oleksandr/Projects/super-pi-beam
+#   cd path/to/super-pi-beam
 #   mise exec -- mix run examples/interactive_tui.exs
 
 alias SuperPi.Conversation.Machine

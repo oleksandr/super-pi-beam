@@ -9,7 +9,7 @@
 # - Owl ANSI terminal formatting (`SuperPi.TUI.Owl`)
 #
 # Run with:
-#   cd /home/oleksandr/Projects/super-pi-beam
+#   cd path/to/super-pi-beam
 #   mise exec -- mix run examples/gemini_live_demo.exs
 
 alias SuperPi.Conversation.Machine

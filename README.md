@@ -122,7 +122,7 @@ In this mode, OpenCode acts as the client and invokes Super-Pi-BEAM's 4-layer sa
   "mcp": {
     "super-pi": {
       "type": "local",
-      "command": ["/home/oleksandr/Projects/super-pi-beam/bin/super-pi", "mcp"],
+      "command": ["/path/to/super-pi-beam/bin/super-pi", "mcp"],
       "enabled": true
     }
   }
@@ -132,7 +132,7 @@ In this mode, OpenCode acts as the client and invokes Super-Pi-BEAM's 4-layer sa
 Verify connection:
 ```bash
 opencode mcp list
-# ✓ super-pi connected (/home/oleksandr/Projects/super-pi-beam/bin/super-pi mcp)
+# ✓ super-pi connected (/path/to/super-pi-beam/bin/super-pi mcp)
 ```
 
 ---
