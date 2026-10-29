@@ -11,7 +11,6 @@ defmodule SuperPi.RPC.ServerDefectsTest do
 
   alias SuperPi.RPC.Server
 
-  @moduletag :known_bug
 
   defp non_loopback_ipv4 do
     case :inet.getifaddrs() do

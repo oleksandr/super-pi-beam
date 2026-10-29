@@ -51,10 +51,22 @@ defmodule SuperPi.RPC.Server do
   """
   def handle_rpc_payload(raw_json, client_state) when is_binary(raw_json) and is_map(client_state) do
     case Jason.decode(raw_json) do
-      {:ok, %{"jsonrpc" => "2.0", "method" => method} = req} ->
+      {:ok, %{"jsonrpc" => "2.0", "method" => method} = req} when is_binary(method) ->
         id = Map.get(req, "id")
-        params = Map.get(req, "params", %{})
-        dispatch_method(method, params, id, client_state)
+        has_id? = Map.has_key?(req, "id")
+        params = Map.get(req, "params")
+
+        case validate_params(method, params) do
+          :ok ->
+            safe_params = if is_map(params), do: params, else: %{}
+            {reply, next_state, notifs} = dispatch_method(method, safe_params, id, client_state)
+            reply = if has_id?, do: reply, else: nil
+            {reply, next_state, notifs}
+
+          {:error, code, msg} ->
+            reply = if has_id?, do: jsonrpc_error(id, code, msg), else: nil
+            {reply, client_state, []}
+        end
 
       {:ok, _invalid} ->
         err = jsonrpc_error(nil, -32600, "Invalid Request")
@@ -149,7 +161,7 @@ defmodule SuperPi.RPC.Server do
     port = Keyword.get(opts, :port, 0)
 
     {:ok, listen_socket} =
-      :gen_tcp.listen(port, [:binary, packet: :line, active: false, reuseaddr: true])
+      :gen_tcp.listen(port, [:binary, packet: :line, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
 
     {:ok, actual_port} = :inet.port(listen_socket)
     server_pid = self()
@@ -236,6 +248,155 @@ defmodule SuperPi.RPC.Server do
         :gen_tcp.close(sock)
     end
   end
+
+  # --- Method Parameter Validation ---
+
+  defp validate_params("session.open", params) do
+    cond do
+      params != nil and not is_map(params) ->
+        {:error, -32602, "Invalid params: params must be an object"}
+
+      is_map(params) and Map.has_key?(params, "agent") and not is_map(params["agent"]) ->
+        {:error, -32602, "Invalid params: agent must be an object"}
+
+      is_map(params) and Map.has_key?(params, "conversation_id") and not is_integer(params["conversation_id"]) ->
+        {:error, -32602, "Invalid params: conversation_id must be an integer"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_params("session.submit", params) do
+    cond do
+      not is_map(params) ->
+        {:error, -32602, "Invalid params: params must be an object"}
+
+      not is_integer(Map.get(params, "conversation_id")) ->
+        {:error, -32602, "Invalid params: conversation_id must be an integer"}
+
+      not is_binary(Map.get(params, "text")) ->
+        {:error, -32602, "Invalid params: text must be a string"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_params("session.fork", params) do
+    cond do
+      not is_map(params) ->
+        {:error, -32602, "Invalid params: params must be an object"}
+
+      not is_integer(Map.get(params, "conversation_id")) ->
+        {:error, -32602, "Invalid params: conversation_id must be an integer"}
+
+      not is_integer(Map.get(params, "at_entry_id")) ->
+        {:error, -32602, "Invalid params: at_entry_id must be an integer"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_params("session.compact", params) do
+    cond do
+      not is_map(params) ->
+        {:error, -32602, "Invalid params: params must be an object"}
+
+      not is_integer(Map.get(params, "conversation_id")) ->
+        {:error, -32602, "Invalid params: conversation_id must be an integer"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_params("session.context", params) do
+    cond do
+      not is_map(params) ->
+        {:error, -32602, "Invalid params: params must be an object"}
+
+      not is_integer(Map.get(params, "conversation_id")) ->
+        {:error, -32602, "Invalid params: conversation_id must be an integer"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_params("session.watch", params) do
+    cond do
+      not is_map(params) ->
+        {:error, -32602, "Invalid params: params must be an object"}
+
+      not is_integer(Map.get(params, "conversation_id")) ->
+        {:error, -32602, "Invalid params: conversation_id must be an integer"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_params("session.ack", params) do
+    cond do
+      not is_map(params) ->
+        {:error, -32602, "Invalid params: params must be an object"}
+
+      not is_integer(Map.get(params, "batch_id")) ->
+        {:error, -32602, "Invalid params: batch_id must be an integer"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_params("session.cancel", params) do
+    cond do
+      not is_map(params) ->
+        {:error, -32602, "Invalid params: params must be an object"}
+
+      not is_integer(Map.get(params, "conversation_id")) ->
+        {:error, -32602, "Invalid params: conversation_id must be an integer"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_params("session.configure", params) do
+    cond do
+      not is_map(params) ->
+        {:error, -32602, "Invalid params: params must be an object"}
+
+      not is_integer(Map.get(params, "conversation_id")) ->
+        {:error, -32602, "Invalid params: conversation_id must be an integer"}
+
+      Map.has_key?(params, "agent") and not is_map(params["agent"]) ->
+        {:error, -32602, "Invalid params: agent must be an object"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_params("ui.respond", params) do
+    cond do
+      not is_map(params) ->
+        {:error, -32602, "Invalid params: params must be an object"}
+
+      not Map.has_key?(params, "request_id") ->
+        {:error, -32602, "Invalid params: request_id is required"}
+
+      not Map.has_key?(params, "value") ->
+        {:error, -32602, "Invalid params: value is required"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_params(_other, _params), do: :ok
 
   # --- Method Dispatch ---
 
