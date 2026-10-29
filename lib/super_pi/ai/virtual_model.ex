@@ -44,7 +44,11 @@ defmodule SuperPi.AI.VirtualModel do
   Resolves a virtual model name (or explicit `"provider/model"` string) into a normalized
   routing descriptor `%{provider: atom(), model: String.t(), thinking_budget: non_neg_integer()}`.
   """
-  def resolve(model_spec, opts \\ []) when is_binary(model_spec) do
+  def resolve(model_spec, opts \\ [])
+
+  def resolve("", _opts), do: raise(ArgumentError, "model_spec cannot be empty")
+
+  def resolve(model_spec, opts) when is_binary(model_spec) do
     use_fallback? = Keyword.get(opts, :fallback, false)
 
     case Map.get(@virtual_models, model_spec) do
@@ -58,6 +62,10 @@ defmodule SuperPi.AI.VirtualModel do
       nil ->
         case String.split(model_spec, "/", parts: 2) do
           [prov_str, mod_id] ->
+            if mod_id == "" do
+              raise ArgumentError, "model id cannot be empty in #{inspect(model_spec)}"
+            end
+
             %{
               provider: parse_provider(prov_str),
               model: mod_id,
@@ -66,8 +74,30 @@ defmodule SuperPi.AI.VirtualModel do
             }
 
           [mod_id] ->
+            if mod_id == "" do
+              raise ArgumentError, "model id cannot be empty"
+            end
+
+            provider =
+              cond do
+                Keyword.has_key?(opts, :provider) ->
+                  Keyword.get(opts, :provider)
+
+                String.starts_with?(mod_id, ["claude-", "anthropic"]) ->
+                  :anthropic
+
+                String.starts_with?(mod_id, ["gpt-", "o1", "o3", "o4", "chatgpt"]) ->
+                  :openai
+
+                String.starts_with?(mod_id, ["gemini-", "google"]) ->
+                  :google
+
+                true ->
+                  raise ArgumentError, "cannot infer provider for model #{inspect(mod_id)}"
+              end
+
             %{
-              provider: Keyword.get(opts, :provider, :anthropic),
+              provider: provider,
               model: mod_id,
               thinking_budget: Keyword.get(opts, :thinking_budget, 0),
               virtual_name: nil
@@ -81,32 +111,47 @@ defmodule SuperPi.AI.VirtualModel do
   for LLM prompt-cache affinity (`spec.md` §4.3).
   """
   def ensure_provider_session!(conversation_id, provider, model) do
-    current = Doc.snapshot("conversation", conversation_id, "pi.provider")
+    current = Doc.snapshot("conversation", conversation_id, "pi.provider") || %{}
 
-    session_id =
-      case Map.get(current, "sessionId") do
-        id when is_binary(id) and byte_size(id) > 0 -> id
-        _ -> Uniq.UUID.uuid7()
-      end
+    existing_session_id = Map.get(current, "sessionId")
+    existing_provider = Map.get(current, "provider")
+    existing_model = Map.get(current, "model")
 
-    updated = %{
-      "sessionId" => session_id,
-      "provider" => to_string(provider),
-      "model" => model,
-      "lastWarmedAt" => System.system_time(:millisecond)
-    }
-
-    if current != updated do
+    if is_binary(existing_session_id) and byte_size(existing_session_id) > 0 and
+         existing_provider == to_string(provider) and existing_model == model do
+      current
+    else
       Storage.commit(fn seq ->
+        curr = Doc.snapshot("conversation", conversation_id, "pi.provider") || %{}
+        sess_id = Map.get(curr, "sessionId")
+
+        session_id =
+          if is_binary(sess_id) and byte_size(sess_id) > 0 do
+            sess_id
+          else
+            Uniq.UUID.uuid7()
+          end
+
+        last_warmed = Map.get(curr, "lastWarmedAt") || System.system_time(:millisecond)
+
+        updated = %{
+          "sessionId" => session_id,
+          "provider" => to_string(provider),
+          "model" => model,
+          "lastWarmedAt" => last_warmed
+        }
+
         Doc.put_doc("conversation", conversation_id, "pi.provider", updated, seq)
+        updated
       end)
     end
-
-    updated
   end
 
   defp parse_provider("anthropic"), do: :anthropic
   defp parse_provider("openai"), do: :openai
   defp parse_provider("google"), do: :google
-  defp parse_provider(_), do: :anthropic
+
+  defp parse_provider(other) do
+    raise ArgumentError, "unknown provider: #{inspect(other)}"
+  end
 end

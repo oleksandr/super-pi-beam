@@ -13,7 +13,6 @@ defmodule SuperPi.AI.VirtualModelDefectsTest do
   alias SuperPi.Durable.Doc
   alias SuperPi.Durable.Storage
 
-  @moduletag :known_bug
 
   defp attempt(fun) do
     {:ok, fun.()}
