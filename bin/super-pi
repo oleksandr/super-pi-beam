@@ -15,8 +15,14 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${ROOT_DIR}"
 
-CMD="${1:-help}"
-shift || true
+if [[ $# -eq 0 ]]; then
+  CMD="gateway"
+elif [[ "$1" =~ ^[0-9]+$ || "$1" == "--verbose" || "$1" == "-v" ]]; then
+  CMD="gateway"
+else
+  CMD="$1"
+  shift || true
+fi
 
 case "${CMD}" in
   gateway|serve)
@@ -132,10 +138,11 @@ Usage: super-pi <command> [options]
 Commands:
   gateway [port] Run OpenAI-compatible HTTP upstream inference gateway (default port: 4000)
                  Connects OpenCode, Cursor, Aider, and LibreChat to Super-Pi
+                 (Default command if no arguments are provided)
   mcp            Run standard Model Context Protocol (MCP) server over stdio
                  Connects directly to OpenCode, Claude Desktop, Cursor, and Zed
   rpc [port]     Run standalone JSON-RPC 2.0 server (default port: 4001)
-  harness list   List available agent harnesses (super-pi-agent, super-pi-agy, planner)
+  harness list   List available agent harnesses (super-pi-agent, super-pi-fast, planner, etc.)
   session list   List recent durable conversations
   session show   Display conversation state and documents
   help           Show this help text
