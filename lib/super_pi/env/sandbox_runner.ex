@@ -68,79 +68,133 @@ defmodule SuperPi.Env.SandboxRunner do
     timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
     cd = Keyword.get(opts, :cd, File.cwd!())
     spill_limit = Keyword.get(opts, :spill_threshold_bytes, @spill_threshold_bytes)
+    parent = self()
 
-    run_isolated(
-      fn ->
-        exec_with_spill(cmd, args, cd, spill_limit)
-      end,
-      timeout_ms: timeout_ms
-    )
-    |> case do
-      {:ok, {:ok, res}} -> {:ok, res}
-      {:ok, {:error, err}} -> {:error, err}
+    task =
+      Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
+        Process.flag(:max_heap_size, %{
+          size: Keyword.get(opts, :max_heap_words, @default_max_heap_words),
+          kill: true,
+          error_logger: false
+        })
+
+        exec_with_spill(cmd, args, cd, spill_limit, parent)
+      end)
+
+    res =
+      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+        {:ok, result} ->
+          result
+
+        {:exit, :killed} ->
+          {:error, %{type: "resource_exhausted", reason: "tool_killed_or_max_heap_exceeded"}}
+
+        {:exit, {exception, _stack}} when is_exception(exception) ->
+          {:error, %{type: "tool_exception", reason: Exception.message(exception)}}
+
+        {:exit, reason} ->
+          {:error, %{type: "tool_crash", reason: inspect(reason)}}
+
+        nil ->
+          receive do
+            {:os_pid, os_pid} -> kill_process_tree(os_pid)
+          after
+            0 -> :ok
+          end
+
+          {:error, %{type: "tool_timeout", reason: "Timed out after #{timeout_ms}ms"}}
+      end
+
+    case res do
+      {:ok, val} -> {:ok, val}
       {:error, err} -> {:error, err}
     end
   end
 
-  defp exec_with_spill(cmd, args, cd, spill_limit) do
+  defp exec_with_spill(cmd, args, cd, spill_limit, parent) do
     case System.find_executable(cmd) do
       nil ->
         {:error, %{type: "command_not_found", reason: "Executable not found: #{cmd}"}}
 
       exec_path ->
-        stream =
-          Exile.stream!([exec_path | args],
-            cd: cd,
-            stderr: :consume,
-            ignore_epipe: true
-          )
+        case Exile.Process.start_link([exec_path | args], cd: cd, stderr: :consume) do
+          {:ok, proc} ->
+            case Exile.Process.os_pid(proc) do
+              {:ok, os_pid} when is_integer(os_pid) ->
+                send(parent, {:os_pid, os_pid})
 
-        acc_init = %{
-          bytes: 0,
-          chunks: [],
-          spilled_path: nil,
-          spill_io: nil,
-          exit_code: 0
-        }
+              _ ->
+                :ok
+            end
 
-        final =
-          try do
-            Enum.reduce(stream, acc_init, fn
-              {:stdout, data}, acc -> append_output_chunk(acc, data, spill_limit)
-              {:stderr, data}, acc -> append_output_chunk(acc, data, spill_limit)
-              {:exit, {:status, code}}, acc -> %{acc | exit_code: code}
-              {:exit, :epipe}, acc -> acc
-            end)
-          rescue
-            e in Exile.Stream.AbnormalExit ->
-              %{acc_init | exit_code: e.exit_status || 1}
-          end
+            acc_init = %{
+              bytes: 0,
+              chunks: [],
+              spilled_path: nil,
+              spill_io: nil,
+              exit_code: 0
+            }
 
-        if final.spill_io do
-          File.close(final.spill_io)
+            final = read_process_output(proc, acc_init, spill_limit)
+
+            if final.spill_io do
+              File.close(final.spill_io)
+            end
+
+            output =
+              final.chunks
+              |> Enum.reverse()
+              |> IO.iodata_to_binary()
+
+            output =
+              if final.spilled_path do
+                preview_raw = binary_part(output, 0, min(byte_size(output), @preview_bytes))
+                preview = safe_utf8_prefix(preview_raw)
+                preview <> "\n\n[Output exceeded #{spill_limit} bytes; full output spilled to #{final.spilled_path}]"
+              else
+                output
+              end
+
+            {:ok,
+             %{
+               exit_code: final.exit_code,
+               output: output,
+               spilled_path: final.spilled_path
+             }}
+
+          {:error, reason} ->
+            {:error, %{type: "process_spawn_failed", reason: inspect(reason)}}
         end
-
-        output =
-          final.chunks
-          |> Enum.reverse()
-          |> IO.iodata_to_binary()
-
-        output =
-          if final.spilled_path do
-            preview = binary_part(output, 0, min(byte_size(output), @preview_bytes))
-            preview <> "\n\n[Output exceeded #{spill_limit} bytes; full output spilled to #{final.spilled_path}]"
-          else
-            output
-          end
-
-        {:ok,
-         %{
-           exit_code: final.exit_code,
-           output: output,
-           spilled_path: final.spilled_path
-         }}
     end
   end
+
+  defp read_process_output(proc, acc, spill_limit) do
+    case Exile.Process.read_any(proc) do
+      {:ok, {:stdout, data}} ->
+        new_acc = append_output_chunk(acc, data, spill_limit)
+        read_process_output(proc, new_acc, spill_limit)
+
+      {:ok, {:stderr, data}} ->
+        new_acc = append_output_chunk(acc, data, spill_limit)
+        read_process_output(proc, new_acc, spill_limit)
+
+      :eof ->
+        case Exile.Process.await_exit(proc) do
+          {:ok, exit_code} ->
+            %{acc | exit_code: exit_code}
+
+          {:error, reason} ->
+            %{acc | exit_code: parse_exit_status(reason)}
+        end
+
+      {:error, reason} ->
+        %{acc | exit_code: parse_exit_status(reason)}
+    end
+  end
+
+  defp parse_exit_status(%{exit_status: s}) when is_integer(s), do: s
+  defp parse_exit_status(s) when is_integer(s), do: s
+  defp parse_exit_status(_), do: 1
 
   defp append_output_chunk(acc, data, spill_limit) when is_binary(data) do
     new_bytes = acc.bytes + byte_size(data)
@@ -152,7 +206,9 @@ defmodule SuperPi.Env.SandboxRunner do
 
       new_bytes > spill_limit ->
         spill_path = Path.join(System.tmp_dir!(), "super_pi_spill_#{System.unique_integer([:positive])}.log")
-        {:ok, io} = File.open(spill_path, [:write, :binary, :utf8])
+        File.touch!(spill_path)
+        File.chmod!(spill_path, 0o600)
+        {:ok, io} = File.open(spill_path, [:write, :binary])
 
         existing =
           acc.chunks
@@ -172,5 +228,37 @@ defmodule SuperPi.Env.SandboxRunner do
       true ->
         %{acc | bytes: new_bytes, chunks: [data | acc.chunks]}
     end
+  end
+
+  defp safe_utf8_prefix(bin) do
+    case :unicode.characters_to_binary(bin, :utf8, :utf8) do
+      {:error, valid, _rest} -> valid
+      {:incomplete, valid, _rest} -> valid
+      valid when is_binary(valid) -> valid
+    end
+  end
+
+  defp kill_process_tree(nil), do: :ok
+
+  defp kill_process_tree(os_pid) when is_integer(os_pid) do
+    pid_str = Integer.to_string(os_pid)
+
+    case System.cmd("pgrep", ["-P", pid_str]) do
+      {out, 0} ->
+        out
+        |> String.split("\n", trim: true)
+        |> Enum.each(fn child_pid ->
+          case Integer.parse(child_pid) do
+            {c_pid, _} -> kill_process_tree(c_pid)
+            _ -> :ok
+          end
+        end)
+
+      _ ->
+        :ok
+    end
+
+    System.cmd("kill", ["-KILL", pid_str], stderr_to_stdout: true)
+    :ok
   end
 end

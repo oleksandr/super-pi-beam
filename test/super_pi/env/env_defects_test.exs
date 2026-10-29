@@ -11,8 +11,6 @@ defmodule SuperPi.Env.EnvDefectsTest do
 
   alias SuperPi.Env.{FileLock, Local, SandboxRunner}
 
-  @moduletag :known_bug
-
   setup do
     dir = Path.join(System.tmp_dir!(), "env_defects_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
