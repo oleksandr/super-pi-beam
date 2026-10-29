@@ -232,7 +232,12 @@ defmodule SuperPi.Gateway.Router do
     system_title? =
       Enum.any?(messages, fn m ->
         Map.get(m, "role") == "system" and
-          String.trim(String.downcase(extract_content_text(Map.get(m, "content", "")))) == "you are a title generator"
+          m
+          |> Map.get("content", "")
+          |> extract_content_text()
+          |> String.downcase()
+          |> String.trim()
+          |> String.starts_with?("you are a title generator")
       end)
 
     user_title? =
