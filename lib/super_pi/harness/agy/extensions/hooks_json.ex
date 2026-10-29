@@ -200,52 +200,109 @@ defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
   def run_hook_command(handler, stdin_map, working_dir) when is_map(handler) do
     cmd = Map.get(handler, "command")
 
-    if is_nil(cmd) or not is_binary(cmd) or String.trim(cmd) == "" do
+    if not is_binary(cmd) or String.trim(cmd) == "" do
       {:ok, %{}}
     else
       timeout_sec =
         case Map.get(handler, "timeout", 30) do
-          t when is_integer(t) -> t
+          t when is_integer(t) and t > 0 ->
+            t
+
           t when is_binary(t) ->
             case Integer.parse(t) do
-              {n, _} -> n
+              {n, _} when n > 0 -> n
               _ -> 30
             end
-          _ -> 30
+
+          _ ->
+            30
         end
 
-      expanded_cmd = String.replace_leading(cmd, "~/", Path.expand("~/") <> "/")
-      json_in = Jason.encode!(stdin_map)
+      case Jason.encode(stdin_map) do
+        {:ok, json_in} ->
+          expanded_cmd = String.replace_leading(cmd, "~/", Path.expand("~/") <> "/")
+          run_with_stdin_file(expanded_cmd, json_in, working_dir, timeout_sec * 1_000)
 
-      task =
-        Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
-          tmp_in = Path.join(System.tmp_dir!(), "agy_hook_in_#{System.unique_integer([:positive])}.json")
-          File.write!(tmp_in, json_in)
-
-          try do
-            case System.cmd("sh", ["-c", "#{expanded_cmd} < #{tmp_in}"], cd: working_dir, stderr_to_stdout: false) do
-              {stdout, 0} ->
-                case Jason.decode(String.trim(stdout)) do
-                  {:ok, map} when is_map(map) -> {:ok, map}
-                  _ -> {:ok, %{}}
-                end
-
-              {_out, code} ->
-                {:error, {:exit_code, code}}
-            end
-          after
-            File.rm(tmp_in)
-          end
-        end)
-
-      case Task.yield(task, timeout_sec * 1_000) || Task.shutdown(task, :brutal_kill) do
-        {:ok, res} -> res
-        _ -> {:error, :hook_timeout}
+        {:error, err} ->
+          {:error, {:encode_failed, err}}
       end
     end
   end
 
   def run_hook_command(_handler, _stdin_map, _working_dir), do: {:ok, %{}}
+
+  # Runs `cmd` with the payload as stdin of the whole script (not just its last
+  # command). The temp file is private (0600), its path travels in the
+  # environment so spaces in TMPDIR are safe, and on timeout the whole process
+  # tree is killed and the file removed.
+  defp run_with_stdin_file(cmd, json_in, working_dir, timeout_ms) do
+    tmp_in = Path.join(System.tmp_dir!(), "agy_hook_in_#{System.unique_integer([:positive])}.json")
+    File.touch!(tmp_in)
+    File.chmod!(tmp_in, 0o600)
+    File.write!(tmp_in, json_in)
+
+    try do
+      sh = System.find_executable("sh") || "/bin/sh"
+
+      port =
+        Port.open({:spawn_executable, sh}, [
+          :binary,
+          :exit_status,
+          :hide,
+          {:cd, working_dir},
+          {:env, [{~c"AGY_HOOK_IN", String.to_charlist(tmp_in)}]},
+          {:args, ["-c", "exec 0< \"$AGY_HOOK_IN\"\n" <> cmd]}
+        ])
+
+      os_pid =
+        case Port.info(port, :os_pid) do
+          {:os_pid, pid} -> pid
+          _ -> nil
+        end
+
+      collect_hook_output(port, os_pid, "", System.monotonic_time(:millisecond) + timeout_ms)
+    after
+      File.rm(tmp_in)
+    end
+  end
+
+  defp collect_hook_output(port, os_pid, acc, deadline) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {^port, {:data, data}} ->
+        collect_hook_output(port, os_pid, acc <> data, deadline)
+
+      {^port, {:exit_status, 0}} ->
+        case Jason.decode(String.trim(acc)) do
+          {:ok, map} when is_map(map) -> {:ok, map}
+          _ -> {:ok, %{}}
+        end
+
+      {^port, {:exit_status, code}} ->
+        {:error, {:exit_code, code}}
+    after
+      remaining ->
+        kill_process_tree(os_pid)
+
+        try do
+          Port.close(port)
+        rescue
+          _ -> :ok
+        end
+
+        {:error, :hook_timeout}
+    end
+  end
+
+  defp kill_process_tree(nil), do: :ok
+
+  defp kill_process_tree(os_pid) do
+    pid = Integer.to_string(os_pid)
+    System.cmd("pkill", ["-KILL", "-P", pid], stderr_to_stdout: true)
+    System.cmd("kill", ["-KILL", pid], stderr_to_stdout: true)
+    :ok
+  end
 
   defp resolve_hooks_files(agent_cfg) do
     case Map.get(agent_cfg, "hooksFiles") do
