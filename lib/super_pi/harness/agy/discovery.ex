@@ -112,8 +112,6 @@ defmodule SuperPi.Harness.AGY.Discovery do
     builtin_dir = Path.join([app_data_dir, "builtin", "skills"])
 
     ancestors = Enum.flat_map(workspace_dirs, &ancestor_chain/1) |> Enum.uniq()
-    repo_root = List.last(ancestors) || File.cwd!()
-
     # Tier 1: Workspace `.agents/skills`
     tier1_dirs =
       for dir <- ancestors, dot <- @dot_dirs do
@@ -407,12 +405,18 @@ defmodule SuperPi.Harness.AGY.Discovery do
     inc_ok? and exc_ok?
   end
 
-  defp pattern_matches?(name, pattern) do
-    case Regex.compile("^" <> pattern <> "$") do
+  defp pattern_matches?(name, pattern) when is_binary(pattern) do
+    # `*` is a glob wildcard; everything else is treated as a regex. The whole
+    # pattern is anchored as one group so alternation (`a|b`) stays anchored.
+    source = String.replace(pattern, ~r/(?<![.\\\]\)])\*/, ".*")
+
+    case Regex.compile("^(?:" <> source <> ")$") do
       {:ok, re} -> Regex.match?(re, name)
       _ -> name == pattern
     end
   end
+
+  defp pattern_matches?(_name, _pattern), do: false
 
   defp resolve_custom_path("/" <> _ = abs, _base_dir, _repo_root), do: Path.expand(abs)
   defp resolve_custom_path("~/" <> _ = home, _base_dir, _repo_root), do: Path.expand(home)
@@ -420,31 +424,6 @@ defmodule SuperPi.Harness.AGY.Discovery do
   defp resolve_custom_path(rel, base_dir, repo_root) do
     candidate = Path.expand(rel, base_dir)
     if File.exists?(candidate), do: candidate, else: Path.expand(rel, repo_root)
-  end
-
-  defp extract_yaml_field(yaml, key) do
-    # Handles both single-line `key: value` and multi-line `key: >-\n  line1\n  line2`
-    lines = String.split(yaml, "\n")
-
-    case Enum.find_index(lines, &String.starts_with?(String.trim_leading(&1), "#{key}:")) do
-      nil ->
-        nil
-
-      idx ->
-        line = Enum.at(lines, idx)
-        after_colon = line |> String.split(":", parts: 2) |> List.last() |> String.trim()
-
-        if after_colon in [">-", ">", "|", "|-", ""] do
-          lines
-          |> Enum.drop(idx + 1)
-          |> Enum.take_while(fn l -> String.starts_with?(l, " ") or String.trim(l) == "" end)
-          |> Enum.map(&String.trim/1)
-          |> Enum.reject(&(&1 == ""))
-          |> Enum.join(" ")
-        else
-          String.trim(after_colon, "\"")
-        end
-    end
   end
 
   defp list_markdown_files(dir) do
@@ -474,13 +453,26 @@ defmodule SuperPi.Harness.AGY.Discovery do
     |> elem(0)
   end
 
-  defp canonical_realpath(path) do
-    expanded = Path.expand(path)
+  defp canonical_realpath(path), do: real_path(Path.expand(path), 0)
 
-    case File.read_link(expanded) do
-      {:ok, target} -> Path.expand(target, Path.dirname(expanded))
-      _ -> expanded
-    end
+  # Resolves every symlink component (directories and chained file links).
+  defp real_path(path, depth) when depth > 40, do: path
+
+  defp real_path(path, depth) do
+    parts = Path.split(path)
+
+    Enum.reduce(parts, "", fn
+      "/", _acc ->
+        "/"
+
+      part, acc ->
+        candidate = Path.join(acc, part)
+
+        case File.read_link(candidate) do
+          {:ok, target} -> real_path(Path.expand(target, acc), depth + 1)
+          _ -> candidate
+        end
+    end)
   end
 
   defp elem_or_nil({:ok, v}), do: v
