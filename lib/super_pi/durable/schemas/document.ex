@@ -30,6 +30,7 @@ defmodule SuperPi.Durable.Schemas.Document do
       :retired_seq
     ])
     |> validate_required([:kind, :scope_kind, :scope_id, :history_policy, :fork_policy, :created_seq])
+    |> unique_constraint([:scope_kind, :scope_id, :kind, :key], name: :documents_active_unique_index)
   end
 end
 
@@ -54,5 +55,6 @@ defmodule SuperPi.Durable.Schemas.DocumentRevision do
     rev
     |> cast(attrs, [:document_id, :seq, :version, :is_checkpoint_base, :value, :ops])
     |> validate_required([:document_id, :seq, :version, :is_checkpoint_base])
+    |> unique_constraint([:document_id, :seq])
   end
 end

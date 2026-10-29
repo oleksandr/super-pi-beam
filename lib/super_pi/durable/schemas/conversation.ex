@@ -28,5 +28,7 @@ defmodule SuperPi.Durable.Schemas.Conversation do
     ])
     |> validate_required([:owner_kind, :created_seq])
     |> validate_inclusion(:owner_kind, @valid_owner_kinds)
+    |> foreign_key_constraint(:parent_entry_id)
+    |> foreign_key_constraint(:owner_task_id)
   end
 end

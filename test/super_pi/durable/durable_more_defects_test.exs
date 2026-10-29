@@ -19,7 +19,6 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
   alias SuperPi.Durable.Schemas.Task, as: TaskSchema
   alias SuperPi.Workers.GenerationWakeWorker
 
-  @moduletag :known_bug
 
   defp running_task(conv, opts \\ []) do
     {:ok, task} = TaskEngine.create_task(conv.id, "pi.generation", %{}, opts)

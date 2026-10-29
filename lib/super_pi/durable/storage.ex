@@ -177,6 +177,10 @@ defmodule SuperPi.Durable.Storage do
     commit(fn seq ->
       target_entry = Repo.get!(Entry, at_entry_id)
 
+      if target_entry.conversation_id != parent_conversation_id do
+        Repo.active_repo().rollback(:foreign_entry)
+      end
+
       as_of_agent =
         Doc.snapshot_as_of(parent_conversation_id, "pi.agent", target_entry.seq) || %{}
 

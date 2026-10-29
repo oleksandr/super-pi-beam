@@ -23,8 +23,7 @@ defmodule SuperPi.Durable.DeferredFlusher do
   """
   def stage_deferred(scope_kind, scope_id, kind, value, key \\ "") when is_map(value) do
     ensure_pending_ets!()
-    seq = Storage.current_seq()
-    Doc.put_ets_overlay(scope_kind, scope_id, kind, value, seq, key)
+    Doc.put_ets_overlay(scope_kind, scope_id, kind, value, 0, key)
     :ets.insert(@pending_ets, {{scope_kind, scope_id, kind, key}, value})
     :ok
   end
@@ -80,7 +79,9 @@ defmodule SuperPi.Durable.DeferredFlusher do
     try do
       flush_now!()
     rescue
-      _ -> :ok
+      e ->
+        require Logger
+        Logger.error("Periodic flush failed: #{Exception.message(e)}")
     end
 
     schedule_tick(state.interval)

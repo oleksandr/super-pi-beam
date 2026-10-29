@@ -19,5 +19,7 @@ defmodule SuperPi.Durable.Schemas.Entry do
     entry
     |> cast(attrs, [:conversation_id, :seq, :kind, :head_entry_id, :edits, :data])
     |> validate_required([:conversation_id, :seq, :kind, :data])
+    |> foreign_key_constraint(:head_entry_id)
+    |> unique_constraint([:conversation_id, :seq])
   end
 end

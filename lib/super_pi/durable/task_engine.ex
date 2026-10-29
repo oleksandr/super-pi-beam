@@ -31,6 +31,14 @@ defmodule SuperPi.Durable.TaskEngine do
     phase = Keyword.get(opts, :phase, "init")
 
     Repo.transaction(fn ->
+      case Repo.get(SuperPi.Durable.Schemas.Conversation, conversation_id) do
+        nil ->
+          Repo.active_repo().rollback(:conversation_not_found)
+
+        _ ->
+          :ok
+      end
+
       if owner_task_id do
         case Repo.get(TaskSchema, owner_task_id) do
           nil ->
@@ -159,7 +167,12 @@ defmodule SuperPi.Durable.TaskEngine do
       multi =
         Multi.new()
         |> Fsmx.transition_multi(task, :transition, "sleeping", params, state_field: :status)
-        |> Oban.insert(:wake_job, GenerationWakeWorker.new(%{"task_id" => task.id}, scheduled_at: wake_at))
+        |> Oban.insert(
+          :wake_job,
+          GenerationWakeWorker.new(%{"task_id" => task.id, "wake_at" => DateTime.to_iso8601(wake_at)},
+            scheduled_at: wake_at
+          )
+        )
 
       case Repo.transaction(multi) do
         {:ok, %{transition: updated}} ->
@@ -257,13 +270,19 @@ defmodule SuperPi.Durable.TaskEngine do
   Settles leaf descendants as `"aborted"` first, then settles the parent task.
   """
   def abort_task!(task_id) do
-    {:ok, updated} =
-      Repo.transaction(fn ->
-        seq = Storage.next_seq!()
-        abort_subtree_bottom_up!(task_id, seq)
-      end)
+    case Repo.get(TaskSchema, task_id) do
+      nil ->
+        {:error, :not_found}
 
-    updated
+      %TaskSchema{} ->
+        {:ok, updated} =
+          Repo.transaction(fn ->
+            seq = Storage.next_seq!()
+            abort_subtree_bottom_up!(task_id, seq)
+          end)
+
+        updated
+    end
   end
 
   @doc """
@@ -284,45 +303,86 @@ defmodule SuperPi.Durable.TaskEngine do
               order_by: [asc: t.id]
           )
 
-        Enum.map(running_tasks, fn %TaskSchema{} = task ->
-          next_attempt = task.attempt + 1
+        reconciled_running =
+          Enum.map(running_tasks, fn %TaskSchema{} = task ->
+            next_attempt = task.attempt + 1
 
-          cond do
-            task.abandon_on_restart ->
-              {:ok, t} =
-                Fsmx.transition_changeset(task, "cancelled", %{
-                  attempt: next_attempt,
-                  result: %{"reason" => "abandoned_on_restart"},
-                  updated_seq: seq
-                }, state_field: :status)
-                |> Repo.update()
+            cond do
+              task.abandon_on_restart ->
+                {:ok, t} =
+                  Fsmx.transition_changeset(task, "cancelled", %{
+                    attempt: next_attempt,
+                    result: %{"reason" => "abandoned_on_restart"},
+                    updated_seq: seq
+                  }, state_field: :status)
+                  |> Repo.update()
 
-              reconcile_parent_after_child_settled!(t, seq)
-              t
+                reconcile_parent_after_child_settled!(t, seq)
+                t
 
-            next_attempt > task.restart_limit ->
-              {:ok, t} =
-                Fsmx.transition_changeset(task, "failed", %{
-                  attempt: next_attempt,
-                  result: %{"error" => "restart_limit_exceeded", "attempts" => next_attempt},
-                  updated_seq: seq
-                }, state_field: :status)
-                |> Repo.update()
+              next_attempt > task.restart_limit ->
+                {:ok, t} =
+                  Fsmx.transition_changeset(task, "failed", %{
+                    attempt: next_attempt,
+                    result: %{"error" => "restart_limit_exceeded", "attempts" => next_attempt},
+                    updated_seq: seq
+                  }, state_field: :status)
+                  |> Repo.update()
 
-              reconcile_parent_after_child_settled!(t, seq)
-              t
+                reconcile_parent_after_child_settled!(t, seq)
+                t
 
-            true ->
-              {:ok, t} =
-                Fsmx.transition_changeset(task, "pending", %{
-                  attempt: next_attempt,
-                  updated_seq: seq
-                }, state_field: :status)
-                |> Repo.update()
+              true ->
+                {:ok, t} =
+                  Fsmx.transition_changeset(task, "pending", %{
+                    attempt: next_attempt,
+                    updated_seq: seq
+                  }, state_field: :status)
+                  |> Repo.update()
 
-              t
+                t
+            end
+          end)
+
+        waiting_tasks =
+          Repo.all(
+            from t in TaskSchema,
+              where: t.conversation_id == ^conversation_id and t.status == "waiting",
+              order_by: [asc: t.id]
+          )
+
+        Enum.each(waiting_tasks, fn %TaskSchema{} = parent ->
+          child_ids = Map.get(parent.waiting_on_task_ids || %{}, "ids", [])
+          children = if child_ids == [], do: [], else: Repo.all(from t in TaskSchema, where: t.id in ^child_ids)
+
+          if child_ids == [] or Enum.all?(children, &TaskSchema.terminal?/1) do
+            Fsmx.transition_changeset(parent, "running", %{updated_seq: seq}, state_field: :status)
+            |> Repo.update!()
           end
         end)
+
+        completing_tasks =
+          Repo.all(
+            from t in TaskSchema,
+              where: t.conversation_id == ^conversation_id and t.status == "completing",
+              order_by: [asc: t.id]
+          )
+
+        Enum.each(completing_tasks, fn %TaskSchema{} = parent ->
+          live = list_live_owned_children(parent.id)
+
+          if live == [] do
+            target = if parent.abort_requested, do: "aborted", else: "completed"
+
+            {:ok, t} =
+              Fsmx.transition_changeset(parent, target, %{updated_seq: seq}, state_field: :status)
+              |> Repo.update()
+
+            reconcile_parent_after_child_settled!(t, seq)
+          end
+        end)
+
+        reconciled_running
       end)
 
     reconciled
@@ -355,6 +415,14 @@ defmodule SuperPi.Durable.TaskEngine do
   end
 
   defp abort_subtree_bottom_up!(task_id, seq) do
+    task = Repo.get!(TaskSchema, task_id)
+
+    if not task.abort_requested do
+      task
+      |> Ecto.Changeset.change(%{abort_requested: true})
+      |> Repo.update!()
+    end
+
     children =
       Repo.all(
         from c in TaskSchema,

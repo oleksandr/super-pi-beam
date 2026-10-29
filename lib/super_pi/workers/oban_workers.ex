@@ -8,11 +8,27 @@ defmodule SuperPi.Workers.GenerationWakeWorker do
   alias SuperPi.Durable.TaskEngine
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"task_id" => task_id}}) do
-    case TaskEngine.wake_sleeping_task(task_id) do
-      {:ok, _task} -> :ok
-      {:error, :not_sleeping} -> :ok
-      {:error, reason} -> {:error, reason}
+  def perform(%Oban.Job{args: %{"task_id" => task_id} = args}) do
+    task = SuperPi.Repo.get(SuperPi.Durable.Schemas.Task, task_id)
+    job_wake_at = Map.get(args, "wake_at")
+
+    cond do
+      is_nil(task) ->
+        :ok
+
+      task.status != "sleeping" ->
+        :ok
+
+      is_binary(job_wake_at) and is_struct(task.sleep_until, DateTime) and
+          DateTime.to_iso8601(task.sleep_until) != job_wake_at ->
+        :ok
+
+      true ->
+        case TaskEngine.wake_sleeping_task(task_id) do
+          {:ok, _task} -> :ok
+          {:error, :not_sleeping} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 end

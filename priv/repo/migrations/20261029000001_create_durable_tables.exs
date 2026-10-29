@@ -11,9 +11,9 @@ defmodule SuperPi.Repo.Migrations.CreateDurableTables do
 
     create table(:conversations) do
       add :parent_conversation_id, references(:conversations, on_delete: :nothing)
-      add :parent_entry_id, :bigint
+      add :parent_entry_id, references(:entries, on_delete: :nothing)
       add :owner_kind, :string, null: false, default: "ownerless"
-      add :owner_task_id, :bigint
+      add :owner_task_id, references(:tasks, on_delete: :nothing)
       add :created_seq, :bigint, null: false
 
       timestamps(type: :utc_datetime_usec)
@@ -26,7 +26,7 @@ defmodule SuperPi.Repo.Migrations.CreateDurableTables do
       add :conversation_id, references(:conversations, on_delete: :delete_all), null: false
       add :seq, :bigint, null: false
       add :kind, :string, null: false
-      add :head_entry_id, :bigint
+      add :head_entry_id, references(:entries, on_delete: :nothing)
       add :edits, :map, null: false, default: %{"items" => []}
       add :data, :map, null: false, default: %{}
 
@@ -36,6 +36,7 @@ defmodule SuperPi.Repo.Migrations.CreateDurableTables do
     create index(:entries, [:conversation_id, :id])
     create index(:entries, [:conversation_id, :head_entry_id])
     create index(:entries, [:seq])
+    create unique_index(:entries, [:conversation_id, :seq])
 
     create table(:tasks) do
       add :conversation_id, references(:conversations, on_delete: :delete_all), null: false
@@ -97,7 +98,10 @@ defmodule SuperPi.Repo.Migrations.CreateDurableTables do
       timestamps(type: :utc_datetime_usec)
     end
 
-    create index(:documents, [:scope_kind, :scope_id, :kind, :key])
+    create unique_index(:documents, [:scope_kind, :scope_id, :kind, :key],
+      where: "retired_seq IS NULL",
+      name: :documents_active_unique_index
+    )
     create index(:documents, [:created_seq, :retired_seq])
 
     create table(:document_revisions) do
@@ -111,7 +115,7 @@ defmodule SuperPi.Repo.Migrations.CreateDurableTables do
       timestamps(type: :utc_datetime_usec, updated_at: false)
     end
 
-    create index(:document_revisions, [:document_id, :seq])
+    create unique_index(:document_revisions, [:document_id, :seq])
     create index(:document_revisions, [:document_id, :is_checkpoint_base, :seq])
 
     Oban.Migrations.up()

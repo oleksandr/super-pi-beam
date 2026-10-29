@@ -91,8 +91,8 @@ defmodule SuperPi.Durable.Doc do
 
     {prev_value, deltas_since_base} = reconstruct_doc_value(doc.id, nil)
     is_first = prev_value == nil
-    ops = if is_first, do: [], else: compute_ops(prev_value, new_value)
-    is_base = is_first or deltas_since_base + 1 >= checkpoint_every
+    is_base = is_first or doc.history_policy == "latest" or deltas_since_base + 1 >= checkpoint_every
+    ops = if is_base, do: [], else: compute_ops(prev_value, new_value)
 
     %DocumentRevision{}
     |> DocumentRevision.changeset(%{
@@ -104,6 +104,24 @@ defmodule SuperPi.Durable.Doc do
       ops: %{"ops" => ops}
     })
     |> Repo.insert!()
+
+    if doc.history_policy == "latest" do
+      rev_ids =
+        Repo.all(
+          from r in DocumentRevision,
+            where: r.document_id == ^doc.id,
+            order_by: [desc: r.seq],
+            select: r.id
+        )
+
+      case Enum.drop(rev_ids, 2) do
+        [] ->
+          :ok
+
+        old_ids ->
+          Repo.delete_all(from r in DocumentRevision, where: r.id in ^old_ids)
+      end
+    end
 
     cache_key = {scope_kind, scope_id, kind, key}
     if keys = Process.get(:super_pi_tx_doc_keys) do
@@ -251,8 +269,11 @@ defmodule SuperPi.Durable.Doc do
 
   defp apply_ops(base_map, ops_maps) do
     case Jsonpatch.apply_patch(ops_maps, base_map) do
-      {:ok, patched} -> patched
-      _ -> base_map
+      {:ok, patched} ->
+        patched
+
+      {:error, reason} ->
+        raise "Failed to apply JSON patch ops: #{inspect(reason)}"
     end
   end
 end
