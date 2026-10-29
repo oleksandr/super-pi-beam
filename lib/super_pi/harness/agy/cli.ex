@@ -230,7 +230,8 @@ defmodule SuperPi.Harness.AGY.CLI do
       "appDataDir" => app_dir,
       "settingsOverride" => parse_settings_flag(flags.settings),
       "jsonSchema" => parse_json_schema_flag(flags.json_schema),
-      "tools" => Tools.active_llm_tools()
+      "agent" => flags.agent,
+      "tools" => tools_for_agent(flags.agent)
     }
 
     conv =
@@ -292,6 +293,16 @@ defmodule SuperPi.Harness.AGY.CLI do
     GenServer.stop(pid)
     result
   end
+
+  @read_only_agent_tools ["read", "grep", "find", "ls", "tool_search"]
+
+  # The `research` agent is read-only: execution, not just the declared tool list, is
+  # gated by the Permissions extension in plan mode; here we restrict what is offered.
+  defp tools_for_agent("research") do
+    Enum.filter(Tools.active_llm_tools(), &(&1["name"] in @read_only_agent_tools))
+  end
+
+  defp tools_for_agent(_agent), do: Tools.active_llm_tools()
 
   def launch_interactive_tui(conv_id, flags, workspace_dirs, opts \\ []) do
     {:ok, rpc_pid} = SuperPi.RPC.Server.start_link(port: 0)
