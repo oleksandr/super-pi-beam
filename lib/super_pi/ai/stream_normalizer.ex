@@ -25,7 +25,12 @@ defmodule SuperPi.AI.StreamNormalizer do
             started?: false,
             blocks: %{},
             usage: %{"input_tokens" => 0, "output_tokens" => 0, "cache_read_tokens" => 0},
-            stop_reason: "end_turn"
+            stop_reason: "end_turn",
+            data_lines: [],
+            last_was_cr?: false,
+            block_counter: 0,
+            active_block_idx: nil,
+            done?: false
 
   @type t :: %__MODULE__{
           provider: :anthropic | :openai | :google,
@@ -34,7 +39,12 @@ defmodule SuperPi.AI.StreamNormalizer do
           started?: boolean(),
           blocks: map(),
           usage: map(),
-          stop_reason: String.t()
+          stop_reason: String.t(),
+          data_lines: list(String.t()),
+          last_was_cr?: boolean(),
+          block_counter: non_neg_integer(),
+          active_block_idx: non_neg_integer() | nil,
+          done?: boolean()
         }
 
   @doc """
@@ -51,27 +61,43 @@ defmodule SuperPi.AI.StreamNormalizer do
   """
   @spec feed_chunk(t(), binary()) :: {list(tuple()), t()}
   def feed_chunk(%__MODULE__{} = state, chunk) when is_binary(chunk) do
+    # If the previous chunk ended with \r, and this chunk starts with \n, drop that \n
+    chunk =
+      if state.last_was_cr? and String.starts_with?(chunk, "\n") do
+        binary_part(chunk, 1, byte_size(chunk) - 1)
+      else
+        chunk
+      end
+
     combined = state.buffer <> chunk
-    {complete_lines, remaining_buffer} = split_complete_lines(combined)
+    {lines, remaining_buffer, last_was_cr?} = extract_lines(combined)
 
-    {events, next_state} =
-      Enum.reduce(complete_lines, {[], %__MODULE__{state | buffer: remaining_buffer}}, fn line, {acc_events, st} ->
-        {new_events, st2} = process_sse_line(st, String.trim_trailing(line, "\r"))
-        {acc_events ++ new_events, st2}
-      end)
+    state = %__MODULE__{state | buffer: remaining_buffer, last_was_cr?: last_was_cr?}
 
-    {events, next_state}
+    Enum.reduce(lines, {[], state}, fn line, {acc_events, st} ->
+      {new_events, st2} = process_line(st, line)
+      {acc_events ++ new_events, st2}
+    end)
   end
 
   @doc """
   Flushes any remaining complete SSE data in the buffer and returns `{events, final_state}`.
   """
   @spec flush(t()) :: {list(tuple()), t()}
-  def flush(%__MODULE__{buffer: ""} = state), do: {[], state}
+  def flush(%__MODULE__{buffer: "", data_lines: []} = state), do: {[], state}
 
-  def flush(%__MODULE__{buffer: rest} = state) do
-    {events, st} = process_sse_line(%__MODULE__{state | buffer: ""}, String.trim(rest))
-    {events, st}
+  def flush(%__MODULE__{} = state) do
+    {lines, _rem, _cr} = extract_lines(state.buffer <> "\n")
+    state = %__MODULE__{state | buffer: "", last_was_cr?: false}
+
+    {line_events, state} =
+      Enum.reduce(lines, {[], state}, fn line, {acc_events, st} ->
+        {new_events, st2} = process_line(st, line)
+        {acc_events ++ new_events, st2}
+      end)
+
+    {dispatch_events, state} = dispatch_buffered_event(state)
+    {line_events ++ dispatch_events, state}
   end
 
   @doc """
@@ -165,21 +191,75 @@ defmodule SuperPi.AI.StreamNormalizer do
   defp sanitize_block(%{"type" => "redacted_thinking"}, false, _target_provider), do: nil
   defp sanitize_block(other, _same_origin?, _target_provider), do: other
 
-  defp split_complete_lines(binary) do
-    parts = String.split(binary, "\n")
+  defp extract_lines(binary) do
+    do_extract_lines(binary, 0, 0, [], false)
+  end
 
-    case Enum.split(parts, -1) do
-      {complete, [last]} -> {complete, last}
-      _ -> {[], binary}
+  defp do_extract_lines(binary, pos, line_start, lines_acc, last_was_cr?) do
+    case :binary.match(binary, ["\r", "\n"], [{:scope, {pos, byte_size(binary) - pos}}]) do
+      :nomatch ->
+        remaining = binary_part(binary, line_start, byte_size(binary) - line_start)
+        {Enum.reverse(lines_acc), remaining, last_was_cr?}
+
+      {match_pos, 1} ->
+        char = :binary.at(binary, match_pos)
+
+        if char == ?\n do
+          line = binary_part(binary, line_start, match_pos - line_start)
+          do_extract_lines(binary, match_pos + 1, match_pos + 1, [line | lines_acc], false)
+        else
+          # char == ?\r
+          line = binary_part(binary, line_start, match_pos - line_start)
+
+          if match_pos + 1 < byte_size(binary) do
+            if :binary.at(binary, match_pos + 1) == ?\n do
+              # \r\n
+              do_extract_lines(binary, match_pos + 2, match_pos + 2, [line | lines_acc], false)
+            else
+              # bare \r
+              do_extract_lines(binary, match_pos + 1, match_pos + 1, [line | lines_acc], false)
+            end
+          else
+            # \r at the very end of binary
+            {Enum.reverse([line | lines_acc]), "", true}
+          end
+        end
     end
   end
 
-  defp process_sse_line(state, ""), do: {[], state}
-  defp process_sse_line(state, "event:" <> _), do: {[], state}
-  defp process_sse_line(state, ":" <> _), do: {[], state}
+  defp process_line(state, "") do
+    dispatch_buffered_event(state)
+  end
 
-  defp process_sse_line(state, "data:" <> raw_payload) do
-    payload = String.trim(raw_payload)
+  defp process_line(state, ":" <> _) do
+    {[], state}
+  end
+
+  defp process_line(state, "event:" <> _) do
+    {[], state}
+  end
+
+  defp process_line(%__MODULE__{} = state, "data:" <> raw_payload) do
+    payload =
+      case raw_payload do
+        " " <> rest -> rest
+        other -> other
+      end
+
+    {[], %__MODULE__{state | data_lines: [payload | state.data_lines]}}
+  end
+
+  defp process_line(state, _other) do
+    {[], state}
+  end
+
+  defp dispatch_buffered_event(%__MODULE__{data_lines: []} = state) do
+    {[], state}
+  end
+
+  defp dispatch_buffered_event(%__MODULE__{data_lines: lines} = state) do
+    payload = lines |> Enum.reverse() |> Enum.join("\n")
+    state = %__MODULE__{state | data_lines: []}
 
     if payload == "[DONE]" do
       finalize_stream(state)
@@ -188,13 +268,14 @@ defmodule SuperPi.AI.StreamNormalizer do
         {:ok, decoded} when is_map(decoded) ->
           normalize_provider_event(state, decoded)
 
+        {:ok, _non_map} ->
+          {[], state}
+
         {:error, reason} ->
           {[{:error, %{reason: {:invalid_sse_json, reason, payload}}}], state}
       end
     end
   end
-
-  defp process_sse_line(state, _other), do: {[], state}
 
   defp normalize_provider_event(%__MODULE__{provider: :anthropic} = state, event) do
     {start_events, state} = ensure_started(state)
@@ -244,19 +325,50 @@ defmodule SuperPi.AI.StreamNormalizer do
     cond do
       is_list(Map.get(event, "choices")) ->
         choice = List.first(event["choices"]) || %{}
-        delta = Map.get(choice, "delta", %{})
+        delta = Map.get(choice, "delta") || %{}
         finish = Map.get(choice, "finish_reason")
         {delta_events, %__MODULE__{} = st} = apply_openai_choice_delta(state, delta)
         st = if finish, do: %__MODULE__{st | stop_reason: finish}, else: st
         {start_events ++ delta_events, st}
 
+      Map.get(event, "type") == "response.completed" ->
+        resp_usage = get_in(event, ["response", "usage"])
+        st = if is_map(resp_usage), do: %__MODULE__{state | usage: merge_usage(state.usage, resp_usage)}, else: state
+        {done_events, final_st} = finalize_stream(st)
+        {start_events ++ done_events, final_st}
+
       Map.get(event, "type") == "response.output_text.delta" ->
         idx = Map.get(event, "content_index", 0)
-        text = Map.get(event, "delta", "")
+        text = Map.get(event, "delta") || ""
         block = Map.get(state.blocks, idx, %{"type" => "text", "text" => ""})
-        updated = Map.put(block, "text", block["text"] <> text)
+        updated = Map.put(block, "text", (block["text"] || "") <> text)
         st = %__MODULE__{state | blocks: Map.put(state.blocks, idx, updated)}
         {start_events ++ [{:text_delta, %{index: idx, delta: text}}], st}
+
+      Map.get(event, "type") == "response.output_item.added" ->
+        item = Map.get(event, "item", %{})
+        output_idx = Map.get(event, "output_index", 0)
+
+        case Map.get(item, "type") do
+          "function_call" ->
+            id = Map.get(item, "call_id") || "call_#{output_idx}"
+            name = Map.get(item, "name", "")
+            block = %{"type" => "tool_call", "id" => id, "name" => name, "raw_json" => "", "arguments" => %{}}
+            {start_events, %__MODULE__{state | blocks: Map.put(state.blocks, output_idx, block)}}
+
+          _ ->
+            {start_events, state}
+        end
+
+      Map.get(event, "type") == "response.function_call_arguments.delta" ->
+        output_idx = Map.get(event, "output_index", 0)
+        delta = Map.get(event, "delta") || ""
+        block = Map.get(state.blocks, output_idx, %{"type" => "tool_call", "id" => "call_#{output_idx}", "name" => "", "raw_json" => "", "arguments" => %{}})
+        new_raw = (block["raw_json"] || "") <> delta
+        partial = parse_partial_json(new_raw)
+        updated = Map.merge(block, %{"raw_json" => new_raw, "arguments" => partial})
+        ev = {:toolcall_delta, %{index: output_idx, id: updated["id"], name: updated["name"], raw_json_delta: delta, partial_args: partial}}
+        {start_events ++ [ev], %__MODULE__{state | blocks: Map.put(state.blocks, output_idx, updated)}}
 
       true ->
         {start_events, state}
@@ -279,39 +391,68 @@ defmodule SuperPi.AI.StreamNormalizer do
         parts = get_in(cand, ["content", "parts"]) || []
 
         {part_events, %__MODULE__{} = st} =
-          Enum.with_index(parts)
-          |> Enum.reduce({[], state}, fn {part, idx}, {ev_acc, %__MODULE__{} = s_acc} ->
+          Enum.reduce(parts, {[], state}, fn part, {ev_acc, %__MODULE__{} = s_acc} ->
             cond do
               Map.get(part, "thought") == true ->
                 text = Map.get(part, "text", "")
                 sig = Map.get(part, "thoughtSignature")
-                thinking_idx = {:thinking, idx}
-                block = Map.get(s_acc.blocks, thinking_idx, %{"type" => "thinking", "thinking" => "", "signature" => sig})
-                prev_thinking = Map.get(block, "thinking", "") || ""
-                updated = %{"type" => "thinking", "thinking" => prev_thinking <> text, "signature" => sig || block["signature"]}
-                s_next = %__MODULE__{s_acc | blocks: Map.put(s_acc.blocks, thinking_idx, updated)}
-                {ev_acc ++ [{:thinking_delta, %{index: idx, delta: text, signature: updated["signature"]}}], s_next}
+
+                if s_acc.active_block_idx != nil and
+                     get_in(s_acc.blocks, [s_acc.active_block_idx, "type"]) == "thinking" do
+                  idx = s_acc.active_block_idx
+                  block = s_acc.blocks[idx]
+                  prev_thinking = block["thinking"] || ""
+                  updated = %{block | "thinking" => prev_thinking <> text, "signature" => sig || block["signature"]}
+                  s_next = %__MODULE__{s_acc | blocks: Map.put(s_acc.blocks, idx, updated)}
+                  {ev_acc ++ [{:thinking_delta, %{index: idx, delta: text, signature: updated["signature"]}}], s_next}
+                else
+                  idx = s_acc.block_counter
+                  block = %{"type" => "thinking", "thinking" => text, "signature" => sig}
+                  s_next = %__MODULE__{
+                    s_acc
+                    | blocks: Map.put(s_acc.blocks, idx, block),
+                      block_counter: idx + 1,
+                      active_block_idx: idx
+                  }
+                  {ev_acc ++ [{:thinking_delta, %{index: idx, delta: text, signature: sig}}], s_next}
+                end
 
               is_binary(Map.get(part, "text")) ->
                 text = part["text"]
                 sig = Map.get(part, "thoughtSignature")
-                text_idx = {:text, idx}
-                block = Map.get(s_acc.blocks, text_idx, %{"type" => "text", "text" => ""})
-                prev_text = Map.get(block, "text", "") || ""
-                updated = %{"type" => "text", "text" => prev_text <> text}
-                updated = if sig, do: Map.put(updated, "thoughtSignature", sig), else: updated
-                s_next = %__MODULE__{s_acc | blocks: Map.put(s_acc.blocks, text_idx, updated)}
-                {ev_acc ++ [{:text_delta, %{index: idx, delta: text}}], s_next}
+
+                if s_acc.active_block_idx != nil and
+                     get_in(s_acc.blocks, [s_acc.active_block_idx, "type"]) == "text" do
+                  idx = s_acc.active_block_idx
+                  block = s_acc.blocks[idx]
+                  prev_text = block["text"] || ""
+                  updated = %{block | "text" => prev_text <> text}
+                  updated = if sig, do: Map.put(updated, "thoughtSignature", sig), else: updated
+                  s_next = %__MODULE__{s_acc | blocks: Map.put(s_acc.blocks, idx, updated)}
+                  {ev_acc ++ [{:text_delta, %{index: idx, delta: text}}], s_next}
+                else
+                  idx = s_acc.block_counter
+                  block = %{"type" => "text", "text" => text}
+                  block = if sig, do: Map.put(block, "thoughtSignature", sig), else: block
+                  s_next = %__MODULE__{
+                    s_acc
+                    | blocks: Map.put(s_acc.blocks, idx, block),
+                      block_counter: idx + 1,
+                      active_block_idx: idx
+                  }
+                  {ev_acc ++ [{:text_delta, %{index: idx, delta: text}}], s_next}
+                end
 
               is_map(Map.get(part, "functionCall")) ->
                 fc = part["functionCall"]
                 name = Map.get(fc, "name", "tool")
-                id = Map.get(fc, "id", "fc_#{map_size(s_acc.blocks) + 1}")
+                tool_count = Enum.count(s_acc.blocks, fn {_k, b} -> b["type"] == "tool_call" end) + 1
+                id = Map.get(fc, "id") || "fc_#{tool_count}"
                 args = Map.get(fc, "args", %{})
                 sig = Map.get(part, "thoughtSignature") || Map.get(fc, "thoughtSignature")
                 raw_json = Jason.encode!(args)
-                tool_idx = {:tool, map_size(s_acc.blocks) + 1}
 
+                idx = s_acc.block_counter
                 block = %{
                   "type" => "tool_call",
                   "id" => id,
@@ -319,9 +460,14 @@ defmodule SuperPi.AI.StreamNormalizer do
                   "raw_json" => raw_json,
                   "arguments" => args
                 }
-
                 block = if sig, do: Map.put(block, "thoughtSignature", sig), else: block
-                s_next = %__MODULE__{s_acc | blocks: Map.put(s_acc.blocks, tool_idx, block)}
+
+                s_next = %__MODULE__{
+                  s_acc
+                  | blocks: Map.put(s_acc.blocks, idx, block),
+                    block_counter: idx + 1,
+                    active_block_idx: idx
+                }
 
                 ev =
                   {:toolcall_delta,
@@ -359,8 +505,16 @@ defmodule SuperPi.AI.StreamNormalizer do
     %{"type" => "tool_call", "id" => id, "name" => name, "raw_json" => "", "arguments" => %{}}
   end
 
-  defp init_block_from_anthropic(_other) do
+  defp init_block_from_anthropic(%{"type" => "redacted_thinking", "data" => _data} = cb) do
+    cb
+  end
+
+  defp init_block_from_anthropic(%{"type" => "text"}) do
     %{"type" => "text", "text" => ""}
+  end
+
+  defp init_block_from_anthropic(other) when is_map(other) do
+    other
   end
 
   defp apply_anthropic_delta(%__MODULE__{} = state, start_events, idx, %{"type" => "text_delta", "text" => chunk}) do
@@ -416,11 +570,13 @@ defmodule SuperPi.AI.StreamNormalizer do
   defp apply_anthropic_delta(%__MODULE__{} = state, start_events, _idx, _unknown_delta), do: {start_events, state}
 
   defp apply_openai_choice_delta(%__MODULE__{} = state, delta) do
+    delta = delta || %{}
+
     {events, %__MODULE__{} = state} =
       case Map.get(delta, "content") do
         text when is_binary(text) and text != "" ->
           block = Map.get(state.blocks, 0, %{"type" => "text", "text" => ""})
-          updated = Map.put(block, "text", block["text"] <> text)
+          updated = Map.put(block, "text", (block["text"] || "") <> text)
           {[{:text_delta, %{index: 0, delta: text}}], %__MODULE__{state | blocks: Map.put(state.blocks, 0, updated)}}
 
         _ ->
@@ -433,9 +589,9 @@ defmodule SuperPi.AI.StreamNormalizer do
           idx = Map.get(tc, "index", 0) + 1
           existing = Map.get(st_acc.blocks, idx, %{"type" => "tool_call", "id" => "call_#{idx}", "name" => "", "raw_json" => "", "arguments" => %{}})
           id = Map.get(tc, "id") || existing["id"]
-          fn_map = Map.get(tc, "function", %{})
+          fn_map = Map.get(tc, "function") || %{}
           name = Map.get(fn_map, "name") || existing["name"]
-          arg_chunk = Map.get(fn_map, "arguments", "")
+          arg_chunk = Map.get(fn_map, "arguments") || ""
           new_raw = existing["raw_json"] <> arg_chunk
           partial = parse_partial_json(new_raw)
 
@@ -456,7 +612,9 @@ defmodule SuperPi.AI.StreamNormalizer do
     end
   end
 
-  defp finalize_stream(state) do
+  defp finalize_stream(%__MODULE__{done?: true} = state), do: {[], state}
+
+  defp finalize_stream(%__MODULE__{} = state) do
     ordered_content =
       state.blocks
       |> Enum.sort_by(fn {idx, _} -> idx end)
@@ -486,7 +644,7 @@ defmodule SuperPi.AI.StreamNormalizer do
          usage: state.usage
        }}
 
-    {[done_event], state}
+    {[done_event], %__MODULE__{state | done?: true}}
   end
 
   defp merge_usage(prev, incoming) when is_map(incoming) do
@@ -513,59 +671,120 @@ defmodule SuperPi.AI.StreamNormalizer do
 
   # Repairs truncated JSON strings/objects so partial tool arguments can be inspected live
   defp repair_truncated_json(str) do
-    {in_string?, escaped?, stack} =
-      str
-      |> String.graphemes()
-      |> Enum.reduce({false, false, []}, fn ch, {in_str, esc, stk} ->
-        cond do
-          esc ->
-            {in_str, false, stk}
-
-          ch == "\\" and in_str ->
-            {in_str, true, stk}
-
-          ch == "\"" ->
-            {not in_str, false, stk}
-
-          in_str ->
-            {in_str, false, stk}
-
-          ch == "{" ->
-            {false, false, ["}" | stk]}
-
-          ch == "[" ->
-            {false, false, ["]" | stk]}
-
-          ch in ["}", "]"] ->
-            case stk do
-              [^ch | rest] -> {false, false, rest}
-              _ -> {false, false, stk}
-            end
-
-          true ->
-            {false, false, stk}
-        end
-      end)
+    {in_string?, escaped?, stack} = fast_scan_json(str)
 
     base =
       cond do
-        escaped? -> str <> "\\"
-        true -> str
+        escaped? ->
+          binary_part(str, 0, byte_size(str) - 1)
+
+        in_string? ->
+          strip_truncated_u(str)
+
+        true ->
+          str
       end
 
     base = if in_string?, do: base <> "\"", else: base
+    base = strip_trailing_delimiters(base)
 
-    # Strip trailing dangling comma or colon before closing brackets
-    trimmed = Regex.replace(~r/[,:\s]+$/, base, "")
-
-    # If a key was just opened without a value (e.g. `{"a": 1, "b"`), append `: null`
-     closed =
-      if Regex.match?(~r/\{\s*"[^"]+"\s*$/, trimmed) or Regex.match?(~r/,\s*"[^"]+"\s*$/, trimmed) do
-        trimmed <> ": null"
+    closed =
+      if ends_with_open_key?(base) do
+        base <> ": null"
       else
-        trimmed
+        base
       end
 
     closed <> Enum.join(stack, "")
+  end
+
+  defp strip_truncated_u(str) do
+    tail_len = min(byte_size(str), 6)
+    prefix_len = byte_size(str) - tail_len
+    tail = binary_part(str, prefix_len, tail_len)
+    new_tail = Regex.replace(~r/\\u[0-9a-fA-F]{0,3}$/, tail, "")
+    binary_part(str, 0, prefix_len) <> new_tail
+  end
+
+  defp strip_trailing_delimiters(str) do
+    tail_len = min(byte_size(str), 16)
+    prefix_len = byte_size(str) - tail_len
+    tail = binary_part(str, prefix_len, tail_len)
+    new_tail = Regex.replace(~r/[,:\s]+$/, tail, "")
+    binary_part(str, 0, prefix_len) <> new_tail
+  end
+
+  defp ends_with_open_key?(str) do
+    tail_len = min(byte_size(str), 64)
+    prefix_len = byte_size(str) - tail_len
+    tail = binary_part(str, prefix_len, tail_len)
+    Regex.match?(~r/\{\s*"[^"]+"\s*$/, tail) or Regex.match?(~r/,\s*"[^"]+"\s*$/, tail)
+  end
+
+  defp fast_scan_json(binary) do
+    do_fast_scan(binary, false, [])
+  end
+
+  defp do_fast_scan(binary, true = _in_str, stack) do
+    case :binary.match(binary, ["\"", "\\"]) do
+      :nomatch ->
+        {true, false, stack}
+
+      {pos, 1} ->
+        char = :binary.at(binary, pos)
+        rest = binary_part(binary, pos + 1, byte_size(binary) - pos - 1)
+
+        if char == ?" do
+          do_fast_scan(rest, false, stack)
+        else
+          case rest do
+            <<>> ->
+              {true, true, stack}
+
+            <<_esc::8, after_esc::binary>> ->
+              do_fast_scan(after_esc, true, stack)
+          end
+        end
+    end
+  end
+
+  defp do_fast_scan(binary, false = _in_str, stack) do
+    case :binary.match(binary, ["\"", "{", "}", "[", "]"]) do
+      :nomatch ->
+        {false, false, stack}
+
+      {pos, 1} ->
+        char = :binary.at(binary, pos)
+        rest = binary_part(binary, pos + 1, byte_size(binary) - pos - 1)
+
+        case char do
+          ?" ->
+            do_fast_scan(rest, true, stack)
+
+          ?{ ->
+            do_fast_scan(rest, false, ["}" | stack])
+
+          ?[ ->
+            do_fast_scan(rest, false, ["]" | stack])
+
+          ?} ->
+            new_stack =
+              case stack do
+                ["}" | rest_stack] -> rest_stack
+                _ -> stack
+              end
+
+            do_fast_scan(rest, false, new_stack)
+
+          ?] ->
+            new_stack =
+              case stack do
+                ["]" | rest_stack] -> rest_stack
+                _ -> stack
+              end
+
+            do_fast_scan(rest, false, new_stack)
+        end
+    end
   end
 end

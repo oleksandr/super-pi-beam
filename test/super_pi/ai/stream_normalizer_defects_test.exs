@@ -11,7 +11,6 @@ defmodule SuperPi.AI.StreamNormalizerDefectsTest do
 
   alias SuperPi.AI.StreamNormalizer
 
-  @moduletag :known_bug
 
   defp run(provider, chunks) when is_list(chunks) do
     {events, st} =
