@@ -41,6 +41,15 @@ defmodule SuperPi.Conversation.Machine do
 
   # --- Public Client API ---
 
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      restart: :temporary,
+      type: :worker
+    }
+  end
+
   def start_link(opts) do
     conv_id = Keyword.fetch!(opts, :conversation_id)
     :gen_statem.start_link(via_tuple(conv_id), __MODULE__, opts, [])
@@ -48,6 +57,14 @@ defmodule SuperPi.Conversation.Machine do
 
   def via_tuple(conversation_id) do
     {:via, Registry, {SuperPi.Registry, {:conversation_machine, conversation_id}}}
+  end
+
+  @doc """
+  Cancels any active running turn, terminating active LLM task / tool execution,
+  recording a cancelled state, replying to any waiting submit caller, and returning to :idle.
+  """
+  def cancel(pid_or_via) do
+    :gen_statem.cast(pid_or_via, :cancel)
   end
 
   @doc """
@@ -125,6 +142,38 @@ defmodule SuperPi.Conversation.Machine do
 
   def handle_event({:call, from}, {:set_extensions, extensions}, _state, %__MODULE__{} = data) do
     {:keep_state, %__MODULE__{data | extensions: extensions}, [{:reply, from, :ok}]}
+  end
+
+  def handle_event(:cast, :cancel, :idle, _data) do
+    :keep_state_and_data
+  end
+
+  def handle_event(:cast, :cancel, _state, %__MODULE__{} = data) do
+    if data.active_llm_task do
+      try do
+        Task.shutdown(data.active_llm_task, :brutal_kill)
+      rescue
+        _ -> :ok
+      end
+    end
+
+    if data.active_task_id do
+      TaskEngine.fail_task(data.active_task_id, %{"error" => "cancelled"})
+    end
+
+    replies = if data.reply_from, do: [{:reply, data.reply_from, {:error, :cancelled}}], else: []
+
+    {:next_state, :idle,
+     %__MODULE__{
+       data
+       | reply_from: nil,
+         active_task_id: nil,
+         active_llm_task: nil,
+         pending_tool_calls: [],
+         completed_tool_results: [],
+         steer_preempted: false,
+         retry_count: 0
+     }, replies}
   end
 
   # Passive `:write` submission in ANY state appends to history without triggering generation

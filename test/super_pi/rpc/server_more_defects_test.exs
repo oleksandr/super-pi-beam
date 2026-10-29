@@ -14,7 +14,6 @@ defmodule SuperPi.RPC.ServerMoreDefectsTest do
   alias SuperPi.RPC.Server
   alias SuperPi.TestSupport.Faults
 
-  @moduletag :known_bug
 
   defp request(id, method, params) do
     Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params})

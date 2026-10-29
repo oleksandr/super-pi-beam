@@ -21,6 +21,7 @@ defmodule SuperPi.Application do
       {Phoenix.PubSub, name: SuperPi.PubSub},
       {Registry, keys: :unique, name: SuperPi.Registry},
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.FileLockSupervisor},
+      {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MachineSupervisor},
       {Task.Supervisor, name: SuperPi.ToolTaskSupervisor},
       SuperPi.Durable.DeferredFlusher,
       {Oban, Application.fetch_env!(:super_pi, Oban)}

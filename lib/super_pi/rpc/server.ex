@@ -27,6 +27,7 @@ defmodule SuperPi.RPC.Server do
   alias SuperPi.Repo
 
   @max_in_flight_batches 2
+  @max_coalesced_queue 1_000
 
   defstruct [
     :listen_socket,
@@ -108,7 +109,15 @@ defmodule SuperPi.RPC.Server do
       {updated, [notification]}
     else
       queued = Map.get(client_state, :coalesced_queue, [])
-      {Map.put(client_state, :coalesced_queue, queued ++ [event_payload]), []}
+
+      new_queue =
+        if length(queued) >= @max_coalesced_queue do
+          tl(queued) ++ [event_payload]
+        else
+          queued ++ [event_payload]
+        end
+
+      {Map.put(client_state, :coalesced_queue, new_queue), []}
     end
   end
 
@@ -161,7 +170,15 @@ defmodule SuperPi.RPC.Server do
     port = Keyword.get(opts, :port, 0)
 
     {:ok, listen_socket} =
-      :gen_tcp.listen(port, [:binary, packet: :line, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+      :gen_tcp.listen(port, [
+        :binary,
+        packet: :line,
+        active: false,
+        reuseaddr: true,
+        ip: {127, 0, 0, 1},
+        buffer: 1_000_000,
+        packet_size: 1_000_000
+      ])
 
     {:ok, actual_port} = :inet.port(listen_socket)
     server_pid = self()
@@ -202,28 +219,32 @@ defmodule SuperPi.RPC.Server do
     receive do
       :socket_ready ->
         :inet.setopts(sock, active: :once)
-        client_loop(sock, client_state)
+        client_loop(sock, client_state, "")
     after
       5_000 ->
         :gen_tcp.close(sock)
     end
   end
 
-  defp client_loop(sock, client_state) do
+  defp client_loop(sock, client_state, buf) do
     receive do
-      {:tcp, ^sock, line} ->
-        {reply, next_state, notifications} = handle_rpc_payload(String.trim(line), client_state)
+      {:tcp, ^sock, chunk} ->
+        new_buf = buf <> chunk
+        {lines, rem_buf} = split_lines(new_buf)
+        next_state = process_lines(sock, lines, client_state)
+        :inet.setopts(sock, active: :once)
+        client_loop(sock, next_state, rem_buf)
 
+      {:async_rpc_reply, reply, notifs} ->
         if reply do
           :gen_tcp.send(sock, Jason.encode!(reply) <> "\n")
         end
 
-        Enum.each(notifications, fn notif ->
+        Enum.each(notifs, fn notif ->
           :gen_tcp.send(sock, Jason.encode!(notif) <> "\n")
         end)
 
-        :inet.setopts(sock, active: :once)
-        client_loop(sock, next_state)
+        client_loop(sock, client_state, buf)
 
       {:conversation_event, conv_id, event_payload} ->
         if MapSet.member?(client_state.watched_conversations, conv_id) do
@@ -233,19 +254,69 @@ defmodule SuperPi.RPC.Server do
             :gen_tcp.send(sock, Jason.encode!(notif) <> "\n")
           end)
 
-          client_loop(sock, next_state)
+          client_loop(sock, next_state, buf)
         else
-          client_loop(sock, client_state)
+          client_loop(sock, client_state, buf)
         end
 
       {:conversation_state, _conv_id, _status} ->
-        client_loop(sock, client_state)
+        client_loop(sock, client_state, buf)
 
       {:tcp_closed, ^sock} ->
+        Enum.each(Map.get(client_state, :submit_tasks, []), fn pid ->
+          Process.exit(pid, :kill)
+        end)
         :gen_tcp.close(sock)
 
       {:tcp_error, ^sock, _reason} ->
+        Enum.each(Map.get(client_state, :submit_tasks, []), fn pid ->
+          Process.exit(pid, :kill)
+        end)
         :gen_tcp.close(sock)
+    end
+  end
+
+  defp split_lines(buf) do
+    case String.split(buf, "\n") do
+      [single] -> {[], single}
+      lines -> {Enum.slice(lines, 0..-2//1), List.last(lines)}
+    end
+  end
+
+  defp process_lines(_sock, [], client_state), do: client_state
+
+  defp process_lines(sock, [raw_line | rest], client_state) do
+    line = String.trim(raw_line)
+
+    if line == "" do
+      process_lines(sock, rest, client_state)
+    else
+      case Jason.decode(line) do
+        {:ok, %{"method" => "session.submit"} = _req} ->
+          parent = self()
+
+          {:ok, task_pid} =
+            Task.Supervisor.start_child(SuperPi.ToolTaskSupervisor, fn ->
+              {reply, _st, notifs} = handle_rpc_payload(line, client_state)
+              send(parent, {:async_rpc_reply, reply, notifs})
+            end)
+
+          updated_state = Map.update(client_state, :submit_tasks, [task_pid], &[task_pid | &1])
+          process_lines(sock, rest, updated_state)
+
+        _ ->
+          {reply, next_state, notifications} = handle_rpc_payload(line, client_state)
+
+          if reply do
+            :gen_tcp.send(sock, Jason.encode!(reply) <> "\n")
+          end
+
+          Enum.each(notifications, fn notif ->
+            :gen_tcp.send(sock, Jason.encode!(notif) <> "\n")
+          end)
+
+          process_lines(sock, rest, next_state)
+      end
     end
   end
 
@@ -404,17 +475,23 @@ defmodule SuperPi.RPC.Server do
     harness_key = Map.get(params, "harness") || Map.get(params, "preset", "default")
     harness = SuperPi.Harness.resolve(harness_key)
 
-    base_agent = Map.get(params, "agent", %{})
-    defaults = harness.agent_defaults(model: Map.get(base_agent, "model"))
-    agent_cfg = Map.merge(defaults, base_agent)
-
     conv =
       case Map.get(params, "conversation_id") do
         nil ->
+          base_agent = Map.get(params, "agent", %{})
+          defaults = harness.agent_defaults(model: Map.get(base_agent, "model"))
+          agent_cfg = Map.merge(defaults, base_agent)
           Storage.create_conversation!(agent: agent_cfg)
 
         conv_id ->
-          if map_size(agent_cfg) > 0, do: Storage.configure_agent!(conv_id, agent_cfg)
+          if Map.has_key?(params, "agent") do
+            user_agent = Map.get(params, "agent")
+
+            if is_map(user_agent) and map_size(user_agent) > 0 do
+              Storage.configure_agent!(conv_id, user_agent)
+            end
+          end
+
           Repo.get!(Conversation, conv_id)
       end
 
@@ -443,7 +520,7 @@ defmodule SuperPi.RPC.Server do
 
     if async? do
       Task.Supervisor.start_child(SuperPi.ToolTaskSupervisor, fn ->
-        case Machine.submit(pid, text, mode: mode, timeout: 120_000) do
+        case safe_machine_submit(pid, text, mode: mode, timeout: 120_000) do
           {:ok, res} ->
             Phoenix.PubSub.broadcast(
               SuperPi.PubSub,
@@ -475,7 +552,7 @@ defmodule SuperPi.RPC.Server do
       {jsonrpc_result(id, %{"status" => "accepted", "conversation_id" => conv_id, "seq" => Storage.current_seq()}),
        client_state, []}
     else
-      case Machine.submit(pid, text, mode: mode, timeout: 120_000) do
+      case safe_machine_submit(pid, text, mode: mode, timeout: 120_000) do
         {:ok, res} ->
           {next_client, notifs} =
             if MapSet.member?(client_state.watched_conversations, conv_id) do
@@ -584,6 +661,18 @@ defmodule SuperPi.RPC.Server do
   defp dispatch_method("session.cancel", params, id, client_state) do
     conv_id = Map.fetch!(params, "conversation_id")
 
+    case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
+      [{pid, _}] ->
+        try do
+          Machine.cancel(pid)
+        catch
+          :exit, _ -> :ok
+        end
+
+      [] ->
+        :ok
+    end
+
     Phoenix.PubSub.broadcast(
       SuperPi.PubSub,
       "conversation:#{conv_id}",
@@ -636,14 +725,32 @@ defmodule SuperPi.RPC.Server do
   defp parse_submit_mode("write"), do: :write
   defp parse_submit_mode(_), do: :queue
 
+  defp safe_machine_submit(pid, text, opts) do
+    try do
+      Machine.submit(pid, text, opts)
+    catch
+      :exit, reason ->
+        {:error, reason}
+    end
+  end
+
   defp ensure_machine_started!(conv_id, extensions) do
     case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
       [{pid, _}] ->
         pid
 
       [] ->
-        {:ok, pid} = Machine.start_link(conversation_id: conv_id, extensions: extensions)
-        pid
+        case Process.whereis(SuperPi.MachineSupervisor) do
+          nil ->
+            {:ok, pid} = Machine.start_link(conversation_id: conv_id, extensions: extensions)
+            pid
+
+          _sup ->
+            case DynamicSupervisor.start_child(SuperPi.MachineSupervisor, {Machine, conversation_id: conv_id, extensions: extensions}) do
+              {:ok, pid} -> pid
+              {:error, {:already_started, pid}} -> pid
+            end
+        end
     end
   end
 
