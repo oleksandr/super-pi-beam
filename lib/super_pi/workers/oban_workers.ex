@@ -29,6 +29,14 @@ defmodule SuperPi.Workers.CompactionWorker do
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"conversation_id" => conv_id} = args}) do
+    opts =
+      case Map.get(args, "keep_recent_tokens") do
+        k when is_integer(k) -> [keep_recent_tokens: k]
+        _ -> []
+      end
+
+    _ = SuperPi.Compaction.compact!(conv_id, :background, opts)
+
     Phoenix.PubSub.broadcast(
       SuperPi.PubSub,
       "conversation:#{conv_id}",

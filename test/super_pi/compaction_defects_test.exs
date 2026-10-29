@@ -18,7 +18,6 @@ defmodule SuperPi.CompactionDefectsTest do
   alias SuperPi.TestSupport.Faults
   alias SuperPi.Workers.CompactionWorker
 
-  @moduletag :known_bug
 
   setup do
     Process.flag(:trap_exit, true)

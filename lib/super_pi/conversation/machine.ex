@@ -674,18 +674,13 @@ defmodule SuperPi.Conversation.Machine do
           {:ok, %{entry_id: entry.id, summary: summary_text, head_entry_id: head_id}}
 
         :default ->
-          summary_text = Keyword.get(opts, :summary, "Compacted #{length(visible)} entries.")
-          head_id = find_compaction_cutoff_id(visible)
+          case SuperPi.Compaction.compact!(data.conversation_id, :manual, opts) do
+            {:ok, %{entry: entry, summary: summary_text, head_entry_id: head_id}} ->
+              {:ok, %{entry_id: entry.id, summary: summary_text, head_entry_id: head_id}}
 
-          entry =
-            Storage.append_entry!(
-              data.conversation_id,
-              "pi.compaction",
-              %{"summary" => summary_text},
-              head_entry_id: head_id
-            )
-
-          {:ok, %{entry_id: entry.id, summary: summary_text, head_entry_id: head_id}}
+            {:ok, :noop} ->
+              {:ok, :noop}
+          end
       end
 
     actions =
@@ -725,6 +720,17 @@ defmodule SuperPi.Conversation.Machine do
           })
         end
 
+        case SuperPi.Compaction.check_policy(data.conversation_id) do
+          {:threshold, _} ->
+            SuperPi.Compaction.compact!(data.conversation_id, :threshold)
+
+          {:background, _} ->
+            SuperPi.Compaction.compact!(data.conversation_id, :background, enqueue: true)
+
+          :none ->
+            :ok
+        end
+
         actions =
           if data.reply_from do
             [{:reply, data.reply_from, {:ok, data.last_assistant_message}}]
@@ -741,6 +747,17 @@ defmodule SuperPi.Conversation.Machine do
       TaskEngine.complete_task(data.active_task_id, %{
         "assistantMessage" => data.last_assistant_message
       })
+    end
+
+    case SuperPi.Compaction.check_policy(data.conversation_id) do
+      {:threshold, _} ->
+        SuperPi.Compaction.compact!(data.conversation_id, :threshold)
+
+      {:background, _} ->
+        SuperPi.Compaction.compact!(data.conversation_id, :background, enqueue: true)
+
+      :none ->
+        :ok
     end
 
     actions =

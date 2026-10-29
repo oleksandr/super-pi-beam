@@ -104,8 +104,15 @@ defmodule SuperPi.Compaction do
     context_window = Keyword.get(opts, :context_window, @default_context_window)
     background_tokens = Keyword.get(opts, :background_tokens, @default_background_tokens)
 
-    {visible, _} = Context.visible_entries_with_graph(conversation_id)
-    current_tokens = estimate_total_tokens(visible)
+    entries =
+      if opts == [] do
+        {visible, _} = Context.visible_entries_with_graph(conversation_id)
+        visible
+      else
+        Context.derive(conversation_id).active_entries
+      end
+
+    current_tokens = estimate_total_tokens(entries)
 
     cond do
       current_tokens + reserve_tokens >= context_window ->
@@ -125,6 +132,10 @@ defmodule SuperPi.Compaction do
   - Otherwise computes the safe cut point (`find_safe_cut_point/2`), summarizes the prefix, and appends a
     durable `pi.compaction` entry with `head_entry_id: first_kept_id`.
   """
+  @spec compact!(integer(), atom(), keyword()) ::
+          {:ok, :noop}
+          | {:ok, map()}
+          | {:enqueued, Oban.Job.t()}
   def compact!(conversation_id, mode \\ :manual, opts \\ [])
       when mode in [:manual, :threshold, :background, :overflow] do
     keep_recent_tokens =
@@ -141,34 +152,58 @@ defmodule SuperPi.Compaction do
 
       {:enqueued, job}
     else
-      {visible, _} = Context.visible_entries_with_graph(conversation_id)
-      {prefix, tail, head_entry_id} = find_safe_cut_point(visible, keep_recent_tokens)
+      {all_visible, _} = Context.visible_entries_with_graph(conversation_id)
 
-      summarizer = Keyword.get(opts, :summarizer, &default_summarizer/2)
-      summary_text = summarizer.(prefix, mode)
+      # Find any previous compaction head cutoff
+      prev_head_id =
+        Enum.reverse(all_visible)
+        |> Enum.find_value(fn
+          %Entry{head_entry_id: hid} when is_integer(hid) -> hid
+          _ -> nil
+        end)
 
-      entry =
-        Storage.append_entry!(
-          conversation_id,
-          "pi.compaction",
-          %{
-            "summary" => summary_text,
-            "mode" => Atom.to_string(mode),
-            "compactedCount" => length(prefix),
-            "keptCount" => length(tail)
-          },
-          head_entry_id: head_entry_id
-        )
+      # Eligible entries are active entries (from prev_head_id onwards, ignoring existing compaction markers)
+      eligible_entries =
+        if prev_head_id do
+          Enum.filter(all_visible, fn e -> e.id >= prev_head_id and e.kind != "pi.compaction" end)
+        else
+          all_visible
+        end
 
-      {:ok,
-       %{
-         entry: entry,
-         mode: mode,
-         head_entry_id: head_entry_id,
-         compacted_count: length(prefix),
-         kept_count: length(tail),
-         summary: summary_text
-       }}
+      eligible_messages = Enum.filter(eligible_entries, &(&1.kind == "pi.message"))
+
+      if length(eligible_messages) <= 1 do
+        {:ok, :noop}
+      else
+        {prefix, tail, raw_head_id} = find_safe_cut_point(eligible_entries, keep_recent_tokens)
+        head_entry_id = if prev_head_id, do: max(raw_head_id || 0, prev_head_id), else: raw_head_id
+
+        summarizer = Keyword.get(opts, :summarizer, &default_summarizer/2)
+        summary_text = summarizer.(prefix, mode)
+
+        entry =
+          Storage.append_entry!(
+            conversation_id,
+            "pi.compaction",
+            %{
+              "summary" => summary_text,
+              "mode" => Atom.to_string(mode),
+              "compactedCount" => length(prefix),
+              "keptCount" => length(tail)
+            },
+            head_entry_id: head_entry_id
+          )
+
+        {:ok,
+         %{
+           entry: entry,
+           mode: mode,
+           head_entry_id: head_entry_id,
+           compacted_count: length(prefix),
+           kept_count: length(tail),
+           summary: summary_text
+         }}
+      end
     end
   end
 
