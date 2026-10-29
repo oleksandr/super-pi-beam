@@ -216,7 +216,8 @@ defmodule SuperPi.Conversation.Machine do
       model: Map.get(mutated_agent, "model", "claude-sonnet-4-5"),
       messages: derived.messages,
       system_sections: derived.system_sections,
-      tools: derived.tools
+      tools: derived.tools,
+      json_schema: Map.get(mutated_agent, "jsonSchema")
     }
 
     case Extension.run_before_provider_request(data.extensions, provider_payload, ctx) do
@@ -361,7 +362,13 @@ defmodule SuperPi.Conversation.Machine do
             "details" => %{"blocked" => true}
           }
 
-        {:allow, validated_args} ->
+        decision when elem(decision, 0) in [:allow, :allow_overwritten] ->
+          {validated_args, overwritten_keys} =
+            case decision do
+              {:allow, a} -> {a, []}
+              {:allow_overwritten, a, keys} -> {a, keys}
+            end
+
           core_fn = fn exec_args ->
             case SandboxRunner.run_isolated(fn -> data.tool_executor.(tool_name, exec_args, ctx) end) do
               {:ok, %{} = res} ->
@@ -390,7 +397,14 @@ defmodule SuperPi.Conversation.Machine do
           end
 
           wrapped_res = Extension.run_wrap_tool(data.extensions, tool_name, validated_args, core_fn, ctx)
-          Extension.run_after_tool(data.extensions, tool_name, validated_args, wrapped_res, ctx)
+          final_res = Extension.run_after_tool(data.extensions, tool_name, validated_args, wrapped_res, ctx)
+
+          if overwritten_keys != [] do
+            notice = "[Hook Notice: PreToolUse rewrote tool arguments for keys: #{Enum.join(overwritten_keys, ", ")}]\n"
+            Map.update(final_res, "output", notice, &(notice <> to_string(&1)))
+          else
+            final_res
+          end
       end
 
     # Persist tool result as a durable entry (`pi.message` role `tool` with 3-channel fields)

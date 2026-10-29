@@ -136,11 +136,23 @@ defmodule SuperPi.AI.GeminiClient do
         base
       end
 
-    if tools != [] do
-      decls = Enum.map(tools, &to_gemini_function_declaration/1)
-      Map.put(base, "tools", [%{"functionDeclarations" => decls}])
-    else
-      base
+    base =
+      if tools != [] do
+        decls = Enum.map(tools, &to_gemini_function_declaration/1)
+        Map.put(base, "tools", [%{"functionDeclarations" => decls}])
+      else
+        base
+      end
+
+    case Map.get(payload, :json_schema) || Map.get(payload, "json_schema") do
+      schema when is_map(schema) and map_size(schema) > 0 ->
+        Map.put(base, "generationConfig", %{
+          "responseMimeType" => "application/json",
+          "responseSchema" => schema
+        })
+
+      _ ->
+        base
     end
   end
 

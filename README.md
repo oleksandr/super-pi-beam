@@ -77,6 +77,19 @@ Starts `SuperPi.RPC.Server` on a local TCP port and drives a full session (`sess
 mise exec -- mix run examples/rpc_showcase_client.exs
 ```
 
+### 4. `super-agy` — Antigravity CLI (`agy`) Clone Built on `SuperPi.Extension`
+`bin/super-agy` (`SuperPi.AGY.CLI`) implements an identical clone of `agy` where every customization subsystem runs as a modular `SuperPi.Extension` behaviour (`Rules`, `Skills`, `HooksJson`, `Permissions`, `SlashCommands`):
+
+```bash
+# List models, agents, and configured MCP servers from ~/.gemini/config/mcp_config.json
+./bin/super-agy models
+./bin/super-agy agents
+./bin/super-agy mcp list
+
+# Run a single prompt with live skill & rule discovery
+./bin/super-agy -p "What skills are available in this workspace?"
+```
+
 ---
 
 ## Running the Property-Based Test Suite

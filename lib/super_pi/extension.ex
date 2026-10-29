@@ -41,7 +41,10 @@ defmodule SuperPi.Extension do
               {:ok, map()}
 
   @callback before_tool(tool_name :: String.t(), args :: map(), context()) ::
-              :allow | {:block, String.t()} | {:mutate_input, map()}
+              :allow
+              | {:block, String.t()}
+              | {:mutate_input, map()}
+              | {:overwrite, map()}
 
   @callback wrap_tool(tool_name :: String.t(), args :: map(), next :: (map() -> map()), context()) ::
               map()
@@ -183,13 +186,32 @@ defmodule SuperPi.Extension do
   end
 
   def run_before_tool(extensions, tool_name, args, ctx) do
-    Enum.reduce_while(extensions, {:allow, args}, fn ext, {:allow, cur_args} ->
+    Enum.reduce_while(extensions, {:allow, args, []}, fn ext, {:allow, cur_args, overwritten_keys} ->
       case ext.before_tool(tool_name, cur_args, ctx) do
-        :allow -> {:cont, {:allow, cur_args}}
-        {:mutate_input, new_args} -> {:cont, {:allow, new_args}}
-        {:block, reason} -> {:halt, {:block, reason}}
+        :allow ->
+          {:cont, {:allow, cur_args, overwritten_keys}}
+
+        {:mutate_input, new_args} ->
+          {:cont, {:allow, new_args, overwritten_keys}}
+
+        {:overwrite, patch_map} when is_map(patch_map) ->
+          changed =
+            patch_map
+            |> Enum.filter(fn {k, v} -> Map.get(cur_args, k) != v end)
+            |> Enum.map(fn {k, _v} -> to_string(k) end)
+
+          merged = Map.merge(cur_args, patch_map)
+          {:cont, {:allow, merged, Enum.uniq(overwritten_keys ++ changed)}}
+
+        {:block, reason} ->
+          {:halt, {:block, reason}}
       end
     end)
+    |> case do
+      {:allow, final_args, []} -> {:allow, final_args}
+      {:allow, final_args, keys} -> {:allow_overwritten, final_args, keys}
+      {:block, reason} -> {:block, reason}
+    end
   end
 
   def run_wrap_tool(extensions, tool_name, args, core_exec_fun, ctx) do
