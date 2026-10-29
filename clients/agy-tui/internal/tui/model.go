@@ -14,6 +14,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
@@ -123,10 +124,17 @@ type submitMsg struct {
 	mode string
 }
 
+// agySpinner is the exact 8-frame cyan braille spinner used by antigravity CLI.
+var agySpinner = spinner.Spinner{
+	Frames: []string{"⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾"},
+	FPS:    time.Second / 12,
+}
+
 // Model implements the exact inline Bubble Tea TUI for Super-Pi-BEAM.
 type Model struct {
 	cfg              Config
 	composer         textarea.Model
+	viewport         viewport.Model
 	spin             spinner.Model
 	mdRenderer       *glamour.TermRenderer
 	width            int
@@ -143,6 +151,8 @@ type Model struct {
 	showTrajectory   bool
 	machineState     string
 	inFlightStepText string
+	isBusy           bool
+	activityLabel    string
 }
 
 // NewModel constructs an inline agy-class model with the SuperPi logo.
@@ -158,8 +168,12 @@ func NewModel(cfg Config) Model {
 	ta.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j", "shift+enter")
 
 	sp := spinner.New()
-	sp.Spinner = spinner.MiniDot
+	sp.Spinner = agySpinner
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8"))
+
+	vp := viewport.New(100, 25)
+	vp.MouseWheelEnabled = true
+	vp.MouseWheelDelta = 3
 
 	md, _ := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
@@ -169,7 +183,7 @@ func NewModel(cfg Config) Model {
 	wsDir := cmp.Or(cfg.WorkspaceDir, ".")
 	files := scanWorkspaceFiles(wsDir, 150)
 
-	return Model{
+	m := Model{
 		cfg: Config{
 			Client:         cfg.Client,
 			ConversationID: cfg.ConversationID,
@@ -180,6 +194,7 @@ func NewModel(cfg Config) Model {
 			InitialPrompt:  cfg.InitialPrompt,
 		},
 		composer:       ta,
+		viewport:       vp,
 		spin:           sp,
 		mdRenderer:     md,
 		width:          100,
@@ -189,7 +204,11 @@ func NewModel(cfg Config) Model {
 		workspaceFiles: files,
 		showTrajectory: false,
 		machineState:   "idle",
+		isBusy:         false,
+		activityLabel:  "",
 	}
+	m.syncViewportContent()
+	return m
 }
 
 // Init starts tea commands.
@@ -235,7 +254,65 @@ func waitForUIRequest(client *rpc.Client) tea.Cmd {
 	}
 }
 
-// Update processes keystrokes and streaming events.
+// calculateViewportHeight calculates exact available height for the history viewport.
+func (m Model) calculateViewportHeight() int {
+	h := m.height - m.composer.Height() - 3 // 3 for topRule, bottomRule, statusline
+	if m.activePanel != PanelNone {
+		switch m.activePanel {
+		case PanelModelPicker:
+			h -= 14
+		case PanelHelp:
+			h -= 16
+		case PanelUsage:
+			h -= 8
+		case PanelPermission:
+			h -= 9
+		}
+	} else if len(m.suggestions) > 0 {
+		h -= min(len(m.suggestions), 5) + 2
+	} else if len(m.fileSuggestions) > 0 {
+		h -= min(len(m.fileSuggestions), 5) + 2
+	}
+	if !m.viewport.AtBottom() && m.viewport.TotalLineCount() > h {
+		h -= 1
+	}
+	return max(h, 4)
+}
+
+// syncViewportContent re-renders history steps and updates the viewport.
+func (m *Model) syncViewportContent() {
+	var sections []string
+
+	// 1. Initial Hero Banner if conversation is empty
+	if len(m.steps) == 0 {
+		sections = append(sections, banner.Render(banner.Config{
+			Version:      "1.0.0 (OTP 28.4 / Elixir 1.20)",
+			UserAccount:  "Durable BEAM Harness (SQLite WAL)",
+			ModelDisplay: fmt.Sprintf("%s (%s)", m.cfg.Model, strings.Title(m.cfg.Effort)),
+			Workspace:    m.cfg.WorkspaceDir,
+		}))
+	}
+
+	// 2. Render steps in scrollback
+	for _, s := range m.steps {
+		sections = append(sections, m.renderStepItem(s))
+	}
+
+	// 3. In-flight activity indicator
+	if m.isBusy && m.activityLabel != "" {
+		sections = append(sections, fmt.Sprintf("%s  %s", m.spin.View(), m.activityLabel))
+	}
+
+	rendered := strings.Join(sections, "\n\n")
+
+	wasAtBottom := m.viewport.AtBottom() || m.viewport.TotalLineCount() == 0
+	m.viewport.SetContent(rendered)
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	}
+}
+
+// Update processes keystrokes, mouse wheel scrolling, and streaming events.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -244,11 +321,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = max(msg.Width, 50)
 		m.height = max(msg.Height, 15)
 		m.composer.SetWidth(max(m.width-4, 40))
+		m.viewport.Width = m.width
+		m.viewport.Height = m.calculateViewportHeight()
+		m.syncViewportContent()
 		return m, nil
 
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
+		if m.isBusy {
+			m.syncViewportContent()
+		}
+		return m, cmd
+
+	case tea.MouseMsg:
+		switch msg.Type {
+		case tea.MouseWheelUp:
+			m.viewport.LineUp(3)
+			return m, nil
+		case tea.MouseWheelDown:
+			m.viewport.LineDown(3)
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd
 
 	case submitMsg:
@@ -263,10 +359,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		req := rpc.UIRequestParams(msg)
 		m.activeUIRequest = &req
 		m.activePanel = PanelPermission
+		m.viewport.Height = m.calculateViewportHeight()
 		cmds = append(cmds, waitForUIRequest(m.cfg.Client))
 		return m, tea.Batch(cmds...)
 
 	case rpcErrorMsg:
+		m.isBusy = false
+		m.activityLabel = ""
 		m.steps = append(m.steps, StepItem{
 			Kind:      StepNotice,
 			Text:      fmt.Sprintf("RPC Error: %v", msg.err),
@@ -274,6 +373,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Done:      true,
 			Timestamp: time.Now(),
 		})
+		m.syncViewportContent()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -310,6 +410,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						Timestamp: time.Now(),
 					})
 					m.activePanel = PanelNone
+					m.viewport.Height = m.calculateViewportHeight()
+					m.syncViewportContent()
 					return m, nil
 				}
 
@@ -337,8 +439,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Global shortcuts
+		// Scrolling keys: support shift+up/down, pageup/pagedown, ctrl+home/end
 		switch msg.String() {
+		case "shift+up", "\x1b[1;2A", "pgup", "pageup", "\x1b[5~":
+			m.viewport.HalfViewUp()
+			return m, nil
+
+		case "shift+down", "\x1b[1;2B", "pgdown", "pagedown", "\x1b[6~":
+			m.viewport.HalfViewDown()
+			return m, nil
+
+		case "ctrl+home", "\x1b[1;5H":
+			m.viewport.GotoTop()
+			return m, nil
+
+		case "ctrl+end", "\x1b[1;5F":
+			m.viewport.GotoBottom()
+			return m, nil
+
+		case "esc":
+			if m.isBusy {
+				m.isBusy = false
+				m.activityLabel = ""
+				m.inFlightStepText = ""
+				m.steps = append(m.steps, StepItem{
+					Kind:      StepNotice,
+					Text:      "Turn cancelled by user.",
+					Done:      true,
+					Timestamp: time.Now(),
+				})
+				m.syncViewportContent()
+				if m.cfg.Client != nil {
+					client := m.cfg.Client
+					convID := m.cfg.ConversationID
+					return m, func() tea.Msg {
+						ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+						defer cancel()
+						_ = client.CancelSession(ctx, convID)
+						return nil
+					}
+				}
+				return m, nil
+			}
+
 		case "ctrl+c":
 			return m, tea.Quit
 
@@ -349,12 +492,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "ctrl+o":
 			m.showTrajectory = !m.showTrajectory
+			m.syncViewportContent()
 			return m, nil
 
 		case "?":
-			if strings.TrimSpace(m.composer.Value()) == "" {
+			if strings.TrimSpace(m.composer.Value()) == "" && !m.isBusy {
 				m.activePanel = PanelHelp
 				m.helpTab = 2 // shortcuts tab
+				m.viewport.Height = m.calculateViewportHeight()
 				return m, nil
 			}
 
@@ -429,6 +574,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	lines := strings.Count(m.composer.Value(), "\n") + 1
 	m.composer.SetHeight(min(max(lines, 1), 6))
 	m.updateAutocomplete()
+	m.viewport.Height = m.calculateViewportHeight()
 	cmds = append(cmds, taCmd)
 
 	return m, tea.Batch(cmds...)
@@ -445,6 +591,7 @@ func (m *Model) closePanel() {
 		cmdName = "/usage"
 	}
 	m.activePanel = PanelNone
+	m.viewport.Height = m.calculateViewportHeight()
 	if cmdName != "" {
 		m.steps = append(m.steps, StepItem{
 			Kind:      StepNotice,
@@ -452,6 +599,7 @@ func (m *Model) closePanel() {
 			Done:      true,
 			Timestamp: time.Now(),
 		})
+		m.syncViewportContent()
 	}
 }
 
@@ -469,12 +617,14 @@ func (m Model) resolvePermission(decision string) (tea.Model, tea.Cmd) {
 	req := m.activeUIRequest
 	m.activeUIRequest = nil
 	m.activePanel = PanelNone
+	m.viewport.Height = m.calculateViewportHeight()
 	m.steps = append(m.steps, StepItem{
 		Kind:      StepNotice,
 		Text:      fmt.Sprintf("Permission: %s -> %s", req.Title, strings.ToUpper(decision)),
 		Done:      true,
 		Timestamp: time.Now(),
 	})
+	m.syncViewportContent()
 
 	if m.cfg.Client == nil {
 		return m, nil
@@ -495,21 +645,29 @@ func (m Model) handleSubmit(text string, mode string) (tea.Model, tea.Cmd) {
 	case "/model":
 		m.activePanel = PanelModelPicker
 		m.panelCursor = 0
+		m.viewport.Height = m.calculateViewportHeight()
 		return m, nil
 	case "/help":
 		m.activePanel = PanelHelp
 		m.helpTab = 0
+		m.viewport.Height = m.calculateViewportHeight()
 		return m, nil
 	case "/usage", "/credits", "/context":
 		m.activePanel = PanelUsage
+		m.viewport.Height = m.calculateViewportHeight()
 		return m, nil
 	case "/clear":
 		m.steps = nil
+		m.isBusy = false
+		m.activityLabel = ""
+		m.syncViewportContent()
+		m.viewport.GotoTop()
 		return m, nil
 	case "/exit", "/quit":
 		return m, tea.Quit
 	case "/diff":
 		m.showTrajectory = true
+		m.syncViewportContent()
 		return m, nil
 	}
 
@@ -519,6 +677,11 @@ func (m Model) handleSubmit(text string, mode string) (tea.Model, tea.Cmd) {
 		Done:      true,
 		Timestamp: time.Now(),
 	})
+	m.isBusy = true
+	m.activityLabel = "Generating..."
+	m.inFlightStepText = "Generating..."
+	m.syncViewportContent()
+	m.viewport.GotoBottom()
 
 	if m.cfg.Client == nil {
 		return m, nil
@@ -540,8 +703,26 @@ func (m *Model) applyWatchEvent(ev rpc.WatchEvent) {
 	switch ev.Type {
 	case "state_changed":
 		m.machineState = ev.Status
+		switch ev.Status {
+		case "preparing_request":
+			m.isBusy = true
+			m.activityLabel = "Preparing request..."
+		case "streaming_llm":
+			m.isBusy = true
+			if m.activityLabel == "" || m.activityLabel == "Preparing request..." {
+				m.activityLabel = "Generating..."
+			}
+		case "executing_tools":
+			m.isBusy = true
+		case "idle":
+			m.isBusy = false
+			m.activityLabel = ""
+			m.inFlightStepText = ""
+		}
 
 	case "thinking_delta":
+		m.isBusy = true
+		m.activityLabel = "Thinking..."
 		if len(m.steps) > 0 && m.steps[len(m.steps)-1].Kind == StepThinking && !m.steps[len(m.steps)-1].Done {
 			m.steps[len(m.steps)-1].Text += ev.Delta
 		} else {
@@ -553,6 +734,8 @@ func (m *Model) applyWatchEvent(ev rpc.WatchEvent) {
 		}
 
 	case "text_delta":
+		m.isBusy = true
+		m.activityLabel = "Generating..."
 		// Mark open thinking block as done
 		for i := range m.steps {
 			if m.steps[i].Kind == StepThinking {
@@ -570,13 +753,22 @@ func (m *Model) applyWatchEvent(ev rpc.WatchEvent) {
 		}
 
 	case "tool_started":
-		m.inFlightStepText = fmt.Sprintf("Running %s...", ev.Name)
+		m.isBusy = true
 		kind := StepCommand
+		label := fmt.Sprintf("Running %s...", ev.Name)
 		if ev.Name == "edit" || ev.Name == "write" {
 			kind = StepEdit
+			label = "Editing files..."
 		} else if ev.Name == "read" || ev.Name == "ls" || ev.Name == "find" || ev.Name == "grep" {
 			kind = StepExplore
+			label = "Searching codebase..."
+		} else if ev.Name == "bash" || ev.Name == "cmd" || ev.Name == "sh" {
+			kind = StepCommand
+			label = "Running command..."
 		}
+		m.activityLabel = label
+		m.inFlightStepText = label
+
 		cmd := ""
 		if c, ok := ev.Arguments["command"].(string); ok {
 			cmd = c
@@ -597,7 +789,9 @@ func (m *Model) applyWatchEvent(ev rpc.WatchEvent) {
 		})
 
 	case "tool_completed":
-		m.inFlightStepText = ""
+		m.isBusy = true
+		m.activityLabel = "Generating..."
+		m.inFlightStepText = "Generating..."
 		for i := len(m.steps) - 1; i >= 0; i-- {
 			if !m.steps[i].Done && (m.steps[i].Kind == StepCommand || m.steps[i].Kind == StepEdit || m.steps[i].Kind == StepExplore) {
 				m.steps[i].Done = true
@@ -612,7 +806,9 @@ func (m *Model) applyWatchEvent(ev rpc.WatchEvent) {
 		}
 
 	case "turn_completed":
+		m.isBusy = false
 		m.machineState = "idle"
+		m.activityLabel = ""
 		m.inFlightStepText = ""
 		hasOpenAssistant := false
 		for i := range m.steps {
@@ -632,8 +828,19 @@ func (m *Model) applyWatchEvent(ev rpc.WatchEvent) {
 			}
 		}
 
-	case "turn_error":
+	case "turn_cancelled":
+		m.isBusy = false
 		m.machineState = "idle"
+		m.activityLabel = ""
+		m.inFlightStepText = ""
+		for i := range m.steps {
+			m.steps[i].Done = true
+		}
+
+	case "turn_error":
+		m.isBusy = false
+		m.machineState = "idle"
+		m.activityLabel = ""
 		m.inFlightStepText = ""
 		m.steps = append(m.steps, StepItem{
 			Kind:      StepNotice,
@@ -643,6 +850,7 @@ func (m *Model) applyWatchEvent(ev rpc.WatchEvent) {
 			Timestamp: time.Now(),
 		})
 	}
+	m.syncViewportContent()
 }
 
 func (m *Model) updateAutocomplete() {
@@ -693,25 +901,15 @@ func (m Model) View() string {
 
 	var sections []string
 
-	// 1. Initial Hero Banner if conversation is empty
-	if len(m.steps) == 0 {
-		sections = append(sections, banner.Render(banner.Config{
-			Version:      "1.0.0 (OTP 28.4 / Elixir 1.20)",
-			UserAccount:  "Durable BEAM Harness (SQLite WAL)",
-			ModelDisplay: fmt.Sprintf("%s (%s)", m.cfg.Model, strings.Title(m.cfg.Effort)),
-			Workspace:    m.cfg.WorkspaceDir,
-		}))
-		sections = append(sections, "")
-	}
+	// 1. History viewport
+	sections = append(sections, m.viewport.View())
 
-	// 2. Render steps in scrollback
-	for _, s := range m.steps {
-		sections = append(sections, m.renderStepItem(s))
-	}
-
-	// In-flight spinner indicator
-	if m.inFlightStepText != "" {
-		sections = append(sections, fmt.Sprintf("%s  %s", m.spin.View(), m.inFlightStepText))
+	// 2. Floating scroll hint if scrolled up
+	if !m.viewport.AtBottom() && m.viewport.TotalLineCount() > m.viewport.Height {
+		hint := lipgloss.NewStyle().Foreground(lipgloss.Color("#F59E0B")).Render(
+			fmt.Sprintf("  ↓ Scrolled up (%d%%) · ctrl+end or shift+down to jump to bottom", int(m.viewport.ScrollPercent()*100)),
+		)
+		sections = append(sections, hint)
 	}
 
 	// 3. Top rule
@@ -767,7 +965,12 @@ func (m Model) renderStepItem(s StepItem) string {
 		if cmdText == "" {
 			cmdText = s.Text
 		}
-		line := fmt.Sprintf("%s Ran (%s)", bulletGreen, lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Render(cmdText))
+		var line string
+		if !s.Done {
+			line = fmt.Sprintf("%s Running (%s)", bulletYellow, lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Render(cmdText))
+		} else {
+			line = fmt.Sprintf("%s Ran (%s)", bulletGreen, lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Render(cmdText))
+		}
 		if s.Done && s.Text != "" && m.showTrajectory {
 			body := strings.TrimSpace(s.Text)
 			lines := strings.Split(body, "\n")
@@ -779,15 +982,24 @@ func (m Model) renderStepItem(s StepItem) string {
 		return line
 
 	case StepExplore:
+		if !s.Done {
+			return fmt.Sprintf("%s Exploring files (%s)...", bulletYellow, s.Path)
+		}
 		return fmt.Sprintf("%s Explored 1 file (%s)", bulletGreen, s.Path)
 
 	case StepEdit:
+		if !s.Done {
+			return fmt.Sprintf("%s Editing 1 file (%s) (ctrl+o to expand)", bulletYellow, s.Path)
+		}
 		if s.Diff != nil && m.showTrajectory {
 			return diff.Render(*s.Diff, m.width)
 		}
-		return fmt.Sprintf("%s Edit(%s)\n%sAdded lines (ctrl+o to expand)", bulletYellow, s.Path, elbow)
+		return fmt.Sprintf("%s Edit(%s)\n%sAdded lines (ctrl+o to expand)", bulletGreen, s.Path, elbow)
 
 	case StepThinking:
+		if !s.Done {
+			return lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8")).Render("▾ Thinking...")
+		}
 		dur := "3s"
 		tok := "120"
 		head := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8")).Render(fmt.Sprintf("▾ Thought for %s, %s tokens", dur, tok))
@@ -866,14 +1078,26 @@ func (m Model) renderFilePopup() string {
 }
 
 func (m Model) renderStatusline() string {
-	left := lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Render("? for shortcuts")
-	if m.activePanel != PanelNone {
+	var left string
+	if m.isBusy {
+		escStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F8FAFC"))
+		textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
+		left = escStyle.Render("esc") + textStyle.Render(" to cancel")
+	} else if m.activePanel != PanelNone {
 		left = lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Render("esc to close")
+	} else {
+		left = lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Render("? for shortcuts")
 	}
 
-	right := lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Render(
-		fmt.Sprintf("%s · %s", m.cfg.Model, m.cfg.Effort),
-	)
+	var rightParts []string
+	if m.isBusy && m.activityLabel != "" {
+		actStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8"))
+		rightParts = append(rightParts, fmt.Sprintf("%s %s", m.spin.View(), actStyle.Render(m.activityLabel)))
+	}
+	modelInfo := fmt.Sprintf("%s · %s", m.cfg.Model, m.cfg.Effort)
+	rightParts = append(rightParts, lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Render(modelInfo))
+
+	right := strings.Join(rightParts, "   ")
 
 	gap := max(m.width-lipgloss.Width(left)-lipgloss.Width(right)-2, 1)
 	return left + strings.Repeat(" ", gap) + right

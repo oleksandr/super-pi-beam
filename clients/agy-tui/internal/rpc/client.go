@@ -237,6 +237,12 @@ func (c *Client) SubmitAsync(ctx context.Context, conversationID int64, text str
 	return c.Call(ctx, "session.submit", params, nil)
 }
 
+// CancelSession cancels an in-flight turn for `conversationID`.
+func (c *Client) CancelSession(ctx context.Context, conversationID int64) error {
+	params := map[string]any{"conversation_id": conversationID}
+	return c.Call(ctx, "session.cancel", params, nil)
+}
+
 // ConfigureAgent updates the `pi.agent` document on the active conversation.
 func (c *Client) ConfigureAgent(ctx context.Context, conversationID int64, patch map[string]any) error {
 	params := map[string]any{

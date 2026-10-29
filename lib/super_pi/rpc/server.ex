@@ -431,6 +431,23 @@ defmodule SuperPi.RPC.Server do
     {jsonrpc_result(id, %{"resolved" => req_id, "value" => value}), next_state, []}
   end
 
+  defp dispatch_method("session.cancel", params, id, client_state) do
+    conv_id = Map.fetch!(params, "conversation_id")
+
+    Phoenix.PubSub.broadcast(
+      SuperPi.PubSub,
+      "conversation:#{conv_id}",
+      {:conversation_event, conv_id,
+       %{
+         "type" => "turn_cancelled",
+         "conversation_id" => conv_id,
+         "seq" => Storage.current_seq()
+       }}
+    )
+
+    {jsonrpc_result(id, %{"cancelled" => conv_id, "status" => "ok"}), client_state, []}
+  end
+
   defp dispatch_method("session.configure", params, id, client_state) do
     conv_id = Map.fetch!(params, "conversation_id")
     patch = Map.get(params, "agent", %{})
