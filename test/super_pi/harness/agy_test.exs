@@ -1,12 +1,12 @@
-defmodule SuperPi.AGYTest do
+defmodule SuperPi.Harness.AGYTest do
   use SuperPi.DataCase, async: false
   use ExUnitProperties
 
-  alias SuperPi.AGY.{Brain, CLI, Discovery}
-  alias SuperPi.AGY.Extensions.{HooksJson, Permissions, Rules}
+  alias SuperPi.Harness.AGY.{Brain, CLI, Discovery}
+  alias SuperPi.Harness.AGY.Extensions.{HooksJson, Permissions, Rules}
   alias SuperPi.Durable.Context
 
-  describe "Property-Based & Integration Tests: SuperPi.AGY Clone of Antigravity CLI" do
+  describe "Property-Based & Integration Tests: SuperPi.Harness.AGY Clone of Antigravity CLI" do
     property "Rules extension enforces 24,000-byte per-file cap on line boundaries and 20,000-token aggregate budget" do
       check all(
               line_len <- integer(40..120),

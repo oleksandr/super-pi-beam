@@ -20,11 +20,11 @@ defmodule SuperPi.Harness.AGY do
   @impl true
   def extensions(_opts) do
     [
-      SuperPi.AGY.Extensions.Rules,
-      SuperPi.AGY.Extensions.Skills,
-      SuperPi.AGY.Extensions.HooksJson,
-      SuperPi.AGY.Extensions.Permissions,
-      SuperPi.AGY.Extensions.SlashCommands
+      SuperPi.Harness.AGY.Extensions.Rules,
+      SuperPi.Harness.AGY.Extensions.Skills,
+      SuperPi.Harness.AGY.Extensions.HooksJson,
+      SuperPi.Harness.AGY.Extensions.Permissions,
+      SuperPi.Harness.AGY.Extensions.SlashCommands
     ]
   end
 

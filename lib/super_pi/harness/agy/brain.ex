@@ -1,4 +1,4 @@
-defmodule SuperPi.AGY.Brain do
+defmodule SuperPi.Harness.AGY.Brain do
   @moduledoc """
   Antigravity Brain, Dual-Write JSONL Transcript Exporter, MCP Manager, & Plugin Manager.
 
@@ -10,7 +10,7 @@ defmodule SuperPi.AGY.Brain do
   - Manages `<globalConfigDir>/config.json` and `plugins/<name>/plugin.json` (`list`, `enable`, `disable`, `validate`).
   """
 
-  alias SuperPi.AGY.Discovery
+  alias SuperPi.Harness.AGY.Discovery
   alias SuperPi.Durable.Context
 
   @compact_limit_bytes 4_096

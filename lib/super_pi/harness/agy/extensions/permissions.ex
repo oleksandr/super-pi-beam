@@ -1,4 +1,4 @@
-defmodule SuperPi.AGY.Extensions.Permissions do
+defmodule SuperPi.Harness.AGY.Extensions.Permissions do
   @moduledoc """
   Antigravity Permissions, Execution Mode, & Workspace Boundary Extension (`SuperPi.Extension` behaviour).
 
@@ -13,7 +13,7 @@ defmodule SuperPi.AGY.Extensions.Permissions do
 
   use SuperPi.Extension
 
-  alias SuperPi.AGY.Discovery
+  alias SuperPi.Harness.AGY.Discovery
   alias SuperPi.Durable.Doc
 
   @read_only_tools ["read", "grep", "find", "ls", "tool_search"]

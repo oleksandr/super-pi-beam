@@ -1,4 +1,4 @@
-defmodule SuperPi.AGY.Extensions.Rules do
+defmodule SuperPi.Harness.AGY.Extensions.Rules do
   @moduledoc """
   Antigravity Rules Extension (`SuperPi.Extension` behaviour).
 
@@ -15,7 +15,7 @@ defmodule SuperPi.AGY.Extensions.Rules do
 
   use SuperPi.Extension
 
-  alias SuperPi.AGY.Discovery
+  alias SuperPi.Harness.AGY.Discovery
 
   @per_file_byte_limit 24_000
   @default_rules_token_budget 20_000
@@ -35,7 +35,7 @@ defmodule SuperPi.AGY.Extensions.Rules do
       existing_sections =
         case Map.get(agent_cfg, "systemSections") do
           list when is_list(list) -> list
-          _ -> [%{"id" => "core", "content" => "You are Antigravity (SuperPi.AGY)."}]
+          _ -> [%{"id" => "core", "content" => "You are Antigravity (SuperPi.Harness.AGY)."}]
         end
 
       updated_sections =

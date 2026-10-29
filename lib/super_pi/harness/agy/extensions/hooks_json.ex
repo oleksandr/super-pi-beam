@@ -1,4 +1,4 @@
-defmodule SuperPi.AGY.Extensions.HooksJson do
+defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
   @moduledoc """
   Antigravity `hooks.json` Lifecycle Extension (`SuperPi.Extension` behaviour).
 
@@ -18,7 +18,7 @@ defmodule SuperPi.AGY.Extensions.HooksJson do
 
   use SuperPi.Extension
 
-  alias SuperPi.AGY.Discovery
+  alias SuperPi.Harness.AGY.Discovery
   alias SuperPi.Durable.Doc
 
   @impl true

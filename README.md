@@ -246,7 +246,6 @@ MIX_ENV=test mise exec -- mix test --trace
 lib/
 ├── super_pi.ex
 ├── super_pi/
-│   ├── agy/                       # Antigravity customization discovery & extensions
 │   ├── ai/
 │   │   ├── gemini_client.ex       # Live Google Gemini SSE streaming & tool-calling client
 │   │   ├── stream_normalizer.ex   # Multi-provider SSE normalizer & partial JSON repair
@@ -272,9 +271,15 @@ lib/
 │   ├── gateway/
 │   │   └── router.ex              # OpenAI-compatible HTTP Gateway with SSE streaming
 │   ├── harness/                   # Pluggable harness personas (Default, AGY, Planner)
+│   │   ├── agy/                   # Encapsulated AGY submodules (discovery, brain, CLI, extensions)
+│   │   ├── agy.ex
+│   │   ├── default.ex
+│   │   └── planner.ex
 │   ├── harness.ex                 # SuperPi.Harness behaviour contract & resolver
 │   ├── mcp/
 │   │   └── server.ex              # Model Context Protocol stdio server
+│   ├── plugins/                   # Reusable Pi ecosystem plugins (GitCheckpoint, AutoCommit, ConfirmDestructive)
+│   ├── plugins.ex                 # SuperPi.Plugins registry & resolver
 │   ├── repo.ex                    # Runtime-switchable SQLite3 / Postgrex Ecto repo facade
 │   ├── rpc/
 │   │   └── server.ex              # JSON-RPC 2.0 server with K=2 ack-clocked backpressure

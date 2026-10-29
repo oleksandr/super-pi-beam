@@ -1,18 +1,18 @@
-defmodule SuperPi.AGY.CLI do
+defmodule SuperPi.Harness.AGY.CLI do
   @moduledoc """
   Antigravity CLI (`agy`) Clone Entrypoint built on `Super-Pi-BEAM` (`12 - AGY Clone Specification and Gap Analysis.md`).
 
   Supports all `agy` flags and subcommands while executing every customization layer through
   modular `SuperPi.Extension` behaviours:
-  - `SuperPi.AGY.Extensions.SlashCommands`
-  - `SuperPi.AGY.Extensions.Rules`
-  - `SuperPi.AGY.Extensions.Skills`
-  - `SuperPi.AGY.Extensions.HooksJson`
-  - `SuperPi.AGY.Extensions.Permissions`
+  - `SuperPi.Harness.AGY.Extensions.SlashCommands`
+  - `SuperPi.Harness.AGY.Extensions.Rules`
+  - `SuperPi.Harness.AGY.Extensions.Skills`
+  - `SuperPi.Harness.AGY.Extensions.HooksJson`
+  - `SuperPi.Harness.AGY.Extensions.Permissions`
   """
 
-  alias SuperPi.AGY.{Brain, Discovery}
-  alias SuperPi.AGY.Extensions.{HooksJson, Permissions, Rules, Skills, SlashCommands}
+  alias SuperPi.Harness.AGY.{Brain, Discovery}
+  alias SuperPi.Harness.AGY.Extensions.{HooksJson, Permissions, Rules, Skills, SlashCommands}
   alias SuperPi.Conversation.Machine
   alias SuperPi.Durable.Storage
   alias SuperPi.Tools
@@ -141,7 +141,7 @@ defmodule SuperPi.AGY.CLI do
         run_remote_control_subcommand(rest)
 
       {:subcommand, "changelog", _rest, _flags} ->
-        {0, "SuperPi.AGY v0.1.0 (Built on Super-Pi-BEAM OTP 28 / Elixir 1.20)"}
+        {0, "SuperPi.Harness.AGY v0.1.0 (Built on Super-Pi-BEAM OTP 28 / Elixir 1.20)"}
 
       {:run, %{help: true}, _pos} ->
         {0, help_text()}
@@ -484,7 +484,7 @@ defmodule SuperPi.AGY.CLI do
 
   def help_text do
     """
-    Usage of super-agy (SuperPi.AGY clone of Antigravity CLI):
+    Usage of super-agy (SuperPi.Harness.AGY clone of Antigravity CLI):
       --add-dir                       Add a directory to the workspace (repeatable)
       --agent                         Agent for the current CLI session
       -c, --continue                  Continue the most recent conversation

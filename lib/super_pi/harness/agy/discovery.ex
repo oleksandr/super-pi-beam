@@ -1,4 +1,4 @@
-defmodule SuperPi.AGY.Discovery do
+defmodule SuperPi.Harness.AGY.Discovery do
   @moduledoc """
   5-Tier Antigravity Customization Discovery Engine (`12 - AGY Clone Specification and Gap Analysis.md`).
 

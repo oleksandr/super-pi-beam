@@ -1,4 +1,4 @@
-defmodule SuperPi.AGY.Extensions.SlashCommands do
+defmodule SuperPi.Harness.AGY.Extensions.SlashCommands do
   @moduledoc """
   Antigravity Slash-Command & Skill Expansion Extension (`SuperPi.Extension` behaviour).
 

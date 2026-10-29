@@ -1,4 +1,4 @@
-defmodule SuperPi.AGY.Extensions.Skills do
+defmodule SuperPi.Harness.AGY.Extensions.Skills do
   @moduledoc """
   Antigravity Progressive Disclosure Skills Extension (`SuperPi.Extension` behaviour).
 
@@ -12,7 +12,7 @@ defmodule SuperPi.AGY.Extensions.Skills do
 
   use SuperPi.Extension
 
-  alias SuperPi.AGY.Discovery
+  alias SuperPi.Harness.AGY.Discovery
 
   @impl true
   def before_agent_start(agent_cfg, _ctx) do
@@ -41,7 +41,7 @@ defmodule SuperPi.AGY.Extensions.Skills do
       existing_sections =
         case Map.get(agent_cfg, "systemSections") do
           list when is_list(list) -> list
-          _ -> [%{"id" => "core", "content" => "You are Antigravity (SuperPi.AGY)."}]
+          _ -> [%{"id" => "core", "content" => "You are Antigravity (SuperPi.Harness.AGY)."}]
         end
 
       updated_sections =
