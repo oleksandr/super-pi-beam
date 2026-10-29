@@ -465,8 +465,10 @@ defmodule SuperPi.Harness.AGY.CLI do
   # --- Helpers ---
 
   defp run_stream_json_turns(conv_id, pid, lines, app_dir) do
-    outputs =
-      Enum.map(lines, fn line ->
+    results =
+      lines
+      |> Enum.reject(&(String.trim(&1) == ""))
+      |> Enum.map(fn line ->
         prompt =
           case Jason.decode(line) do
             {:ok, %{"prompt" => p}} -> p
@@ -474,13 +476,26 @@ defmodule SuperPi.Harness.AGY.CLI do
             _ -> line
           end
 
-        {:ok, msg} = Machine.submit(pid, prompt)
-        Jason.encode!(%{"type" => "turn_result", "conversation_id" => conv_id, "message" => msg})
+        if is_binary(prompt) do
+          case Machine.submit(pid, prompt) do
+            {:ok, msg} ->
+              {0, Jason.encode!(%{"type" => "turn_result", "conversation_id" => conv_id, "message" => msg_json(msg)})}
+
+            {:error, reason} ->
+              {1, Jason.encode!(%{"type" => "turn_error", "conversation_id" => conv_id, "error" => inspect(reason)})}
+          end
+        else
+          {1, Jason.encode!(%{"type" => "turn_error", "conversation_id" => conv_id, "error" => "prompt must be a string"})}
+        end
       end)
 
     Brain.sync_transcript!(conv_id, app_data_dir: app_dir)
-    {0, Enum.join(outputs, "\n")}
+    code = if Enum.any?(results, fn {c, _} -> c != 0 end), do: 1, else: 0
+    {code, results |> Enum.map(&elem(&1, 1)) |> Enum.join("\n")}
   end
+
+  defp msg_json(msg) when is_atom(msg), do: Atom.to_string(msg)
+  defp msg_json(msg), do: msg
 
   defp format_output(msg, "json") when is_map(msg), do: Jason.encode!(msg)
 
