@@ -35,22 +35,8 @@ defmodule SuperPi.Durable.DeferredFlusher do
   """
   def flush_now! do
     ensure_pending_ets!()
-
-    case :ets.tab2list(@pending_ets) do
-      [] ->
-        :ok
-
-      items ->
-        :ets.delete_all_objects(@pending_ets)
-
-        Storage.commit(fn seq ->
-          Enum.each(items, fn {{scope_kind, scope_id, kind, key}, value} ->
-            Doc.put_doc(scope_kind, scope_id, kind, value, seq, key: key)
-          end)
-        end)
-
-        :ok
-    end
+    Storage.commit(fn _seq -> :ok end)
+    :ok
   end
 
   def pending_count do
@@ -70,11 +56,23 @@ defmodule SuperPi.Durable.DeferredFlusher do
 
   @impl true
   def init(opts) do
+    Process.flag(:trap_exit, true)
     ensure_pending_ets!()
     Doc.ensure_ets!()
     interval = Keyword.get(opts, :flush_interval_ms, @default_flush_interval_ms)
     schedule_tick(interval)
     {:ok, %{interval: interval}}
+  end
+
+  @impl true
+  def terminate(_reason, _state) do
+    try do
+      flush_now!()
+    rescue
+      _ -> :ok
+    end
+
+    :ok
   end
 
   @impl true

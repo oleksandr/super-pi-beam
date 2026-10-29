@@ -68,17 +68,35 @@ defmodule SuperPi.Durable.TaskEngine do
   Atomically transitions a task to `"running"` via `Fsmx.transition_Multi/4`.
   """
   def start_task(task_id) do
-    transition_task(task_id, "running", %{})
+    case Repo.get(TaskSchema, task_id) do
+      nil ->
+        {:error, :not_found}
+
+      %TaskSchema{status: "running"} ->
+        {:error, :already_running}
+
+      %TaskSchema{} ->
+        transition_task(task_id, "running", %{})
+    end
   end
 
   @doc """
   Checkpoints a running task to a new phase (`{phase: next_phase, ...}`).
   """
   def checkpoint_task(task_id, next_phase, new_state) when is_binary(next_phase) and is_map(new_state) do
-    transition_task(task_id, "running", %{
-      phase: next_phase,
-      state: Map.put(new_state, "phase", next_phase)
-    })
+    case Repo.get(TaskSchema, task_id) do
+      nil ->
+        {:error, :not_found}
+
+      %TaskSchema{status: status} when status != "running" ->
+        {:error, {:invalid_status, status}}
+
+      %TaskSchema{} ->
+        transition_task(task_id, "running", %{
+          phase: next_phase,
+          state: Map.put(new_state, "phase", next_phase)
+        })
+    end
   end
 
   @doc """
@@ -86,10 +104,34 @@ defmodule SuperPi.Durable.TaskEngine do
   """
   def wait_for_children(task_id, child_task_ids, wait_policy \\ "all_settled")
       when is_list(child_task_ids) and wait_policy in ["all_settled", "fail_fast"] do
-    transition_task(task_id, "waiting", %{
-      wait_policy: wait_policy,
-      waiting_on_task_ids: %{"ids" => child_task_ids}
-    })
+    case Repo.get(TaskSchema, task_id) do
+      nil ->
+        {:error, :not_found}
+
+      %TaskSchema{} = parent ->
+        existing_children =
+          if child_task_ids == [] do
+            []
+          else
+            Repo.all(from t in TaskSchema, where: t.id in ^child_task_ids)
+          end
+
+        existing_ids = MapSet.new(existing_children, & &1.id)
+
+        cond do
+          child_task_ids != [] and not Enum.all?(child_task_ids, &MapSet.member?(existing_ids, &1)) ->
+            {:error, :unknown_child}
+
+          child_task_ids == [] or Enum.all?(existing_children, &TaskSchema.terminal?/1) ->
+            {:ok, parent}
+
+          true ->
+            transition_task(task_id, "waiting", %{
+              wait_policy: wait_policy,
+              waiting_on_task_ids: %{"ids" => child_task_ids}
+            })
+        end
+    end
   end
 
   @doc """
@@ -150,22 +192,27 @@ defmodule SuperPi.Durable.TaskEngine do
   def complete_task(task_id, result \\ %{}) when is_map(result) do
     Repo.transaction(fn ->
       task = Repo.get!(TaskSchema, task_id)
-      seq = Storage.next_seq!()
-      live_children = list_live_owned_children(task.id)
 
-      target_status = if live_children == [], do: "completed", else: "completing"
+      if task.status in ["completed", "completing"] do
+        task
+      else
+        seq = Storage.next_seq!()
+        live_children = list_live_owned_children(task.id)
 
-      case Fsmx.transition_changeset(task, target_status, %{result: result, updated_seq: seq}, state_field: :status)
-           |> Repo.update() do
-        {:ok, updated} ->
-          if target_status == "completed" do
-            reconcile_parent_after_child_settled!(updated, seq)
-          end
+        target_status = if live_children == [], do: "completed", else: "completing"
 
-          updated
+        case Fsmx.transition_changeset(task, target_status, %{result: result, updated_seq: seq}, state_field: :status)
+             |> Repo.update() do
+          {:ok, updated} ->
+            if target_status == "completed" do
+              reconcile_parent_after_child_settled!(updated, seq)
+            end
 
-        {:error, changeset} ->
-          Repo.active_repo().rollback(changeset)
+            updated
+
+          {:error, changeset} ->
+            Repo.active_repo().rollback(changeset)
+        end
       end
     end)
   end
@@ -180,16 +227,26 @@ defmodule SuperPi.Durable.TaskEngine do
   def fail_task(task_id, error_map) when is_map(error_map) do
     Repo.transaction(fn ->
       task = Repo.get!(TaskSchema, task_id)
-      seq = Storage.next_seq!()
 
-      case Fsmx.transition_changeset(task, "failed", %{result: error_map, updated_seq: seq}, state_field: :status)
-           |> Repo.update() do
-        {:ok, updated} ->
-          reconcile_parent_after_child_settled!(updated, seq)
-          updated
+      if TaskSchema.terminal?(task) do
+        task
+      else
+        live_children = list_live_owned_children(task.id)
+        Enum.each(live_children, fn child ->
+          abort_task!(child.id)
+        end)
 
-        {:error, changeset} ->
-          Repo.active_repo().rollback(changeset)
+        seq = Storage.next_seq!()
+
+        case Fsmx.transition_changeset(task, "failed", %{result: error_map, updated_seq: seq}, state_field: :status)
+             |> Repo.update() do
+          {:ok, updated} ->
+            reconcile_parent_after_child_settled!(updated, seq)
+            updated
+
+          {:error, changeset} ->
+            Repo.active_repo().rollback(changeset)
+        end
       end
     end)
   end
@@ -280,7 +337,7 @@ defmodule SuperPi.Durable.TaskEngine do
         {:error, :not_found}
 
       %TaskSchema{} = task ->
-        seq = Storage.current_seq() + 1
+        seq = Storage.next_seq!()
         params = Map.put(extra_params, :updated_seq, seq)
 
         multi =

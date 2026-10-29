@@ -16,7 +16,6 @@ defmodule SuperPi.Durable.DurableDefectsTest do
   alias SuperPi.Durable.{DeferredFlusher, Doc, Storage, TaskEngine}
   alias SuperPi.Durable.Schemas.Task, as: TaskSchema
 
-  @moduletag :known_bug
 
   @usage_scope {"conversation", "pi.usage"}
 

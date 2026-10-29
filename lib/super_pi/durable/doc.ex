@@ -105,7 +105,12 @@ defmodule SuperPi.Durable.Doc do
     })
     |> Repo.insert!()
 
-    :ets.insert(@ets_table, {{scope_kind, scope_id, kind, key}, new_value, seq})
+    cache_key = {scope_kind, scope_id, kind, key}
+    if keys = Process.get(:super_pi_tx_doc_keys) do
+      Process.put(:super_pi_tx_doc_keys, [cache_key | keys])
+    end
+
+    :ets.insert(@ets_table, {cache_key, new_value, seq})
     {:ok, new_value}
   end
 

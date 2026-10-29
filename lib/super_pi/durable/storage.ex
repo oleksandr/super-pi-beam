@@ -26,15 +26,58 @@ defmodule SuperPi.Durable.Storage do
         _ -> []
       end
 
-    {:ok, result} =
-      Repo.transaction(
-        fn ->
-          seq = next_seq!()
-          drain_pending_deferred_in_tx(seq)
-          fun.(seq)
-        end,
-        opts
-      )
+    DeferredFlusher.ensure_pending_ets!()
+    items_to_drain = :ets.tab2list(:super_pi_deferred_pending)
+
+    Process.put(:super_pi_tx_doc_keys, [])
+
+    result =
+      try do
+        Repo.transaction(
+          fn ->
+            seq = next_seq!()
+
+            Enum.each(items_to_drain, fn {{scope_kind, scope_id, kind, key}, value} ->
+              Doc.put_doc(scope_kind, scope_id, kind, value, seq, key: key)
+            end)
+
+            fun.(seq)
+          end,
+          opts
+        )
+      rescue
+        e ->
+          Enum.each(Process.get(:super_pi_tx_doc_keys, []), fn cache_key ->
+            :ets.delete(:super_pi_doc_cache, cache_key)
+          end)
+          Process.delete(:super_pi_tx_doc_keys)
+          reraise e, __STACKTRACE__
+      catch
+        kind, reason ->
+          Enum.each(Process.get(:super_pi_tx_doc_keys, []), fn cache_key ->
+            :ets.delete(:super_pi_doc_cache, cache_key)
+          end)
+          Process.delete(:super_pi_tx_doc_keys)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      else
+        {:ok, res} ->
+          Enum.each(items_to_drain, fn {key, val} ->
+            case :ets.lookup(:super_pi_deferred_pending, key) do
+              [{^key, ^val}] -> :ets.delete(:super_pi_deferred_pending, key)
+              _ -> :ok
+            end
+          end)
+
+          Process.delete(:super_pi_tx_doc_keys)
+          res
+
+        {:error, reason} ->
+          Enum.each(Process.get(:super_pi_tx_doc_keys, []), fn cache_key ->
+            :ets.delete(:super_pi_doc_cache, cache_key)
+          end)
+          Process.delete(:super_pi_tx_doc_keys)
+          {:error, reason}
+      end
 
     result
   end
@@ -212,19 +255,4 @@ defmodule SuperPi.Durable.Storage do
     Doc.put_doc("conversation", conv_id, "pi.usage", %{"inputTokens" => 0, "outputTokens" => 0, "costUsd" => 0.0}, seq)
   end
 
-  defp drain_pending_deferred_in_tx(seq) do
-    DeferredFlusher.ensure_pending_ets!()
-
-    case :ets.tab2list(:super_pi_deferred_pending) do
-      [] ->
-        :ok
-
-      items ->
-        :ets.delete_all_objects(:super_pi_deferred_pending)
-
-        Enum.each(items, fn {{scope_kind, scope_id, kind, key}, value} ->
-          Doc.put_doc(scope_kind, scope_id, kind, value, seq, key: key)
-        end)
-    end
-  end
 end

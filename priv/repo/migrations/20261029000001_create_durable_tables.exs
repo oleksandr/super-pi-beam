@@ -7,6 +7,8 @@ defmodule SuperPi.Repo.Migrations.CreateDurableTables do
       add :seq, :bigint, null: false, default: 0
     end
 
+    execute "INSERT INTO record_ids (name, seq) VALUES ('global_seq', 0)"
+
     create table(:conversations) do
       add :parent_conversation_id, references(:conversations, on_delete: :nothing)
       add :parent_entry_id, :bigint
