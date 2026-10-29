@@ -135,8 +135,17 @@ defmodule SuperPi.Extension do
 
   # --- Pipeline Runners ---
 
-  defp unpack_ext({mod, opts}), do: {mod, opts}
-  defp unpack_ext(mod) when is_atom(mod), do: {mod, []}
+  defp unpack_ext({mod, opts}) when is_atom(mod) do
+    Code.ensure_loaded(mod)
+    {mod, opts}
+  end
+
+  defp unpack_ext(mod) when is_atom(mod) do
+    Code.ensure_loaded(mod)
+    {mod, []}
+  end
+
+  defp unpack_ext(other), do: {other, []}
 
   defp ext_ctx({_mod, opts}, ctx) do
     Map.put(ctx, :config, opts)
