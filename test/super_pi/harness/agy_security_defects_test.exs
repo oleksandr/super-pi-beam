@@ -16,7 +16,6 @@ defmodule SuperPi.Harness.AgySecurityDefectsTest do
   alias SuperPi.Harness.AGY.{Brain, Discovery}
   alias SuperPi.Harness.AGY.Extensions.{HooksJson, Permissions}
 
-  @moduletag :known_bug
 
   # --- helpers ---
 

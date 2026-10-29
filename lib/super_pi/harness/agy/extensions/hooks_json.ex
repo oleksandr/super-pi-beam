@@ -43,8 +43,9 @@ defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
       {:ok, agent_cfg}
     else
       sections = Map.get(agent_cfg, "systemSections", [])
+      clean_sections = Enum.reject(sections, &(&1["id"] == "agy_session_start_hooks"))
       joined = Enum.join(injected_texts, "\n")
-      {:ok, Map.put(agent_cfg, "systemSections", sections ++ [%{"id" => "agy_session_start_hooks", "content" => joined}])}
+      {:ok, Map.put(agent_cfg, "systemSections", clean_sections ++ [%{"id" => "agy_session_start_hooks", "content" => joined}])}
     end
   end
 
@@ -94,11 +95,24 @@ defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
           reason = Map.get(out, "reason", "Denied by PreToolUse hook")
           {:halt, {:block, reason}}
 
+        {:ok, %{"decision" => decision} = out} when decision in ["ask", "force_ask"] ->
+          reason = Map.get(out, "reason", "User confirmation required by PreToolUse hook (#{decision})")
+          {:halt, {:block, reason}}
+
         {:ok, %{"overwrite" => ow}} when is_map(ow) and map_size(ow) > 0 ->
           {:cont, {:allow, Map.merge(acc_overwrite, ow)}}
 
-        _ ->
+        {:ok, _} ->
           {:cont, {:allow, acc_overwrite}}
+
+        {:error, :hook_timeout} ->
+          {:halt, {:block, "PreToolUse hook timed out."}}
+
+        {:error, {:exit_code, code}} ->
+          {:halt, {:block, "PreToolUse hook failed with exit code #{code}."}}
+
+        {:error, reason} ->
+          {:halt, {:block, "PreToolUse hook error: #{inspect(reason)}"}}
       end
     end)
     |> case do
@@ -173,43 +187,65 @@ defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
       |> String.downcase()
       |> String.replace_prefix("cortex_step_type_", "")
 
-    case Regex.compile("^(?:" <> pattern <> ")$") do
+    normalized_pattern = String.downcase(pattern)
+
+    case Regex.compile("^(?:" <> pattern <> ")$", [:caseless]) do
       {:ok, re} -> Regex.match?(re, normalized_tool)
-      _ -> normalized_tool == pattern
+      _ -> normalized_tool == normalized_pattern
     end
   end
 
-  def run_hook_command(%{"command" => cmd} = handler, stdin_map, working_dir) do
-    timeout_sec = Map.get(handler, "timeout", 30)
-    expanded_cmd = String.replace_leading(cmd, "~/", Path.expand("~/") <> "/")
-    json_in = Jason.encode!(stdin_map)
+  def matcher_matches?(_pattern, _tool_name), do: false
 
-    task =
-      Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
-        tmp_in = Path.join(System.tmp_dir!(), "agy_hook_in_#{System.unique_integer([:positive])}.json")
-        File.write!(tmp_in, json_in)
+  def run_hook_command(handler, stdin_map, working_dir) when is_map(handler) do
+    cmd = Map.get(handler, "command")
 
-        try do
-          case System.cmd("sh", ["-c", "#{expanded_cmd} < #{tmp_in}"], cd: working_dir, stderr_to_stdout: false) do
-            {stdout, 0} ->
-              case Jason.decode(String.trim(stdout)) do
-                {:ok, map} when is_map(map) -> {:ok, map}
-                _ -> {:ok, %{}}
-              end
-
-            {_out, code} ->
-              {:error, {:exit_code, code}}
-          end
-        after
-          File.rm(tmp_in)
+    if is_nil(cmd) or not is_binary(cmd) or String.trim(cmd) == "" do
+      {:ok, %{}}
+    else
+      timeout_sec =
+        case Map.get(handler, "timeout", 30) do
+          t when is_integer(t) -> t
+          t when is_binary(t) ->
+            case Integer.parse(t) do
+              {n, _} -> n
+              _ -> 30
+            end
+          _ -> 30
         end
-      end)
 
-    case Task.yield(task, timeout_sec * 1_000) || Task.shutdown(task, :brutal_kill) do
-      {:ok, res} -> res
-      _ -> {:error, :hook_timeout}
+      expanded_cmd = String.replace_leading(cmd, "~/", Path.expand("~/") <> "/")
+      json_in = Jason.encode!(stdin_map)
+
+      task =
+        Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
+          tmp_in = Path.join(System.tmp_dir!(), "agy_hook_in_#{System.unique_integer([:positive])}.json")
+          File.write!(tmp_in, json_in)
+
+          try do
+            case System.cmd("sh", ["-c", "#{expanded_cmd} < #{tmp_in}"], cd: working_dir, stderr_to_stdout: false) do
+              {stdout, 0} ->
+                case Jason.decode(String.trim(stdout)) do
+                  {:ok, map} when is_map(map) -> {:ok, map}
+                  _ -> {:ok, %{}}
+                end
+
+              {_out, code} ->
+                {:error, {:exit_code, code}}
+            end
+          after
+            File.rm(tmp_in)
+          end
+        end)
+
+      case Task.yield(task, timeout_sec * 1_000) || Task.shutdown(task, :brutal_kill) do
+        {:ok, res} -> res
+        _ -> {:error, :hook_timeout}
+      end
     end
   end
+
+  def run_hook_command(_handler, _stdin_map, _working_dir), do: {:ok, %{}}
 
   defp resolve_hooks_files(agent_cfg) do
     case Map.get(agent_cfg, "hooksFiles") do
@@ -235,9 +271,10 @@ defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
               |> Enum.sort_by(fn {k, _} -> k end)
               |> Enum.flat_map(fn {_hook_name, spec} ->
                 if is_map(spec) and Map.get(spec, "enabled", true) != false do
-                  spec
-                  |> Map.get(event_name, [])
-                  |> Enum.map(fn h -> {hook_dir, h} end)
+                  case Map.get(spec, event_name, []) do
+                    list when is_list(list) -> Enum.map(list, fn h -> {hook_dir, h} end)
+                    _ -> []
+                  end
                 else
                   []
                 end
@@ -265,17 +302,22 @@ defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
               |> Enum.sort_by(fn {k, _} -> k end)
               |> Enum.flat_map(fn {_hook_name, spec} ->
                 if is_map(spec) and Map.get(spec, "enabled", true) != false do
-                  spec
-                  |> Map.get(event_name, [])
-                  |> Enum.flat_map(fn group ->
-                    if matcher_matches?(Map.get(group, "matcher", "*"), tool_name) do
-                      group
-                      |> Map.get("hooks", [])
-                      |> Enum.map(fn h -> {hook_dir, h} end)
-                    else
+                  case Map.get(spec, event_name, []) do
+                    list when is_list(list) ->
+                      Enum.flat_map(list, fn group ->
+                        if is_map(group) and matcher_matches?(Map.get(group, "matcher", "*"), tool_name) do
+                          case Map.get(group, "hooks", []) do
+                            hooks when is_list(hooks) -> Enum.map(hooks, fn h -> {hook_dir, h} end)
+                            _ -> []
+                          end
+                        else
+                          []
+                        end
+                      end)
+
+                    _ ->
                       []
-                    end
-                  end)
+                  end
                 else
                   []
                 end

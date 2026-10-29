@@ -23,22 +23,44 @@ defmodule SuperPi.Harness.AGY.Discovery do
   end
 
   @doc """
-  Walks up from `start_dir` to the repository root (directory containing `.git` or filesystem root)
-  and returns all ancestor directories from highest priority (`start_dir`) to lowest (`repo_root`).
+  Walks up from `start_dir` to the repository root (directory containing `.git`).
+  If no `.git` boundary exists in any parent, returns `[start_dir]`.
+  Returns all ancestor directories from highest priority (`start_dir`) to lowest (`repo_root`).
   """
   def ancestor_chain(start_dir) when is_binary(start_dir) do
     expanded = Path.expand(start_dir)
-    do_ancestor_chain(expanded, [])
+
+    case find_git_root(expanded) do
+      {:ok, git_root} ->
+        do_ancestor_chain_to_root(expanded, git_root, [])
+
+      :error ->
+        [expanded]
+    end
   end
 
-  defp do_ancestor_chain(dir, acc) do
-    next_acc = acc ++ [dir]
-    parent = Path.dirname(dir)
+  defp find_git_root(dir) do
+    if File.exists?(Path.join(dir, ".git")) do
+      {:ok, dir}
+    else
+      parent = Path.dirname(dir)
 
-    if File.exists?(Path.join(dir, ".git")) or parent == dir do
+      if parent == dir do
+        :error
+      else
+        find_git_root(parent)
+      end
+    end
+  end
+
+  defp do_ancestor_chain_to_root(dir, git_root, acc) do
+    next_acc = acc ++ [dir]
+
+    if dir == git_root do
       next_acc
     else
-      do_ancestor_chain(parent, next_acc)
+      parent = Path.dirname(dir)
+      do_ancestor_chain_to_root(parent, git_root, next_acc)
     end
   end
 
@@ -49,6 +71,7 @@ defmodule SuperPi.Harness.AGY.Discovery do
   """
   def discover_rule_files(workspace_dirs, opts \\ []) when is_list(workspace_dirs) do
     global_dir = Keyword.get(opts, :global_config_dir, default_global_config_dir())
+    allowed_roots = Enum.map(workspace_dirs, &Path.expand/1) ++ [Path.expand(global_dir)]
 
     workspace_candidates =
       workspace_dirs
@@ -72,7 +95,16 @@ defmodule SuperPi.Harness.AGY.Discovery do
 
     (workspace_candidates ++ global_candidates)
     |> Enum.filter(&File.regular?/1)
+    |> Enum.filter(&within_allowed_roots?(&1, allowed_roots))
     |> deduplicate_by_canonical_path()
+  end
+
+  defp within_allowed_roots?(path, roots) do
+    real = canonical_realpath(path)
+
+    Enum.any?(roots, fn root ->
+      real == root or String.starts_with?(real, root <> "/")
+    end)
   end
 
   @doc """

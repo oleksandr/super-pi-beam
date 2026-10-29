@@ -186,7 +186,7 @@ defmodule SuperPi.Harness.AGY.Brain do
   end
 
   defp truncate_step_for_compact(%{"content" => c} = step) when byte_size(c) > @compact_limit_bytes do
-    truncated = binary_part(c, 0, @compact_limit_bytes) <> "...[TRUNCATED]"
+    truncated = safe_truncate_utf8(c, @compact_limit_bytes) <> "...[TRUNCATED]"
 
     step
     |> Map.put("content", truncated)
@@ -194,6 +194,23 @@ defmodule SuperPi.Harness.AGY.Brain do
   end
 
   defp truncate_step_for_compact(step), do: step
+
+  defp safe_truncate_utf8(binary, max_bytes) when byte_size(binary) <= max_bytes, do: binary
+
+  defp safe_truncate_utf8(binary, max_bytes) do
+    part = binary_part(binary, 0, max_bytes)
+    trim_invalid_utf8_tail(part)
+  end
+
+  defp trim_invalid_utf8_tail(""), do: ""
+
+  defp trim_invalid_utf8_tail(binary) do
+    if String.valid?(binary) do
+      binary
+    else
+      trim_invalid_utf8_tail(binary_part(binary, 0, byte_size(binary) - 1))
+    end
+  end
 
   defp mcp_config_path(opts) do
     global_dir = Keyword.get(opts, :global_config_dir, Discovery.default_global_config_dir())

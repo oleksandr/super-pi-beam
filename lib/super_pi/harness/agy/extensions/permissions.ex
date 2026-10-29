@@ -25,11 +25,15 @@ defmodule SuperPi.Harness.AGY.Extensions.Permissions do
     settings = load_effective_settings(agent_cfg)
 
     skip_perms? = Map.get(agent_cfg, "dangerouslySkipPermissions", false) == true
-    mode = Map.get(agent_cfg, "executionMode", "auto")
+    raw_mode = Map.get(agent_cfg, "executionMode", "auto")
+    mode = raw_mode |> to_string() |> String.trim() |> String.downcase()
 
     cond do
       skip_perms? ->
         :allow
+
+      mode not in ["auto", "accept-edits", "plan"] ->
+        {:block, "Execution mode `#{raw_mode}` is not recognized or not permitted."}
 
       mode == "plan" and tool_name not in @read_only_tools ->
         {:block, "Tool `#{tool_name}` is blocked in `--mode plan` (read-only planning mode)."}
@@ -44,7 +48,11 @@ defmodule SuperPi.Harness.AGY.Extensions.Permissions do
         :allow
 
       tool_name in ["bash", "run_command"] ->
-        cmd_str = Map.get(args, "command") || Map.get(args, "CommandLine", "")
+        cmd_str =
+          Map.get(args, "command") || Map.get(args, "cmd") ||
+          Map.get(args, "CommandLine") || Map.get(args, :command) ||
+          Map.get(args, :cmd) || ""
+
         allow_list = get_in(settings, ["permissions", "allow"]) || []
 
         if mode == "auto" or command_allowed?(cmd_str, allow_list) do
@@ -52,6 +60,9 @@ defmodule SuperPi.Harness.AGY.Extensions.Permissions do
         else
           {:block, "Command `#{cmd_str}` is not in `permissions.allow` under mode `#{mode}`."}
         end
+
+      mode == "accept-edits" ->
+        {:block, "Tool `#{tool_name}` is not allowed by default in mode `accept-edits`."}
 
       true ->
         :allow
@@ -64,12 +75,29 @@ defmodule SuperPi.Harness.AGY.Extensions.Permissions do
   """
   def command_allowed?(cmd_str, allow_list) when is_binary(cmd_str) and is_list(allow_list) do
     trimmed = String.trim(cmd_str)
-    first_bin = trimmed |> String.split(~r/\s+/, parts: 2) |> List.first() || ""
 
     Enum.any?(allow_list, fn
       "command(" <> rest ->
-        pat = String.trim_trailing(rest, ")")
-        trimmed == pat or first_bin == pat or String.starts_with?(trimmed, pat <> " ")
+        pat =
+          if String.ends_with?(rest, ")") do
+            binary_part(rest, 0, byte_size(rest) - 1)
+          else
+            rest
+          end
+
+        cond do
+          trimmed == pat ->
+            true
+
+          String.contains?(trimmed, ["&&", "||", ";", "|", "`", "$(", "\n"]) ->
+            false
+
+          String.starts_with?(trimmed, pat <> " ") ->
+            true
+
+          true ->
+            false
+        end
 
       _ ->
         false
@@ -102,14 +130,65 @@ defmodule SuperPi.Harness.AGY.Extensions.Permissions do
     if allow_non_ws? or tool_name not in ["read", "write", "edit", "grep", "find", "ls"] do
       true
     else
-      target_path = Map.get(args, "path", File.cwd!()) |> Path.expand()
-      ws_paths = Map.get(agent_cfg, "workspacePaths", [File.cwd!()])
-      trusted = Map.get(settings, "trustedWorkspaces", [])
-      allowed_roots = Enum.map(ws_paths ++ trusted, &Path.expand/1)
+      raw_path =
+        Map.get(args, "path") || Map.get(args, "file_path") ||
+        Map.get(args, "dir") || Map.get(args, "directory") ||
+        Map.get(args, :path) || Map.get(args, :file_path) ||
+        Map.get(args, :dir) || Map.get(args, :directory)
 
-      Enum.any?(allowed_roots, fn root ->
-        target_path == root or String.starts_with?(target_path, root <> "/")
-      end)
+      if not is_binary(raw_path) or raw_path == "" do
+        true
+      else
+        real_target = real_path(raw_path)
+        ws_paths = Map.get(agent_cfg, "workspacePaths", [File.cwd!()])
+        trusted = Map.get(settings, "trustedWorkspaces", [])
+        allowed_roots = Enum.map(ws_paths ++ trusted, &real_path/1)
+
+        Enum.any?(allowed_roots, fn root ->
+          real_target == root or String.starts_with?(real_target, root <> "/")
+        end)
+      end
+    end
+  end
+
+  defp real_path(path) when is_binary(path) do
+    expanded = Path.expand(path)
+    resolve_symlinks_loop(expanded)
+  end
+
+  defp real_path(_), do: ""
+
+  defp resolve_symlinks_loop(path) do
+    case File.read_link(path) do
+      {:ok, target} ->
+        target =
+          if Path.type(target) == :relative do
+            Path.expand(Path.join(Path.dirname(path), target))
+          else
+            Path.expand(target)
+          end
+
+        resolve_symlinks_loop(target)
+
+      {:error, :einval} ->
+        parent = Path.dirname(path)
+
+        if parent == path do
+          path
+        else
+          resolved_parent = resolve_symlinks_loop(parent)
+          Path.join(resolved_parent, Path.basename(path))
+        end
+
+      _ ->
+        parent = Path.dirname(path)
+
+        if parent == path do
+          path
+        else
+          resolved_parent = resolve_symlinks_loop(parent)
+          Path.join(resolved_parent, Path.basename(path))
+        end
     end
   end
 end
