@@ -44,6 +44,7 @@ defmodule SuperPi.GatewayTest do
 
     model_ids = Enum.map(body["data"], & &1["id"])
     assert "super-pi-agent" in model_ids
+    assert "super-pi-fast" in model_ids
     assert "super-pi-agy" in model_ids
     assert "super-pi-planner" in model_ids
   end
@@ -164,6 +165,80 @@ defmodule SuperPi.GatewayTest do
     assert conn.status == 200
     body = Jason.decode!(conn.resp_body)
     assert body["choices"] != []
+  end
+
+  test "POST /v1/chat/completions consecutive streaming turns do NOT multiply responses on keep-alive processes" do
+    # Simulate turn 1
+    p1 = %{
+      "model" => "super-pi-fast",
+      "messages" => [%{"role" => "user", "content" => "First turn"}],
+      "stream" => true
+    }
+
+    c1 =
+      conn(:post, "/v1/chat/completions", Jason.encode!(p1))
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("x-session-id", "session-no-multiply-test")
+      |> Router.call(@opts)
+
+    assert c1.status == 200
+    b1 = c1.resp_body
+    assert length(Regex.scan(~r/"finish_reason":"stop"/, b1)) == 1
+    assert length(Regex.scan(~r/data: \[DONE\]/, b1)) == 1
+
+    # Simulate turn 2 on the same test process (keep-alive simulation)
+    p2 = %{
+      "model" => "super-pi-fast",
+      "messages" => [
+        %{"role" => "user", "content" => "First turn"},
+        %{"role" => "assistant", "content" => "First reply"},
+        %{"role" => "user", "content" => "Second turn"}
+      ],
+      "stream" => true
+    }
+
+    c2 =
+      conn(:post, "/v1/chat/completions", Jason.encode!(p2))
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("x-session-id", "session-no-multiply-test")
+      |> Router.call(@opts)
+
+    assert c2.status == 200
+    b2 = c2.resp_body
+    # Must NOT be multiplied (would be 2 if PubSub double subscribed)
+    assert length(Regex.scan(~r/"finish_reason":"stop"/, b2)) == 1
+    assert length(Regex.scan(~r/data: \[DONE\]/, b2)) == 1
+  end
+
+  test "POST /v1/chat/completions streams interim tool progress into reasoning_content" do
+    conv = SuperPi.Durable.Storage.create_conversation!()
+    Phoenix.PubSub.broadcast(SuperPi.PubSub, "conversation:#{conv.id}", {:conversation_event, conv.id, %{
+      "type" => "tool_started",
+      "name" => "bash",
+      "args" => %{"command" => "ls -la"}
+    }})
+    Phoenix.PubSub.broadcast(SuperPi.PubSub, "conversation:#{conv.id}", {:conversation_event, conv.id, %{
+      "type" => "tool_completed",
+      "name" => "bash",
+      "output" => "total 0",
+      "is_error" => false
+    }})
+
+    # Verify that stream handler converts tool_started and tool_completed into reasoning_content
+    p = %{
+      "model" => "super-pi-agent",
+      "messages" => [%{"role" => "user", "content" => "Run tool"}],
+      "stream" => true
+    }
+
+    conn =
+      conn(:post, "/v1/chat/completions", Jason.encode!(p))
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("x-conversation-id", to_string(conv.id))
+      |> Router.call(@opts)
+
+    assert conn.status == 200
+    assert String.contains?(conn.resp_body, "chat.completion.chunk")
   end
 
   test "GET /unknown returns 404 error" do

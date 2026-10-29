@@ -21,9 +21,13 @@ defmodule SuperPi.AI.GeminiClient do
   end
 
   def configured? do
-    case api_key() do
-      k when is_binary(k) and byte_size(k) > 0 -> true
-      _ -> false
+    if Application.get_env(:super_pi, :mock_llm, false) do
+      false
+    else
+      case api_key() do
+        k when is_binary(k) and byte_size(k) > 0 -> true
+        _ -> false
+      end
     end
   end
 

@@ -471,7 +471,9 @@ defmodule SuperPi.Gateway.Router do
     cmpl_id = "chatcmpl-" <> Uniq.UUID.uuid7()
     created = System.system_time(:second)
 
-    # Subscribe current handler to turn events
+    # Ensure any prior subscription from keep-alive connection reuse is completely purged
+    Phoenix.PubSub.unsubscribe(SuperPi.PubSub, "conversation:#{conv_id}")
+    flush_stale_mailbox(conv_id)
     Phoenix.PubSub.subscribe(SuperPi.PubSub, "conversation:#{conv_id}")
 
     # Set SSE headers and initiate chunked response
@@ -489,7 +491,22 @@ defmodule SuperPi.Gateway.Router do
         Machine.submit(pid, user_prompt, mode: :queue, timeout: 300_000)
       end)
 
-    stream_sse_loop(conn, conv_id, task.ref, cmpl_id, created, model)
+    try do
+      stream_sse_loop(conn, conv_id, task.ref, cmpl_id, created, model)
+    after
+      # Always unsubscribe immediately so subsequent turns on this connection never multiply deltas
+      Phoenix.PubSub.unsubscribe(SuperPi.PubSub, "conversation:#{conv_id}")
+      flush_stale_mailbox(conv_id)
+    end
+  end
+
+  defp flush_stale_mailbox(conv_id) do
+    receive do
+      {:conversation_event, ^conv_id, _} -> flush_stale_mailbox(conv_id)
+      {:conversation_state, ^conv_id, _} -> flush_stale_mailbox(conv_id)
+    after
+      0 -> :ok
+    end
   end
 
   defp stream_sse_loop(conn, conv_id, task_ref, cmpl_id, created, model) do
@@ -547,14 +564,77 @@ defmodule SuperPi.Gateway.Router do
       {:conversation_event, ^conv_id, %{"type" => "tool_started", "name" => name} = ev} ->
         args = Map.get(ev, "args", %{})
         Logger.info("[Gateway] ⚙️  Turn ##{conv_id} tool starting: '#{name}' (args: #{inspect(args)})")
-        stream_sse_loop(conn, conv_id, task_ref, cmpl_id, created, model)
+
+        arg_preview =
+          case args do
+            %{"command" => cmd} -> "$ #{cmd}\n"
+            %{"path" => p} -> "#{p}\n"
+            %{"query" => q} -> "query: #{q}\n"
+            _ ->
+              case Jason.encode(args) do
+                {:ok, json} -> "#{json}\n"
+                _ -> "\n"
+              end
+          end
+
+        progress_text = "⚙️ Executing #{name}: #{arg_preview}"
+
+        chunk_obj = %{
+          "id" => cmpl_id,
+          "object" => "chat.completion.chunk",
+          "created" => created,
+          "model" => model,
+          "choices" => [
+            %{
+              "index" => 0,
+              "delta" => %{"reasoning_content" => progress_text},
+              "finish_reason" => nil
+            }
+          ]
+        }
+
+        case chunk(conn, "data: " <> Jason.encode!(chunk_obj) <> "\n\n") do
+          {:ok, updated_conn} ->
+            stream_sse_loop(updated_conn, conv_id, task_ref, cmpl_id, created, model)
+
+          {:error, _} ->
+            conn
+        end
 
       {:conversation_event, ^conv_id, %{"type" => "tool_completed", "name" => name} = ev} ->
         err? = Map.get(ev, "is_error", false)
-        status_label = if err?, do: "❌ ERROR", else: "✅ SUCCESS"
-        out_preview = ev |> Map.get("output", "") |> to_string() |> String.slice(0..100)
-        Logger.info("[Gateway] #{status_label} Turn ##{conv_id} tool '#{name}' completed (output: #{inspect(out_preview)}...)")
-        stream_sse_loop(conn, conv_id, task_ref, cmpl_id, created, model)
+        status_label = if err?, do: "❌", else: "✅"
+        out_raw = ev |> Map.get("output", "") |> to_string() |> String.trim()
+        out_preview =
+          if out_raw != "" do
+            " -> " <> String.slice(out_raw, 0..80) <> (if String.length(out_raw) > 80, do: "...", else: "")
+          else
+            ""
+          end
+
+        progress_text = "#{status_label} #{name} completed#{out_preview}\n\n"
+
+        chunk_obj = %{
+          "id" => cmpl_id,
+          "object" => "chat.completion.chunk",
+          "created" => created,
+          "model" => model,
+          "choices" => [
+            %{
+              "index" => 0,
+              "delta" => %{"reasoning_content" => progress_text},
+              "finish_reason" => nil
+            }
+          ]
+        }
+
+        case chunk(conn, "data: " <> Jason.encode!(chunk_obj) <> "\n\n") do
+          {:ok, updated_conn} ->
+            stream_sse_loop(updated_conn, conv_id, task_ref, cmpl_id, created, model)
+
+          {:error, _} ->
+            conn
+        end
 
       {^task_ref, _result} ->
         Process.demonitor(task_ref, [:flush])

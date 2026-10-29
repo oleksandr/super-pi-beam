@@ -26,7 +26,8 @@ defmodule SuperPi.Harness do
     "default" => SuperPi.Harness.Default,
     "super-pi" => SuperPi.Harness.Default,
     "super-pi-agent" => SuperPi.Harness.Default,
-    "super-pi-fast" => SuperPi.Harness.Default,
+    "fast" => SuperPi.Harness.Fast,
+    "super-pi-fast" => SuperPi.Harness.Fast,
     "agy" => SuperPi.Harness.AGY,
     "antigravity" => SuperPi.Harness.AGY,
     "super-pi-agy" => SuperPi.Harness.AGY,
@@ -40,6 +41,7 @@ defmodule SuperPi.Harness do
 
   @builtin_harnesses [
     SuperPi.Harness.Default,
+    SuperPi.Harness.Fast,
     SuperPi.Harness.Autonomous,
     SuperPi.Harness.Interactive,
     SuperPi.Harness.AGY,

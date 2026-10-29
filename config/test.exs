@@ -8,5 +8,6 @@ config :super_pi, SuperPi.Repo.SQLite,
   busy_timeout: 30000
 
 config :super_pi, Oban, testing: :manual
+config :super_pi, :mock_llm, true
 
 config :logger, level: :warning
