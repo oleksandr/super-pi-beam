@@ -122,16 +122,31 @@ defmodule SuperPi.Plugins do
   Resolves a declarative list of plugins, preserving configuration options and ignoring invalid entries.
   """
   def resolve_all(specs) when is_list(specs) do
-    specs
-    |> Enum.map(&resolve/1)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.group_by(fn
-      {mod, _opts} -> mod
-      mod -> mod
-    end)
-    |> Enum.map(fn {_mod, entries} ->
-      Enum.find(entries, &is_tuple/1) || hd(entries)
-    end)
+    resolved =
+      specs
+      |> Enum.map(&resolve/1)
+      |> Enum.reject(&is_nil/1)
+
+    preferred =
+      Enum.reduce(resolved, %{}, fn entry, acc ->
+        mod = case entry do {m, _} -> m; m -> m end
+        case Map.get(acc, mod) do
+          {_, _} -> acc
+          _ -> Map.put(acc, mod, entry)
+        end
+      end)
+
+    {final_list, _seen} =
+      Enum.reduce(resolved, {[], MapSet.new()}, fn entry, {list, seen} ->
+        mod = case entry do {m, _} -> m; m -> m end
+        if MapSet.member?(seen, mod) do
+          {list, seen}
+        else
+          {[Map.fetch!(preferred, mod) | list], MapSet.put(seen, mod)}
+        end
+      end)
+
+    Enum.reverse(final_list)
   end
 
   def resolve_all(_), do: []
