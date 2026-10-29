@@ -353,6 +353,13 @@ defmodule SuperPi.Conversation.Machine do
     tool_result =
       case Extension.run_before_tool(data.extensions, tool_name, raw_args, ctx) do
         {:block, reason} ->
+          publish_stream_event(data.conversation_id, %{
+            "type" => "tool_blocked",
+            "tool_call_id" => tool_id,
+            "name" => tool_name,
+            "reason" => reason
+          })
+
           %{
             "tool_call_id" => tool_id,
             "name" => tool_name,
@@ -368,6 +375,14 @@ defmodule SuperPi.Conversation.Machine do
               {:allow, a} -> {a, []}
               {:allow_overwritten, a, keys} -> {a, keys}
             end
+
+          publish_stream_event(data.conversation_id, %{
+            "type" => "tool_started",
+            "tool_call_id" => tool_id,
+            "name" => tool_name,
+            "arguments" => validated_args,
+            "overwritten_keys" => overwritten_keys
+          })
 
           core_fn = fn exec_args ->
             case SandboxRunner.run_isolated(fn -> data.tool_executor.(tool_name, exec_args, ctx) end) do
@@ -399,12 +414,23 @@ defmodule SuperPi.Conversation.Machine do
           wrapped_res = Extension.run_wrap_tool(data.extensions, tool_name, validated_args, core_fn, ctx)
           final_res = Extension.run_after_tool(data.extensions, tool_name, validated_args, wrapped_res, ctx)
 
-          if overwritten_keys != [] do
-            notice = "[Hook Notice: PreToolUse rewrote tool arguments for keys: #{Enum.join(overwritten_keys, ", ")}]\n"
-            Map.update(final_res, "output", notice, &(notice <> to_string(&1)))
-          else
-            final_res
-          end
+          final_res =
+            if overwritten_keys != [] do
+              notice = "[Hook Notice: PreToolUse rewrote tool arguments for keys: #{Enum.join(overwritten_keys, ", ")}]\n"
+              Map.update(final_res, "output", notice, &(notice <> to_string(&1)))
+            else
+              final_res
+            end
+
+          publish_stream_event(data.conversation_id, %{
+            "type" => "tool_completed",
+            "tool_call_id" => tool_id,
+            "name" => tool_name,
+            "is_error" => Map.get(final_res, "is_error", false),
+            "output" => Map.get(final_res, "output", "")
+          })
+
+          final_res
       end
 
     # Persist tool result as a durable entry (`pi.message` role `tool` with 3-channel fields)
@@ -571,20 +597,56 @@ defmodule SuperPi.Conversation.Machine do
       "conversation:#{conv_id}",
       {:conversation_state, conv_id, status}
     )
+
+    publish_stream_event(conv_id, %{"type" => "state_changed", "status" => status})
+  end
+
+  defp publish_stream_event(conv_id, event_map) when is_map(event_map) do
+    enriched =
+      event_map
+      |> Map.put_new("conversation_id", conv_id)
+      |> Map.put_new("timestamp_ms", System.system_time(:millisecond))
+
+    Phoenix.PubSub.broadcast(
+      SuperPi.PubSub,
+      "conversation:#{conv_id}",
+      {:conversation_event, conv_id, enriched}
+    )
   end
 
   defp hook_ctx(data) do
     %{
       conversation_id: data.conversation_id,
-      active_task_id: data.active_task_id
+      active_task_id: data.active_task_id,
+      emit_event: fn ev -> publish_stream_event(data.conversation_id, ev) end
     }
   end
 
-  defp default_llm_responder(payload, _ctx) do
+  defp default_llm_responder(payload, ctx) do
     model = to_string(Map.get(payload, :model, "claude-sonnet-4-5"))
+    conv_id = Map.get(ctx, :conversation_id)
 
     if String.starts_with?(model, "gemini-") and SuperPi.AI.GeminiClient.configured?() do
-      SuperPi.AI.GeminiClient.generate(payload)
+      SuperPi.AI.GeminiClient.generate(payload,
+        on_delta: fn
+          {:text_delta, idx, delta} ->
+            publish_stream_event(conv_id, %{"type" => "text_delta", "index" => idx, "delta" => delta})
+
+          {:thinking_delta, idx, delta} ->
+            publish_stream_event(conv_id, %{"type" => "thinking_delta", "index" => idx, "delta" => delta})
+
+          {:toolcall_delta, idx, delta, partial_args} ->
+            publish_stream_event(conv_id, %{
+              "type" => "toolcall_delta",
+              "index" => idx,
+              "delta" => delta,
+              "partial_args" => partial_args
+            })
+
+          _ ->
+            :ok
+        end
+      )
     else
       last_user =
         payload.messages
@@ -598,10 +660,16 @@ defmodule SuperPi.Conversation.Machine do
           _ -> ""
         end
 
+      reply_text = "Echo: #{user_text}"
+
+      if conv_id do
+        publish_stream_event(conv_id, %{"type" => "text_delta", "index" => 0, "delta" => reply_text})
+      end
+
       {:ok,
        %{
          "role" => "assistant",
-         "content" => [%{"type" => "text", "text" => "Echo: #{user_text}"}],
+         "content" => [%{"type" => "text", "text" => reply_text}],
          "usage" => %{"input_tokens" => 10, "output_tokens" => 5}
        }}
     end

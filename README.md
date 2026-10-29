@@ -37,16 +37,14 @@
 
 ## Prerequisites & Setup
 
-This repository uses [`mise`](https://mise.jdx.dev/) to pin **Erlang/OTP 28.4.2**, **Elixir 1.20.4-otp-28**, and **Rust 1.99.1** (see `mise.toml`).
+This polyglot monorepo uses [`mise`](https://mise.jdx.dev/) to pin **Erlang/OTP 28.4.2**, **Elixir 1.20.4-otp-28**, **Rust 1.99.1**, and **Go 1.27.2** (see `mise.toml` and `Makefile`).
 
 ```bash
-# Fetch dependencies and compile with strict warnings-as-errors
-mise exec -- mix deps.get
-mise exec -- mix compile --warnings-as-errors
+# Build both the Elixir BEAM harness and the Go Bubble Tea TUI (bin/agy-tui)
+make build
 
-# Create and migrate the local SQLite WAL database
-mise exec -- mix ecto.create
-mise exec -- mix ecto.migrate
+# Run the full polyglot test suite (Elixir ExUnitProperties + Go TUI tests)
+make test
 ```
 
 ---
@@ -77,16 +75,22 @@ Starts `SuperPi.RPC.Server` on a local TCP port and drives a full session (`sess
 mise exec -- mix run examples/rpc_showcase_client.exs
 ```
 
-### 4. `super-agy` — Antigravity CLI (`agy`) Clone Built on `SuperPi.Extension`
-`bin/super-agy` (`SuperPi.AGY.CLI`) implements an identical clone of `agy` where every customization subsystem runs as a modular `SuperPi.Extension` behaviour (`Rules`, `Skills`, `HooksJson`, `Permissions`, `SlashCommands`):
+### 4. `super-agy` — Antigravity CLI (`agy`) Clone & Go Bubble Tea TUI
+`bin/super-agy` (`SuperPi.AGY.CLI`) implements an identical clone of `agy` where every customization subsystem runs as a modular `SuperPi.Extension` behaviour (`Rules`, `Skills`, `HooksJson`, `Permissions`, `SlashCommands`), paired with our native Go 1.27 **Bubble Tea + Lipgloss + Glamour** TUI (`clients/agy-tui`) connected over `SuperPi.RPC.Server`:
 
 ```bash
+# Launch the full-screen interactive Antigravity Bubble Tea TUI (default)
+./bin/super-agy
+
+# Launch the interactive TUI with an initial prompt
+./bin/super-agy -i "Explain the 10 context derivation rules in this repo"
+
 # List models, agents, and configured MCP servers from ~/.gemini/config/mcp_config.json
 ./bin/super-agy models
 ./bin/super-agy agents
 ./bin/super-agy mcp list
 
-# Run a single prompt with live skill & rule discovery
+# Run a single prompt non-interactively (-p) with live skill & rule discovery
 ./bin/super-agy -p "What skills are available in this workspace?"
 ```
 

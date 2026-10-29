@@ -47,6 +47,14 @@ defmodule SuperPi.AGY.CLI do
     ]
   end
 
+  def models_catalog do
+    Enum.map(@agy_models, fn {id, label} -> %{"id" => id, "label" => label} end)
+  end
+
+  def agents_catalog do
+    Enum.map(@agy_agents, fn {id, desc} -> %{"id" => id, "description" => desc} end)
+  end
+
   @doc """
   Parses command-line arguments (`argv`) into `{:subcommand, cmd, args, flags}` or `{:run, flags, positional}`.
   """
@@ -189,7 +197,7 @@ defmodule SuperPi.AGY.CLI do
 
     {:ok, pid} = start_or_attach_machine(conv.id, machine_opts)
 
-    prompt_text = flags.print || flags.prompt || flags.prompt_interactive || Enum.join(positional, " ")
+    prompt_text = flags.print || flags.prompt || Enum.join(positional, " ")
 
     result =
       cond do
@@ -197,8 +205,13 @@ defmodule SuperPi.AGY.CLI do
           stream_lines = Keyword.get(opts, :stdin_lines, [])
           run_stream_json_turns(conv.id, pid, stream_lines, app_dir)
 
-        prompt_text != "" ->
-          case Machine.submit(pid, prompt_text) do
+        Keyword.get(opts, :interactive_tui, false) and (prompt_text == "" or flags.prompt_interactive != nil) ->
+          launch_interactive_tui(conv.id, flags, workspace_dirs, opts)
+
+        prompt_text != "" or flags.prompt_interactive != nil ->
+          effective_prompt = if prompt_text != "", do: prompt_text, else: flags.prompt_interactive
+
+          case Machine.submit(pid, effective_prompt) do
             {:ok, :handled_by_extension} ->
               Brain.sync_transcript!(conv.id, app_data_dir: app_dir)
               {0, format_output(%{"status" => "handled"}, flags.output_format)}
@@ -217,6 +230,48 @@ defmodule SuperPi.AGY.CLI do
 
     GenServer.stop(pid)
     result
+  end
+
+  def launch_interactive_tui(conv_id, flags, workspace_dirs, opts \\ []) do
+    {:ok, rpc_pid} = SuperPi.RPC.Server.start_link(port: 0)
+    port = SuperPi.RPC.Server.port(rpc_pid)
+    tui_bin = Keyword.get(opts, :tui_binary, Path.expand("bin/agy-tui", File.cwd!()))
+
+    res =
+      if File.exists?(tui_bin) do
+        args =
+          [
+            "--rpc-addr",
+            "127.0.0.1:#{port}",
+            "--conversation",
+            to_string(conv_id),
+            "--model",
+            flags.model || "gemini-3-flash-preview",
+            "--effort",
+            flags.effort || "medium",
+            "--mode",
+            flags.mode || "auto",
+            "--workspace",
+            List.first(workspace_dirs) || File.cwd!()
+          ] ++
+            if(flags.prompt_interactive, do: ["--prompt", flags.prompt_interactive], else: [])
+
+        port_handle =
+          Port.open({:spawn_executable, tui_bin}, [
+            :nouse_stdio,
+            :exit_status,
+            args: args
+          ])
+
+        receive do
+          {^port_handle, {:exit_status, code}} -> {code, ""}
+        end
+      else
+        {0, OwlTUI.render_status_bar(conv_id)}
+      end
+
+    GenServer.stop(rpc_pid)
+    res
   end
 
   # --- Subcommands ---

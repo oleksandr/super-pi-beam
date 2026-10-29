@@ -173,7 +173,9 @@ defmodule SuperPi.RPC.Server do
   defp accept_loop(listen_socket, server_pid) do
     case :gen_tcp.accept(listen_socket) do
       {:ok, client_sock} ->
-        spawn(fn -> serve_client_socket(client_sock, new_client_state()) end)
+        pid = spawn(fn -> serve_client_socket(client_sock, new_client_state()) end)
+        :ok = :gen_tcp.controlling_process(client_sock, pid)
+        send(pid, :socket_ready)
         accept_loop(listen_socket, server_pid)
 
       {:error, :closed} ->
@@ -185,8 +187,19 @@ defmodule SuperPi.RPC.Server do
   end
 
   defp serve_client_socket(sock, client_state) do
-    case :gen_tcp.recv(sock, 0) do
-      {:ok, line} ->
+    receive do
+      :socket_ready ->
+        :inet.setopts(sock, active: :once)
+        client_loop(sock, client_state)
+    after
+      5_000 ->
+        :gen_tcp.close(sock)
+    end
+  end
+
+  defp client_loop(sock, client_state) do
+    receive do
+      {:tcp, ^sock, line} ->
         {reply, next_state, notifications} = handle_rpc_payload(String.trim(line), client_state)
 
         if reply do
@@ -197,9 +210,29 @@ defmodule SuperPi.RPC.Server do
           :gen_tcp.send(sock, Jason.encode!(notif) <> "\n")
         end)
 
-        serve_client_socket(sock, next_state)
+        :inet.setopts(sock, active: :once)
+        client_loop(sock, next_state)
 
-      {:error, _} ->
+      {:conversation_event, conv_id, event_payload} ->
+        if MapSet.member?(client_state.watched_conversations, conv_id) do
+          {next_state, notifications} = enqueue_watch_event(client_state, event_payload)
+
+          Enum.each(notifications, fn notif ->
+            :gen_tcp.send(sock, Jason.encode!(notif) <> "\n")
+          end)
+
+          client_loop(sock, next_state)
+        else
+          client_loop(sock, client_state)
+        end
+
+      {:conversation_state, _conv_id, _status} ->
+        client_loop(sock, client_state)
+
+      {:tcp_closed, ^sock} ->
+        :gen_tcp.close(sock)
+
+      {:tcp_error, ^sock, _reason} ->
         :gen_tcp.close(sock)
     end
   end
@@ -207,13 +240,36 @@ defmodule SuperPi.RPC.Server do
   # --- Method Dispatch ---
 
   defp dispatch_method("session.open", params, id, client_state) do
-    conv =
-      case Map.get(params, "conversation_id") do
-        nil -> Storage.create_conversation!(agent: Map.get(params, "agent", %{}))
-        conv_id -> Repo.get!(Conversation, conv_id)
+    base_agent = Map.get(params, "agent", %{})
+
+    agent_cfg =
+      if Map.get(params, "preset") == "agy" do
+        Map.merge(
+          %{
+            "model" => "gemini-3-flash-preview",
+            "effort" => "medium",
+            "executionMode" => "auto",
+            "workspacePaths" => [File.cwd!()],
+            "tools" => SuperPi.Tools.active_llm_tools()
+          },
+          base_agent
+        )
+      else
+        base_agent
       end
 
-    ensure_machine_started!(conv.id)
+    conv =
+      case Map.get(params, "conversation_id") do
+        nil ->
+          Storage.create_conversation!(agent: agent_cfg)
+
+        conv_id ->
+          if map_size(agent_cfg) > 0, do: Storage.configure_agent!(conv_id, agent_cfg)
+          Repo.get!(Conversation, conv_id)
+      end
+
+    extensions = resolve_extensions(params)
+    ensure_machine_started!(conv.id, extensions)
 
     reply =
       jsonrpc_result(id, %{
@@ -230,26 +286,65 @@ defmodule SuperPi.RPC.Server do
     text = Map.fetch!(params, "text")
     mode_str = Map.get(params, "mode", "queue")
     mode = parse_submit_mode(mode_str)
+    async? = Map.get(params, "async", false)
+    extensions = resolve_extensions(params)
 
-    pid = ensure_machine_started!(conv_id)
+    pid = ensure_machine_started!(conv_id, extensions)
 
-    case Machine.submit(pid, text, mode: mode) do
-      {:ok, res} ->
-        {next_client, notifs} =
-          if MapSet.member?(client_state.watched_conversations, conv_id) do
-            enqueue_watch_event(client_state, %{
-              "type" => "turn_completed",
-              "conversation_id" => conv_id,
-              "seq" => Storage.current_seq()
-            })
-          else
-            {client_state, []}
-          end
+    if async? do
+      Task.Supervisor.start_child(SuperPi.ToolSandboxSupervisor, fn ->
+        case Machine.submit(pid, text, mode: mode, timeout: 120_000) do
+          {:ok, res} ->
+            Phoenix.PubSub.broadcast(
+              SuperPi.PubSub,
+              "conversation:#{conv_id}",
+              {:conversation_event, conv_id,
+               %{
+                 "type" => "turn_completed",
+                 "conversation_id" => conv_id,
+                 "result" => res,
+                 "seq" => Storage.current_seq()
+               }}
+            )
 
-        {jsonrpc_result(id, %{"status" => "ok", "result" => res, "seq" => Storage.current_seq()}), next_client, notifs}
+          {:error, reason} ->
+            Phoenix.PubSub.broadcast(
+              SuperPi.PubSub,
+              "conversation:#{conv_id}",
+              {:conversation_event, conv_id,
+               %{
+                 "type" => "turn_error",
+                 "conversation_id" => conv_id,
+                 "error" => inspect(reason),
+                 "seq" => Storage.current_seq()
+               }}
+            )
+        end
+      end)
 
-      {:error, reason} ->
-        {jsonrpc_error(id, -32000, inspect(reason)), client_state, []}
+      {jsonrpc_result(id, %{"status" => "accepted", "conversation_id" => conv_id, "seq" => Storage.current_seq()}),
+       client_state, []}
+    else
+      case Machine.submit(pid, text, mode: mode, timeout: 120_000) do
+        {:ok, res} ->
+          {next_client, notifs} =
+            if MapSet.member?(client_state.watched_conversations, conv_id) do
+              enqueue_watch_event(client_state, %{
+                "type" => "turn_completed",
+                "conversation_id" => conv_id,
+                "result" => res,
+                "seq" => Storage.current_seq()
+              })
+            else
+              {client_state, []}
+            end
+
+          {jsonrpc_result(id, %{"status" => "ok", "result" => res, "seq" => Storage.current_seq()}), next_client,
+           notifs}
+
+        {:error, reason} ->
+          {jsonrpc_error(id, -32000, inspect(reason)), client_state, []}
+      end
     end
   end
 
@@ -303,6 +398,11 @@ defmodule SuperPi.RPC.Server do
 
   defp dispatch_method("session.watch", params, id, client_state) do
     conv_id = Map.fetch!(params, "conversation_id")
+
+    if not MapSet.member?(client_state.watched_conversations, conv_id) do
+      Phoenix.PubSub.subscribe(SuperPi.PubSub, "conversation:#{conv_id}")
+    end
+
     watched = MapSet.put(client_state.watched_conversations, conv_id)
     next_state = Map.put(client_state, :watched_conversations, watched)
 
@@ -331,6 +431,36 @@ defmodule SuperPi.RPC.Server do
     {jsonrpc_result(id, %{"resolved" => req_id, "value" => value}), next_state, []}
   end
 
+  defp dispatch_method("session.configure", params, id, client_state) do
+    conv_id = Map.fetch!(params, "conversation_id")
+    patch = Map.get(params, "agent", %{})
+    Storage.configure_agent!(conv_id, patch)
+    updated = Doc.snapshot("conversation", conv_id, "pi.agent")
+
+    {jsonrpc_result(id, %{"conversation_id" => conv_id, "agent" => updated, "seq" => Storage.current_seq()}),
+     client_state, []}
+  end
+
+  defp dispatch_method("agy.metadata", _params, id, client_state) do
+    reply =
+      jsonrpc_result(id, %{
+        "models" => SuperPi.AGY.CLI.models_catalog(),
+        "agents" => SuperPi.AGY.CLI.agents_catalog(),
+        "slash_commands" => [
+          %{"name" => "/plan", "description" => "Switch to read-only architectural planning mode"},
+          %{"name" => "/goal", "description" => "Run autonomous multi-step goal with verification"},
+          %{"name" => "/boost", "description" => "Maximize reasoning effort (effort=max)"},
+          %{"name" => "/compact", "description" => "Compact conversation context"},
+          %{"name" => "/model", "description" => "Switch active LLM model (/model <name>)"},
+          %{"name" => "/mode", "description" => "Switch execution mode (/mode auto|plan|accept-edits)"},
+          %{"name" => "/fork", "description" => "Fork current conversation branch"},
+          %{"name" => "/help", "description" => "Display keyboard shortcuts and slash commands"}
+        ]
+      })
+
+    {reply, client_state, []}
+  end
+
   defp dispatch_method(unknown, _params, id, client_state) do
     {jsonrpc_error(id, -32601, "Method not found: #{unknown}"), client_state, []}
   end
@@ -339,16 +469,22 @@ defmodule SuperPi.RPC.Server do
   defp parse_submit_mode("write"), do: :write
   defp parse_submit_mode(_), do: :queue
 
-  defp ensure_machine_started!(conv_id) do
+  defp ensure_machine_started!(conv_id, extensions) do
     case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
       [{pid, _}] ->
         pid
 
       [] ->
-        {:ok, pid} = Machine.start_link(conversation_id: conv_id)
+        {:ok, pid} = Machine.start_link(conversation_id: conv_id, extensions: extensions)
         pid
     end
   end
+
+  defp resolve_extensions(%{"preset" => "agy"}) do
+    SuperPi.AGY.CLI.default_extensions()
+  end
+
+  defp resolve_extensions(_params), do: []
 
   defp jsonrpc_result(id, result) do
     %{"jsonrpc" => "2.0", "id" => id, "result" => result}

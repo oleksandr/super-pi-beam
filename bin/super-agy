@@ -4,8 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
+if [[ ! -x "$SCRIPT_DIR/bin/agy-tui" ]]; then
+  (cd "$SCRIPT_DIR/clients/agy-tui" && mise exec -- go build -o "$SCRIPT_DIR/bin/agy-tui" ./cmd/agy-tui)
+fi
+
 exec mise exec -- mix run --no-compile -e '
-  {code, out} = SuperPi.AGY.CLI.run(System.argv())
+  {code, out} = SuperPi.AGY.CLI.run(System.argv(), interactive_tui: true)
   if out != "", do: IO.puts(out)
   System.halt(code)
 ' -- "$@"

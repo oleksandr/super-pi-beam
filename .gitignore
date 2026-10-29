@@ -35,4 +35,9 @@ super_pi-*.tar
 .env.*
 !.env.example
 
+# Ignore compiled native TUI binary and ElixirLS cache
+/bin/agy-tui
+/.elixir_ls/
+
+
 
