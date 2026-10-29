@@ -439,7 +439,10 @@ defmodule SuperPi.Harness.AGY.CLI do
   end
 
   defp run_remote_control_subcommand(["status" | _]) do
-    {0, Jason.encode!(%{"daemon" => "super_pi_rpc", "status" => "ready"})}
+    case Process.whereis(SuperPi.RPC.Server) do
+      nil -> {1, Jason.encode!(%{"daemon" => "super_pi_rpc", "status" => "stopped"})}
+      pid -> {0, Jason.encode!(%{"daemon" => "super_pi_rpc", "status" => "ready", "port" => SuperPi.RPC.Server.port(pid)})}
+    end
   end
 
   defp run_remote_control_subcommand(["start" | _]) do
