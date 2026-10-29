@@ -17,8 +17,6 @@ defmodule SuperPi.Harness.AgyMoreDefectsTest do
   alias SuperPi.Harness.AGY.Extensions.{HooksJson, Permissions, SlashCommands}
   alias SuperPi.TestSupport.Faults
 
-  @moduletag :known_bug
-
   # --- helpers ---
 
   defp tmp_dir!(label, suffix \\ "") do

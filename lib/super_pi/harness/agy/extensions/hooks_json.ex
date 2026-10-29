@@ -293,7 +293,11 @@ defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
 
       case Jason.encode(stdin_map) do
         {:ok, json_in} ->
-          expanded_cmd = String.replace_leading(cmd, "~/", Path.expand("~/") <> "/")
+          expanded_cmd =
+            cmd
+            |> String.replace_leading("~/", Path.expand("~/") <> "/")
+            |> quote_unquoted_tmp_paths()
+
           run_with_stdin_file(expanded_cmd, json_in, working_dir, timeout_sec * 1_000)
 
         {:error, err} ->
@@ -303,6 +307,17 @@ defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
   end
 
   def run_hook_command(_handler, _stdin_map, _working_dir), do: {:ok, %{}}
+
+  defp quote_unquoted_tmp_paths(cmd) do
+    tmp = System.tmp_dir!()
+
+    if String.contains?(tmp, " ") and String.contains?(cmd, tmp) do
+      pattern = ~r/(?<!["'`])(#{Regex.escape(tmp)}[^\s"'`;&|#\)]*(?: [^\s"'`;&|#\)]*)*(?!["'`]))/
+      Regex.replace(pattern, cmd, "\"\\1\"")
+    else
+      cmd
+    end
+  end
 
   # Runs `cmd` with the payload as stdin of the whole script (not just its last
   # command). The temp file is private (0600), its path travels in the
