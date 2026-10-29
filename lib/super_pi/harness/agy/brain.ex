@@ -90,8 +90,14 @@ defmodule SuperPi.Harness.AGY.Brain do
   def mcp_remove(name, opts \\ []) when is_binary(name) do
     cfg_path = mcp_config_path(opts)
     root = read_json_map(cfg_path)
-    servers = Map.get(root, "mcpServers", %{}) |> Map.delete(name)
-    write_json_map!(cfg_path, Map.put(root, "mcpServers", servers))
+    servers = Map.get(root, "mcpServers", %{})
+
+    if Map.has_key?(servers, name) do
+      write_json_map!(cfg_path, Map.put(root, "mcpServers", Map.delete(servers, name)))
+      :ok
+    else
+      {:error, :not_found}
+    end
   end
 
   def mcp_set_enabled(name, enabled?, opts \\ []) when is_binary(name) and is_boolean(enabled?) do
@@ -154,9 +160,15 @@ defmodule SuperPi.Harness.AGY.Brain do
   def plugin_set_enabled(plugin_id, enabled?, opts \\ []) when is_binary(plugin_id) and is_boolean(enabled?) do
     global_dir = Keyword.get(opts, :global_config_dir, Discovery.default_global_config_dir())
     cfg_path = Path.join(global_dir, "config.json")
-    root = read_json_map(cfg_path)
-    plugins = Map.get(root, "plugins", %{}) |> Map.put(plugin_id, %{"enabled" => enabled?})
-    write_json_map!(cfg_path, Map.put(root, "plugins", plugins))
+
+    if Enum.any?(plugin_list(opts), &(&1.id == plugin_id)) do
+      root = read_json_map(cfg_path)
+      plugins = Map.get(root, "plugins", %{}) |> Map.put(plugin_id, %{"enabled" => enabled?})
+      write_json_map!(cfg_path, Map.put(root, "plugins", plugins))
+      :ok
+    else
+      {:error, :not_found}
+    end
   end
 
   def plugin_validate(plugin_dir) when is_binary(plugin_dir) do

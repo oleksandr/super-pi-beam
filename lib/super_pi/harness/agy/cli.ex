@@ -301,18 +301,24 @@ defmodule SuperPi.Harness.AGY.CLI do
   end
 
   defp run_mcp_subcommand(["remove", name | _], opts) do
-    Brain.mcp_remove(name, opts)
-    {0, "Removed MCP server #{name}"}
+    case Brain.mcp_remove(name, opts) do
+      :ok -> {0, "Removed MCP server #{name}"}
+      {:error, :not_found} -> {1, "MCP server not found: #{name}"}
+    end
   end
 
   defp run_mcp_subcommand(["enable", name | _], opts) do
-    :ok = Brain.mcp_set_enabled(name, true, opts)
-    {0, "Enabled MCP server #{name}"}
+    case Brain.mcp_set_enabled(name, true, opts) do
+      :ok -> {0, "Enabled MCP server #{name}"}
+      {:error, :not_found} -> {1, "MCP server not found: #{name}"}
+    end
   end
 
   defp run_mcp_subcommand(["disable", name | _], opts) do
-    :ok = Brain.mcp_set_enabled(name, false, opts)
-    {0, "Disabled MCP server #{name}"}
+    case Brain.mcp_set_enabled(name, false, opts) do
+      :ok -> {0, "Disabled MCP server #{name}"}
+      {:error, :not_found} -> {1, "MCP server not found: #{name}"}
+    end
   end
 
   defp run_mcp_subcommand(_, _opts) do
@@ -335,13 +341,17 @@ defmodule SuperPi.Harness.AGY.CLI do
   end
 
   defp run_plugin_subcommand(["enable", name | _], _flags, opts) do
-    Brain.plugin_set_enabled(name, true, opts)
-    {0, "Enabled plugin #{name}"}
+    case Brain.plugin_set_enabled(name, true, opts) do
+      :ok -> {0, "Enabled plugin #{name}"}
+      {:error, :not_found} -> {1, "Plugin not found: #{name}"}
+    end
   end
 
   defp run_plugin_subcommand(["disable", name | _], _flags, opts) do
-    Brain.plugin_set_enabled(name, false, opts)
-    {0, "Disabled plugin #{name}"}
+    case Brain.plugin_set_enabled(name, false, opts) do
+      :ok -> {0, "Disabled plugin #{name}"}
+      {:error, :not_found} -> {1, "Plugin not found: #{name}"}
+    end
   end
 
   defp run_plugin_subcommand(["validate", path | _], _flags, _opts) do
