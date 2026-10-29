@@ -972,30 +972,35 @@ defmodule SuperPi.Conversation.Machine do
         end
       )
     else
-      last_user =
-        payload.messages
-        |> Enum.reverse()
-        |> Enum.find(fn m -> m["role"] == "user" end)
+      if not SuperPi.AI.GeminiClient.configured?() and String.starts_with?(effective_model, "gemini-") and
+           Application.get_env(:super_pi, :mock_llm, true) == false do
+        {:error, "Missing API key for Gemini model #{effective_model}"}
+      else
+        last_user =
+          payload.messages
+          |> Enum.reverse()
+          |> Enum.find(fn m -> m["role"] == "user" end)
 
-      user_text =
-        case last_user do
-          %{"content" => [%{"text" => t} | _]} -> t
-          %{"content" => t} when is_binary(t) -> t
-          _ -> ""
+        user_text =
+          case last_user do
+            %{"content" => [%{"text" => t} | _]} -> t
+            %{"content" => t} when is_binary(t) -> t
+            _ -> ""
+          end
+
+        reply_text = "Echo: #{user_text}"
+
+        if conv_id do
+          publish_stream_event(conv_id, %{"type" => "text_delta", "index" => 0, "delta" => reply_text})
         end
 
-      reply_text = "Echo: #{user_text}"
-
-      if conv_id do
-        publish_stream_event(conv_id, %{"type" => "text_delta", "index" => 0, "delta" => reply_text})
+        {:ok,
+         %{
+           "role" => "assistant",
+           "content" => [%{"type" => "text", "text" => reply_text}],
+           "usage" => %{"input_tokens" => 10, "output_tokens" => 5}
+         }}
       end
-
-      {:ok,
-       %{
-         "role" => "assistant",
-         "content" => [%{"type" => "text", "text" => reply_text}],
-         "usage" => %{"input_tokens" => 10, "output_tokens" => 5}
-       }}
     end
   end
 

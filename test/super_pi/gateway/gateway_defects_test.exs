@@ -17,7 +17,6 @@ defmodule SuperPi.Gateway.GatewayDefectsTest do
 
   @opts Router.init([])
 
-  @moduletag :known_bug
 
   setup do
     SuperPi.Tools.ensure_catalog_ets!()
