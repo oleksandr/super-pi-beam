@@ -27,6 +27,10 @@ config :super_pi, Oban,
     compaction: 5,
     verification: 10,
     subagents: 20
+  ],
+  plugins: [
+    {Oban.Plugins.Pruner, max_age: 86_400},
+    {Oban.Plugins.Lifeline, rescue_after: :timer.minutes(30)}
   ]
 
 import_config "#{config_env()}.exs"

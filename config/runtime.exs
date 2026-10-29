@@ -2,10 +2,16 @@ import Config
 
 case System.get_env("SUPER_PI_STORAGE_BACKEND") do
   "postgres" ->
-    config :super_pi, storage_backend: :postgres
+    database_url =
+      System.get_env("DATABASE_URL") ||
+        raise "DATABASE_URL environment variable is required when SUPER_PI_STORAGE_BACKEND=postgres"
+
+    config :super_pi,
+      storage_backend: :postgres,
+      ecto_repos: [SuperPi.Repo.Postgres]
 
     config :super_pi, SuperPi.Repo.Postgres,
-      url: System.get_env("DATABASE_URL") || "ecto://postgres:postgres@localhost/super_pi_dev",
+      url: database_url,
       pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10")
 
     config :super_pi, Oban,

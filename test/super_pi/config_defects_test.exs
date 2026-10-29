@@ -9,7 +9,6 @@ defmodule SuperPi.ConfigDefectsTest do
   """
   use ExUnit.Case, async: false
 
-  @moduletag :known_bug
 
   @config_dir Path.expand("../../config", __DIR__)
 
