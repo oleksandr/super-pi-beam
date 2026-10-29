@@ -262,7 +262,27 @@ defmodule SuperPi.Harness.AGY.CLI do
     try do
       run_session(conv, pid, flags, positional, workspace_dirs, app_dir, opts)
     after
-      if started? and Process.alive?(pid), do: GenServer.stop(pid)
+      if started? and Process.alive?(pid), do: stop_machine(conv.id, pid)
+    end
+  end
+
+  # Stops the machine and waits until its registry entry is gone, so callers never
+  # observe a half-dead machine.
+  defp stop_machine(conv_id, pid) do
+    GenServer.stop(pid)
+    wait_unregistered(conv_id, 50)
+  end
+
+  defp wait_unregistered(_conv_id, 0), do: :ok
+
+  defp wait_unregistered(conv_id, tries) do
+    case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
+      [] ->
+        :ok
+
+      _ ->
+        Process.sleep(5)
+        wait_unregistered(conv_id, tries - 1)
     end
   end
 
