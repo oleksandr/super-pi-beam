@@ -7,12 +7,14 @@ defmodule SuperPi.Gateway.Router do
 
   use Plug.Router
   import Plug.Conn
+  require Logger
 
   alias SuperPi.Conversation.Machine
   alias SuperPi.Durable.Storage
   alias SuperPi.Durable.Schemas.Conversation
   alias SuperPi.Repo
 
+  plug Plug.Logger, log: :debug
   plug :match
   plug Plug.Parsers,
     parsers: [:json],
@@ -75,6 +77,8 @@ defmodule SuperPi.Gateway.Router do
     messages = Map.get(params, "messages", [])
     stream? = Map.get(params, "stream", false)
 
+    Logger.info("[Gateway] 📥 Received POST /v1/chat/completions | model: #{model} | stream: #{stream?} | messages: #{length(messages)}")
+
     # 1. Resolve or create durable conversation
     {conv_id, new_session?} = resolve_conversation(conn, params)
 
@@ -87,6 +91,14 @@ defmodule SuperPi.Gateway.Router do
 
     # 3. Extract the active user prompt
     user_prompt = extract_last_user_prompt(messages)
+    prompt_preview =
+      if String.length(user_prompt) > 80 do
+        String.slice(user_prompt, 0..80) <> "..."
+      else
+        user_prompt
+      end
+
+    Logger.info("[Gateway] 💬 Active prompt for ##{conv_id}: #{inspect(prompt_preview)}")
 
     # 4. Start conversation machine if needed
     extensions = SuperPi.AGY.CLI.default_extensions()
@@ -146,26 +158,33 @@ defmodule SuperPi.Gateway.Router do
     case header_conv_id do
       nil ->
         conv = Storage.create_conversation!(agent: %{})
+        Logger.info("[Gateway] 🆕 Created new conversation ##{conv.id}")
         {conv.id, true}
 
       id_str ->
         case Integer.parse(id_str) do
           {int_id, ""} ->
             case Repo.get(Conversation, int_id) do
-              %Conversation{} -> {int_id, false}
+              %Conversation{} ->
+                Logger.info("[Gateway] 🔗 Attached to existing conversation ##{int_id}")
+                {int_id, false}
+
               nil ->
                 conv = Storage.create_conversation!(agent: %{})
+                Logger.info("[Gateway] 🆕 Created conversation ##{conv.id} (requested ##{int_id} not found)")
                 {conv.id, true}
             end
 
           _ ->
             case :ets.lookup(:super_pi_gateway_sessions, id_str) do
               [{^id_str, existing_conv_id}] ->
+                Logger.info("[Gateway] 🔗 Mapped session '#{id_str}' to existing conversation ##{existing_conv_id}")
                 {existing_conv_id, false}
 
               [] ->
                 conv = Storage.create_conversation!(agent: %{})
                 :ets.insert(:super_pi_gateway_sessions, {id_str, conv.id})
+                Logger.info("[Gateway] 🆕 Mapped new session '#{id_str}' to conversation ##{conv.id}")
                 {conv.id, true}
             end
         end
@@ -332,6 +351,8 @@ defmodule SuperPi.Gateway.Router do
   defp stream_sse_loop(conn, conv_id, task_ref, cmpl_id, created, model) do
     receive do
       {:conversation_event, ^conv_id, %{"type" => "text_delta", "delta" => delta}} ->
+        Logger.debug("[Gateway] ⚡ Turn ##{conv_id} text delta: #{inspect(delta)}")
+
         chunk_obj = %{
           "id" => cmpl_id,
           "object" => "chat.completion.chunk",
@@ -355,6 +376,8 @@ defmodule SuperPi.Gateway.Router do
         end
 
       {:conversation_event, ^conv_id, %{"type" => "thinking_delta", "delta" => delta}} ->
+        Logger.debug("[Gateway] 🤔 Turn ##{conv_id} thinking delta: #{inspect(delta)}")
+
         chunk_obj = %{
           "id" => cmpl_id,
           "object" => "chat.completion.chunk",
@@ -377,8 +400,10 @@ defmodule SuperPi.Gateway.Router do
             conn
         end
 
-      {:conversation_event, ^conv_id, %{"type" => "tool_started", "name" => name}} ->
-        # Send notice so client displays tool progress
+      {:conversation_event, ^conv_id, %{"type" => "tool_started", "name" => name} = ev} ->
+        args = Map.get(ev, "args", %{})
+        Logger.info("[Gateway] ⚙️  Turn ##{conv_id} tool starting: '#{name}' (args: #{inspect(args)})")
+
         notice = "\n\n> ⚙️ *Executing tool `#{name}`...*\n\n"
 
         chunk_obj = %{
@@ -403,17 +428,27 @@ defmodule SuperPi.Gateway.Router do
             conn
         end
 
+      {:conversation_event, ^conv_id, %{"type" => "tool_completed", "name" => name} = ev} ->
+        err? = Map.get(ev, "is_error", false)
+        status_label = if err?, do: "❌ ERROR", else: "✅ SUCCESS"
+        out_preview = ev |> Map.get("output", "") |> to_string() |> String.slice(0..100)
+        Logger.info("[Gateway] #{status_label} Turn ##{conv_id} tool '#{name}' completed (output: #{inspect(out_preview)}...)")
+        stream_sse_loop(conn, conv_id, task_ref, cmpl_id, created, model)
+
       {^task_ref, _result} ->
         Process.demonitor(task_ref, [:flush])
+        Logger.info("[Gateway] 🏁 Turn ##{conv_id} finished execution, emitting stop chunk")
         drain_and_finish_sse(conn, conv_id, cmpl_id, created, model)
 
-      {:DOWN, ^task_ref, :process, _pid, _reason} ->
+      {:DOWN, ^task_ref, :process, _pid, reason} ->
+        Logger.warning("[Gateway] ⚠️ Turn ##{conv_id} worker task terminated: #{inspect(reason)}")
         drain_and_finish_sse(conn, conv_id, cmpl_id, created, model)
 
       _other ->
         stream_sse_loop(conn, conv_id, task_ref, cmpl_id, created, model)
     after
       300_000 ->
+        Logger.warning("[Gateway] ⏱️ Turn ##{conv_id} hit 300s timeout, closing SSE stream")
         drain_and_finish_sse(conn, conv_id, cmpl_id, created, model)
     end
   end
