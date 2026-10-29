@@ -40,13 +40,18 @@ defmodule SuperPi.Env.Local do
     expanded = Path.expand(path)
 
     FileLock.with_lock(env_id, expanded, fn ->
-      File.mkdir_p!(Path.dirname(expanded))
-      File.write(expanded, content)
+      atomic_write(expanded, content)
     end)
   end
 
   @impl true
   def edit_file(path, old_text, new_text, opts \\ [])
+
+  def edit_file(_path, "", _new_text, _opts) do
+    {:error, :empty_old_text}
+  end
+
+  def edit_file(path, old_text, new_text, opts)
       when is_binary(path) and is_binary(old_text) and is_binary(new_text) do
     env_id = Keyword.get(opts, :env_id, @default_env_id)
     expanded = Path.expand(path)
@@ -62,7 +67,7 @@ defmodule SuperPi.Env.Local do
           else
             updated = Enum.join(parts, new_text)
 
-            case File.write(expanded, updated) do
+            case atomic_write(expanded, updated) do
               :ok -> {:ok, %{replacements: count}}
               {:error, reason} -> {:error, reason}
             end
@@ -74,6 +79,27 @@ defmodule SuperPi.Env.Local do
     end)
   end
 
+  defp atomic_write(path, content) do
+    dir = Path.dirname(path)
+    File.mkdir_p!(dir)
+    tmp = Path.join(dir, ".#{Path.basename(path)}.tmp.#{System.unique_integer([:positive])}")
+
+    case File.write(tmp, content) do
+      :ok ->
+        case File.rename(tmp, path) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            File.rm(tmp)
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   @impl true
   def list_files(root_dir, opts \\ []) when is_binary(root_dir) do
     max_results = Keyword.get(opts, :max_results, 5_000)
@@ -81,10 +107,16 @@ defmodule SuperPi.Env.Local do
     SandboxRunner.run_isolated(fn ->
       expanded_root = Path.expand(root_dir)
       ignored_names = MapSet.new([".git", "_build", "deps", "node_modules", ".elixir_ls"])
-      gitignore_patterns = load_gitignore_patterns(expanded_root)
+      gitignore_rules = load_gitignore_rules(expanded_root, expanded_root)
+
+      visited_inodes =
+        case File.stat(expanded_root) do
+          {:ok, %{major_device: dev, inode: ino}} -> MapSet.new([{dev, ino}])
+          _ -> MapSet.new()
+        end
 
       files =
-        walk_dir(expanded_root, expanded_root, ignored_names, gitignore_patterns, [])
+        walk_dir(expanded_root, expanded_root, ignored_names, gitignore_rules, visited_inodes, [])
         |> Enum.sort()
         |> Enum.take(max_results)
 
@@ -178,8 +210,9 @@ defmodule SuperPi.Env.Local do
     Enum.join(sliced, "\n")
   end
 
-  defp load_gitignore_patterns(root) do
-    gitignore_path = Path.join(root, ".gitignore")
+  defp load_gitignore_rules(dir, root_dir) do
+    gitignore_path = Path.join(dir, ".gitignore")
+    dir_rel = if dir == root_dir, do: "", else: Path.relative_to(dir, root_dir)
 
     case File.read(gitignore_path) do
       {:ok, content} ->
@@ -187,31 +220,103 @@ defmodule SuperPi.Env.Local do
         |> String.split("\n")
         |> Enum.map(&String.trim/1)
         |> Enum.reject(&(&1 == "" or String.starts_with?(&1, "#")))
+        |> Enum.map(&parse_gitignore_line(&1, dir_rel))
+        |> Enum.reject(&is_nil/1)
 
       _ ->
         []
     end
   end
 
-  defp walk_dir(current_dir, root_dir, ignored_names, gitignore_patterns, acc) do
+  defp parse_gitignore_line(clean, dir_rel) do
+    {negated, pat} =
+      if String.starts_with?(clean, "!") do
+        {true, String.slice(clean, 1..-1//1)}
+      else
+        {false, clean}
+      end
+
+    pat = String.trim_trailing(pat, "/")
+    leading_slash = String.starts_with?(pat, "/")
+    pat = String.trim_leading(pat, "/")
+    has_inner_slash = String.contains?(pat, "/")
+    anchored = leading_slash or has_inner_slash
+
+    case glob_to_regex(pat, anchored) do
+      {:ok, regex} -> %{negated?: negated, dir_rel: dir_rel, regex: regex}
+      _ -> nil
+    end
+  end
+
+  defp glob_to_regex(pat, anchored) do
+    tokens =
+      Regex.scan(~r/(\*\*|\*|\?|[^\*\?]+)/, pat)
+      |> Enum.map(fn [_, t] ->
+        case t do
+          "**" -> ".*"
+          "*" -> "[^/]*"
+          "?" -> "[^/]"
+          other -> Regex.escape(other)
+        end
+      end)
+      |> Enum.join()
+
+    tokens =
+      tokens
+      |> String.replace("/.*/", "/(?:.+/)?")
+      |> String.replace("^.*/", "^(?:.+/)?")
+
+    re_str =
+      if anchored do
+        "^" <> tokens <> "(?:/.*)?$"
+      else
+        "(?:^|/)" <> tokens <> "(?:/.*)?$"
+      end
+
+    Regex.compile(re_str)
+  end
+
+  defp walk_dir(current_dir, root_dir, ignored_names, rules, visited_inodes, acc) do
+    current_rules =
+      if current_dir != root_dir do
+        rules ++ load_gitignore_rules(current_dir, root_dir)
+      else
+        rules
+      end
+
     case File.ls(current_dir) do
       {:ok, entries} ->
         Enum.reduce(entries, acc, fn entry, inner_acc ->
-          if MapSet.member?(ignored_names, entry) or ignored_by_gitignore?(entry, gitignore_patterns) do
+          if MapSet.member?(ignored_names, entry) do
             inner_acc
           else
             full = Path.join(current_dir, entry)
             rel = Path.relative_to(full, root_dir)
 
-            cond do
-              File.dir?(full) ->
-                walk_dir(full, root_dir, ignored_names, gitignore_patterns, inner_acc)
+            if ignored_by_gitignore?(rel, current_rules) do
+              inner_acc
+            else
+              case File.stat(full) do
+                {:ok, %{type: :directory, major_device: dev, inode: ino}} ->
+                  if MapSet.member?(visited_inodes, {dev, ino}) do
+                    inner_acc
+                  else
+                    walk_dir(
+                      full,
+                      root_dir,
+                      ignored_names,
+                      current_rules,
+                      MapSet.put(visited_inodes, {dev, ino}),
+                      inner_acc
+                    )
+                  end
 
-              File.regular?(full) ->
-                [rel | inner_acc]
+                {:ok, %{type: :regular}} ->
+                  [rel | inner_acc]
 
-              true ->
-                inner_acc
+                _ ->
+                  inner_acc
+              end
             end
           end
         end)
@@ -221,10 +326,28 @@ defmodule SuperPi.Env.Local do
     end
   end
 
-  defp ignored_by_gitignore?(entry, patterns) do
-    Enum.any?(patterns, fn pat ->
-      clean = String.trim_trailing(pat, "/")
-      entry == clean or (String.starts_with?(clean, "*.") and String.ends_with?(entry, String.trim_leading(clean, "*")))
+  defp ignored_by_gitignore?(rel_path, rules) do
+    Enum.reduce(rules, false, fn rule, ignored ->
+      if applies_to_dir?(rule.dir_rel, rel_path) do
+        target = rel_within_dir(rule.dir_rel, rel_path)
+
+        if Regex.match?(rule.regex, target) do
+          not rule.negated?
+        else
+          ignored
+        end
+      else
+        ignored
+      end
     end)
   end
+
+  defp applies_to_dir?("", _rel_path), do: true
+
+  defp applies_to_dir?(dir_rel, rel_path) do
+    rel_path == dir_rel or String.starts_with?(rel_path, dir_rel <> "/")
+  end
+
+  defp rel_within_dir("", rel_path), do: rel_path
+  defp rel_within_dir(dir_rel, rel_path), do: Path.relative_to(rel_path, dir_rel)
 end

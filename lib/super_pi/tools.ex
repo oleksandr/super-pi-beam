@@ -110,6 +110,7 @@ defmodule SuperPi.Tools do
             error_result(name, "Argument 'path' must be a string")
 
           path ->
+            path = resolve_path(path, args)
             offset = fetch_arg(args, [:offset, "offset", :start_line, "start_line"], 1)
             limit = fetch_arg(args, [:limit, "limit", :end_line, "end_line"])
 
@@ -133,10 +134,16 @@ defmodule SuperPi.Tools do
         content = fetch_arg(args, [:content, "content", :contents, "contents"])
 
         cond do
-          is_nil(path) -> error_result(name, "Missing required argument 'path'")
-          is_nil(content) -> error_result(name, "Missing required argument 'content'")
+          is_nil(path) ->
+            error_result(name, "Missing required argument 'path'")
+
+          is_nil(content) ->
+            error_result(name, "Missing required argument 'content'")
+
           true ->
-            case Local.write_file(path, content) do
+            resolved_path = resolve_path(path, args)
+
+            case Local.write_file(resolved_path, content) do
               :ok ->
                 bytes = byte_size(content)
 
@@ -157,11 +164,19 @@ defmodule SuperPi.Tools do
         new_text = fetch_arg(args, [:new_text, "new_text", :newText, "newText", :new_string, "new_string", :replacement, "replacement"])
 
         cond do
-          is_nil(path) -> error_result(name, "Missing required argument 'path'")
-          is_nil(old_text) -> error_result(name, "Missing required argument 'old_text'")
-          is_nil(new_text) -> error_result(name, "Missing required argument 'new_text'")
+          is_nil(path) ->
+            error_result(name, "Missing required argument 'path'")
+
+          is_nil(old_text) ->
+            error_result(name, "Missing required argument 'old_text'")
+
+          is_nil(new_text) ->
+            error_result(name, "Missing required argument 'new_text'")
+
           true ->
-            case Local.edit_file(path, old_text, new_text) do
+            resolved_path = resolve_path(path, args)
+
+            case Local.edit_file(resolved_path, old_text, new_text) do
               {:ok, %{replacements: count}} ->
                 %{
                   "output" => "Replaced #{count} occurrence(s) in #{path}",
@@ -264,6 +279,22 @@ defmodule SuperPi.Tools do
         error_result(other, :unknown_tool)
     end
   end
+
+  defp resolve_path(path, args) when is_binary(path) do
+    case fetch_arg(args, [:cd, "cd", :dir, "dir", :cwd, "cwd"]) do
+      cd when is_binary(cd) and cd != "" ->
+        if Path.type(path) == :relative do
+          Path.expand(path, cd)
+        else
+          path
+        end
+
+      _ ->
+        path
+    end
+  end
+
+  defp resolve_path(path, _args), do: path
 
   defp fetch_arg(args, keys, default \\ nil) when is_map(args) and is_list(keys) do
     Enum.find_value(keys, default, fn k ->
