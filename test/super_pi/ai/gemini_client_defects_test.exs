@@ -14,7 +14,6 @@ defmodule SuperPi.AI.GeminiClientDefectsTest do
 
   alias SuperPi.AI.GeminiClient
 
-  @moduletag :known_bug
 
   setup do
     old_opts = Application.get_env(:req, :default_options)

@@ -378,10 +378,20 @@ defmodule SuperPi.AI.StreamNormalizer do
   defp normalize_provider_event(%__MODULE__{provider: :google} = state, event) do
     {start_events, state} = ensure_started(state)
 
-    usage = Map.get(event, "usageMetadata")
-    state = if is_map(usage), do: %__MODULE__{state | usage: merge_usage(state.usage, usage)}, else: state
+    cond do
+      is_map(Map.get(event, "error")) ->
+        err = Map.get(event, "error")
+        {start_events ++ [{:error, %{reason: err}}], state}
 
-    candidates = Map.get(event, "candidates", [])
+      get_in(event, ["promptFeedback", "blockReason"]) != nil ->
+        block_reason = get_in(event, ["promptFeedback", "blockReason"])
+        {start_events ++ [{:error, %{reason: {:prompt_blocked, block_reason}}}], state}
+
+      true ->
+        usage = Map.get(event, "usageMetadata")
+        state = if is_map(usage), do: %__MODULE__{state | usage: merge_usage(state.usage, usage)}, else: state
+
+        candidates = Map.get(event, "candidates", [])
 
     case List.first(candidates) do
       nil ->
@@ -489,6 +499,7 @@ defmodule SuperPi.AI.StreamNormalizer do
           {start_events ++ part_events, st}
         end
     end
+  end
   end
 
   defp ensure_started(%__MODULE__{started?: true} = state), do: {[], state}
