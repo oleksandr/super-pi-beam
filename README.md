@@ -58,7 +58,11 @@ In this mode, OpenCode treats Super-Pi-BEAM as an upstream AI provider. When Ope
 
 1. **Start the Super-Pi Gateway**:
    ```bash
+   # Standard logging (requests, session mapping, tool executions, completions):
    bin/super-pi gateway 4000
+
+   # Verbose logging (streams live token deltas and thinking blocks to terminal):
+   bin/super-pi gateway 4000 --verbose
    ```
 2. **Configure OpenCode** (`~/.config/opencode/opencode.json`):
    ```json
