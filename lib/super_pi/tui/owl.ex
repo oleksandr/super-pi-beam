@@ -41,6 +41,9 @@ defmodule SuperPi.TUI.Owl do
   @doc """
   Renders an assistant message and any embedded tool call blocks as ANSI-formatted text.
   """
+  def render_assistant_message(:handled_by_extension), do: ""
+  def render_assistant_message(nil), do: ""
+
   def render_assistant_message(%{"content" => blocks}) when is_list(blocks) do
     blocks
     |> Enum.map(fn
@@ -61,6 +64,13 @@ defmodule SuperPi.TUI.Owl do
     |> Enum.join("\n")
   end
 
+  def render_assistant_message(%{"content" => text}) when is_binary(text) do
+    Owl.Data.tag(text, :green) |> Owl.Data.to_chardata() |> IO.iodata_to_binary()
+  end
+
+  def render_assistant_message(text) when is_binary(text), do: text
+  def render_assistant_message(other), do: inspect(other)
+
   @doc """
   Executes a single TUI command or prompt line against `conversation_id` and returns the formatted string output.
   """
@@ -68,20 +78,59 @@ defmodule SuperPi.TUI.Owl do
     trimmed = String.trim(line)
 
     cond do
+      trimmed in ["/quit", "/exit", ":q"] ->
+        "Session ended."
+
+      trimmed == "/fork" ->
+        {visible, _graph} = Context.visible_entries_with_graph(conversation_id)
+
+        case List.last(visible) do
+          nil ->
+            "Cannot fork conversation ##{conversation_id}: no entries to fork from."
+
+          last_entry ->
+            child = Storage.fork_conversation!(conversation_id, last_entry.id)
+            "Forked conversation ##{conversation_id} to ##{child.id}"
+        end
+
       trimmed == "/status" ->
         render_status_bar(conversation_id)
 
       trimmed == "/compact" ->
-        {:ok, info} = Machine.compact(pid)
-        "Compacted conversation ##{conversation_id} (head_entry_id=#{info.head_entry_id}): #{info.summary}"
+        case Machine.compact(pid) do
+          {:ok, :cancelled} ->
+            "Compaction cancelled."
+
+          {:ok, :noop} ->
+            "Compaction no-op: context size does not exceed threshold."
+
+          {:ok, %{head_entry_id: head_id, summary: summary}} ->
+            "Compacted conversation ##{conversation_id} (head_entry_id=#{head_id}): #{summary}"
+
+          {:ok, info} when is_map(info) ->
+            head_id = Map.get(info, :head_entry_id) || Map.get(info, "head_entry_id")
+            summary = Map.get(info, :summary) || Map.get(info, "summary")
+            "Compacted conversation ##{conversation_id} (head_entry_id=#{head_id}): #{summary}"
+
+          {:ok, other} ->
+            "Compaction finished: #{inspect(other)}"
+
+          {:error, reason} ->
+            "Compaction failed: #{inspect(reason)}"
+        end
 
       trimmed == "/context" ->
         derived = Context.derive(conversation_id)
         "Derived context: #{length(derived.messages)} messages, #{length(derived.tools)} active tools."
 
       true ->
-        {:ok, msg} = Machine.submit(pid, trimmed, mode: :queue)
-        render_assistant_message(msg)
+        case Machine.submit(pid, trimmed, mode: :queue) do
+          {:ok, msg} ->
+            render_assistant_message(msg)
+
+          {:error, reason} ->
+            "Error: #{inspect(reason)}"
+        end
     end
   end
 

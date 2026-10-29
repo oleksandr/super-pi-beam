@@ -36,7 +36,7 @@ defmodule SuperPi.Plugins.Subagent do
 
   @impl true
   def before_agent_start(agent_cfg, _ctx) do
-    existing_tools = Map.get(agent_cfg, "tools", [])
+    existing_tools = Map.get(agent_cfg, "tools") || Map.get(agent_cfg, :tools) || []
 
     updated_tools =
       if Enum.any?(existing_tools, &(&1["name"] == "delegate_subagent")) do
@@ -64,7 +64,7 @@ defmodule SuperPi.Plugins.Subagent do
         fn ->
           execute_subagent_run(role, prompt, ctx)
         end,
-        timeout: timeout
+        timeout_ms: timeout
       )
 
     case result do

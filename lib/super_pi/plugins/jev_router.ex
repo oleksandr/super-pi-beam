@@ -30,40 +30,44 @@ defmodule SuperPi.Plugins.JevRouter do
 
   @impl true
   def before_request(derived_context, ctx) do
-    config = Map.get(ctx, :config, [])
-    fallback_opts = Map.get(ctx, :jev_opts, [])
-    merged_opts = Keyword.merge(fallback_opts, config)
+    if not SuperPi.AI.GeminiClient.configured?() do
+      {:ok, derived_context}
+    else
+      config = Map.get(ctx, :config, [])
+      fallback_opts = Map.get(ctx, :jev_opts, [])
+      merged_opts = Keyword.merge(fallback_opts, config)
 
-    planning_model =
-      Keyword.get(merged_opts, :planning_model) ||
-        System.get_env("JEV_PLANNING_MODEL") ||
-        @default_planning_model
+      planning_model =
+        Keyword.get(merged_opts, :planning_model) ||
+          System.get_env("JEV_PLANNING_MODEL") ||
+          @default_planning_model
 
-    implementation_model =
-      Keyword.get(merged_opts, :implementation_model) ||
-        System.get_env("JEV_IMPLEMENTATION_MODEL") ||
-        @default_implementation_model
+      implementation_model =
+        Keyword.get(merged_opts, :implementation_model) ||
+          System.get_env("JEV_IMPLEMENTATION_MODEL") ||
+          @default_implementation_model
 
-    edit_tools = Keyword.get(merged_opts, :edit_tools, @default_edit_tools)
+      edit_tools = Keyword.get(merged_opts, :edit_tools, @default_edit_tools)
 
-    messages = Map.get(derived_context, :messages, [])
-    phase = determine_phase(messages, edit_tools)
+      messages = Map.get(derived_context, :messages, [])
+      phase = determine_phase(messages, edit_tools)
 
-    effective_model =
-      case phase do
-        :planning -> planning_model
-        :implementation -> implementation_model
-      end
+      effective_model =
+        case phase do
+          :planning -> planning_model
+          :implementation -> implementation_model
+        end
 
-    Logger.debug("[JevRouter] Phase: #{phase} => Selected model: #{effective_model}")
+      Logger.debug("[JevRouter] Phase: #{phase} => Selected model: #{effective_model}")
 
-    # Update model in derived context
-    updated_context =
-      derived_context
-      |> Map.put(:model, effective_model)
-      |> Map.put(:jev_phase, phase)
+      # Update model in derived context
+      updated_context =
+        derived_context
+        |> Map.put(:model, effective_model)
+        |> Map.put(:jev_phase, phase)
 
-    {:ok, updated_context}
+      {:ok, updated_context}
+    end
   end
 
   @doc """

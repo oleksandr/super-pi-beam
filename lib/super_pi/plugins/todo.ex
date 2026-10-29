@@ -36,7 +36,7 @@ defmodule SuperPi.Plugins.Todo do
 
   @impl true
   def before_agent_start(agent_cfg, _ctx) do
-    existing_tools = Map.get(agent_cfg, "tools", [])
+    existing_tools = Map.get(agent_cfg, "tools") || Map.get(agent_cfg, :tools) || []
 
     updated_tools =
       if Enum.any?(existing_tools, &(&1["name"] == "todo")) do
@@ -63,13 +63,23 @@ defmodule SuperPi.Plugins.Todo do
         next_id = (Enum.map(todos, & &1["id"]) |> Enum.max(fn -> 0 end)) + 1
         new_item = %{"id" => next_id, "text" => text, "done" => false}
         list = todos ++ [new_item]
-        save_todos(conv_id, list)
 
-        %{
-          "output" => "Added todo ##{next_id}: #{text}",
-          "structured_output" => %{"todos" => list, "action" => action},
-          "details" => %{"action" => action, "count" => length(list)}
-        }
+        case save_todos(conv_id, list) do
+          :ok ->
+            %{
+              "output" => "Added todo ##{next_id}: #{text}",
+              "structured_output" => %{"todos" => list, "action" => action},
+              "details" => %{"action" => action, "count" => length(list)}
+            }
+
+          {:error, err} ->
+            %{
+              "output" => "Failed to save todo item: #{inspect(err)}",
+              "structured_output" => %{"action" => action, "error" => inspect(err)},
+              "details" => %{"action" => action},
+              "is_error" => true
+            }
+        end
 
       "toggle" ->
         case Enum.find(todos, &(&1["id"] == item_id)) do
@@ -89,24 +99,44 @@ defmodule SuperPi.Plugins.Todo do
 
             new_done = not Map.get(item, "done", false)
             status = if new_done, do: "completed", else: "pending"
-            save_todos(conv_id, list)
 
-            %{
-              "output" => "Toggled todo ##{item_id} to #{status}",
-              "structured_output" => %{"todos" => list, "action" => action},
-              "details" => %{"action" => action, "count" => length(list)}
-            }
+            case save_todos(conv_id, list) do
+              :ok ->
+                %{
+                  "output" => "Toggled todo ##{item_id} to #{status}",
+                  "structured_output" => %{"todos" => list, "action" => action},
+                  "details" => %{"action" => action, "count" => length(list)}
+                }
+
+              {:error, err} ->
+                %{
+                  "output" => "Failed to toggle todo item: #{inspect(err)}",
+                  "structured_output" => %{"action" => action, "error" => inspect(err)},
+                  "details" => %{"action" => action},
+                  "is_error" => true
+                }
+            end
         end
 
       "clear" ->
         list = Enum.filter(todos, &(&1["done"] == false))
-        save_todos(conv_id, list)
 
-        %{
-          "output" => "Cleared completed todos (remaining: #{length(list)})",
-          "structured_output" => %{"todos" => list, "action" => action},
-          "details" => %{"action" => action, "count" => length(list)}
-        }
+        case save_todos(conv_id, list) do
+          :ok ->
+            %{
+              "output" => "Cleared completed todos (remaining: #{length(list)})",
+              "structured_output" => %{"todos" => list, "action" => action},
+              "details" => %{"action" => action, "count" => length(list)}
+            }
+
+          {:error, err} ->
+            %{
+              "output" => "Failed to clear completed todos: #{inspect(err)}",
+              "structured_output" => %{"action" => action, "error" => inspect(err)},
+              "details" => %{"action" => action},
+              "is_error" => true
+            }
+        end
 
       _ ->
         %{
@@ -128,16 +158,20 @@ defmodule SuperPi.Plugins.Todo do
     Map.get(doc, "todos", [])
   end
 
-  defp save_todos(nil, _todos), do: :ok
+  defp save_todos(nil, _todos), do: {:error, :no_conversation}
 
   defp save_todos(conv_id, todos) do
-    Storage.commit(fn seq ->
+    case Storage.commit(fn seq ->
       doc = Doc.snapshot("conversation", conv_id, "pi.live") || %{}
       updated = Map.put(doc, "todos", todos)
       Doc.put_doc("conversation", conv_id, "pi.live", updated, seq)
-    end)
+    end) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+      error -> {:error, error}
+    end
   rescue
-    _ -> :ok
+    e -> {:error, e}
   end
 
   defp render_checklist([]), do: "  (no todos in ledger)"

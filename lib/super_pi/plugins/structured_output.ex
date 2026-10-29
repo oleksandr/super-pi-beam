@@ -35,7 +35,7 @@ defmodule SuperPi.Plugins.StructuredOutput do
 
   @impl true
   def before_agent_start(agent_cfg, _ctx) do
-    existing_tools = Map.get(agent_cfg, "tools", [])
+    existing_tools = Map.get(agent_cfg, "tools") || Map.get(agent_cfg, :tools) || []
 
     updated_tools =
       if Enum.any?(existing_tools, &(&1["name"] == "structured_output")) do

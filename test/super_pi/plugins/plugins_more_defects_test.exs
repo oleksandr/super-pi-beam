@@ -20,7 +20,6 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
   alias SuperPi.Plugins.{ConfirmDestructive, CustomCompaction, Handoff, JevRouter, Subagent, Todo}
   alias SuperPi.TUI.Owl, as: OwlTUI
 
-  @moduletag :known_bug
 
   setup do
     SuperPi.Tools.ensure_catalog_ets!()

@@ -31,26 +31,70 @@ defmodule SuperPi.CodeMode.Journal do
     step_key = Integer.to_string(call_index)
 
     case Map.get(steps, step_key) do
-      %{"tool" => ^tool_name, "result" => cached_result} ->
-        {:replayed, cached_result}
+      %{"tool" => recorded_tool} = step ->
+        if recorded_tool != tool_name do
+          raise "Journal tool mismatch at step #{call_index}: recorded tool '#{recorded_tool}', requested '#{tool_name}'"
+        end
+
+        recorded_args = Map.get(step, "args")
+        cached_result = Map.get(step, "result")
+
+        norm_args = normalize_args(args)
+        norm_recorded_args = normalize_args(recorded_args)
+
+        if norm_args == norm_recorded_args do
+          {:replayed, deserialize_term(cached_result)}
+        else
+          execute_and_persist(task_id, steps, step_key, tool_name, args, executor_fun)
+        end
 
       _ ->
-        fresh_result = executor_fun.(tool_name, args)
-
-        updated_steps =
-          Map.put(steps, step_key, %{
-            "tool" => tool_name,
-            "args" => args,
-            "result" => fresh_result
-          })
-
-        Storage.commit(fn seq ->
-          Doc.put_doc("task", task_id, @journal_doc_kind, %{"steps" => updated_steps}, seq)
-        end)
-
-        {:executed, fresh_result}
+        execute_and_persist(task_id, steps, step_key, tool_name, args, executor_fun)
     end
   end
+
+  defp execute_and_persist(task_id, steps, step_key, tool_name, args, executor_fun) do
+    fresh_value = executor_fun.(tool_name, args)
+
+    {stored_result, returned_result} =
+      case Jason.encode(fresh_value) do
+        {:ok, json} ->
+          decoded = Jason.decode!(json)
+          {decoded, decoded}
+
+        {:error, _} ->
+          b64 = Base.encode64(:erlang.term_to_binary(fresh_value))
+          {%{"__erl_term__" => b64}, fresh_value}
+      end
+
+    updated_steps =
+      Map.put(steps, step_key, %{
+        "tool" => tool_name,
+        "args" => args,
+        "result" => stored_result
+      })
+
+    Storage.commit(fn seq ->
+      Doc.put_doc("task", task_id, @journal_doc_kind, %{"steps" => updated_steps}, seq)
+    end)
+
+    {:executed, returned_result}
+  end
+
+  defp normalize_args(nil), do: nil
+
+  defp normalize_args(args) do
+    case Jason.encode(args) do
+      {:ok, json} -> Jason.decode!(json)
+      _ -> args
+    end
+  end
+
+  defp deserialize_term(%{"__erl_term__" => b64}) when is_binary(b64) do
+    :erlang.binary_to_term(Base.decode64!(b64))
+  end
+
+  defp deserialize_term(val), do: val
 
   @doc """
   Runs a sequence of Codemode step specifications `[{tool_name, args}, ...]` under `task_id` with

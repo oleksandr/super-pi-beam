@@ -15,10 +15,10 @@ defmodule SuperPi.Plugins.PromptCustomizer do
 
   @impl true
   def before_agent_start(agent_cfg, _ctx) do
-    tools = Map.get(agent_cfg, "tools", [])
+    tools = Map.get(agent_cfg, "tools") || Map.get(agent_cfg, :tools) || []
     tool_names = Enum.map(tools, &Map.get(&1, "name")) |> MapSet.new()
 
-    sections = Map.get(agent_cfg, "systemSections", [])
+    sections = Map.get(agent_cfg, "systemSections") || Map.get(agent_cfg, :systemSections) || []
 
     guidance_content = build_guidance(tool_names)
 

@@ -36,7 +36,7 @@ defmodule SuperPi.Plugins.Handoff do
 
   @impl true
   def before_agent_start(agent_cfg, _ctx) do
-    existing_tools = Map.get(agent_cfg, "tools", [])
+    existing_tools = Map.get(agent_cfg, "tools") || Map.get(agent_cfg, :tools) || []
 
     updated_tools =
       if Enum.any?(existing_tools, &(&1["name"] == "handoff")) do
@@ -78,16 +78,31 @@ defmodule SuperPi.Plugins.Handoff do
     #{goal}
     """ |> String.trim()
 
+    parent_agent =
+      if parent_conv_id do
+        SuperPi.Durable.Doc.snapshot("conversation", parent_conv_id, "pi.agent") || %{}
+      else
+        %{}
+      end
+
+    parent_model = Map.get(parent_agent, "model") || Map.get(parent_agent, :model)
+
+    child_agent =
+      %{
+        "systemSections" => [
+          %{"id" => "handoff_context", "content" => "You are working on a focused thread handed off from session #{parent_conv_id}."}
+        ],
+        "tools" => SuperPi.Tools.active_llm_tools()
+      }
+      |> then(fn a ->
+        if parent_model, do: Map.put(a, "model", parent_model), else: a
+      end)
+
     # Create new clean child conversation in durable storage
     child_conv =
       Storage.create_conversation!(
         parent_conversation_id: parent_conv_id,
-        agent: %{
-          "systemSections" => [
-            %{"id" => "handoff_context", "content" => "You are working on a focused thread handed off from session #{parent_conv_id}."}
-          ],
-          "tools" => SuperPi.Tools.active_llm_tools()
-        }
+        agent: child_agent
       )
 
     Storage.append_entry!(child_conv.id, "pi.message", %{

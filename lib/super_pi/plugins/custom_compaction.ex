@@ -20,7 +20,7 @@ defmodule SuperPi.Plugins.CustomCompaction do
     if Enum.empty?(entries) do
       :default
     else
-      summary = build_milestone_summary(entries, opts)
+      summary = Keyword.get(opts, :summary) || build_milestone_summary(entries, opts)
       {:compacted, summary, %{"strategy" => "milestone_distillation", "original_entries_count" => length(entries)}}
     end
   end
@@ -35,10 +35,37 @@ defmodule SuperPi.Plugins.CustomCompaction do
 
     modified_files =
       entries
-      |> Enum.filter(fn e ->
-        entry_kind(e) == "pi.message" and get_in(e.data, ["name"]) in ["write", "edit"]
+      |> Enum.flat_map(fn e ->
+        if entry_kind(e) == "pi.message" do
+          content = get_in(e.data, ["content"])
+          name = get_in(e.data, ["name"])
+
+          paths1 =
+            if name in ["write", "edit"] do
+              [get_in(e.data, ["arguments", "path"]), get_in(e.data, ["details", "path"])]
+            else
+              []
+            end
+
+          paths2 =
+            if is_list(content) do
+              Enum.flat_map(content, fn
+                %{"type" => "tool_call", "name" => tool_name, "arguments" => args}
+                when tool_name in ["write", "edit"] and is_map(args) ->
+                  [Map.get(args, "path") || Map.get(args, :path)]
+
+                _ ->
+                  []
+              end)
+            else
+              []
+            end
+
+          paths1 ++ paths2
+        else
+          []
+        end
       end)
-      |> Enum.map(&get_in(&1.data, ["arguments", "path"]) || get_in(&1.data, ["details", "path"]))
       |> Enum.reject(&is_nil/1)
       |> Enum.uniq()
 

@@ -61,7 +61,7 @@ defmodule SuperPi.Plugins.ConfirmDestructive do
       pat when is_binary(pat) -> String.contains?(cmd, pat)
     end) do
       Logger.warning("[ConfirmDestructive] Blocked destructive bash execution: #{cmd}")
-      {:block, "Destructive operation intercepted by SuperPi.Plugins.ConfirmDestructive: '#{cmd}'. User confirmation required."}
+      {:block, "Destructive operation blocked by SuperPi.Plugins.ConfirmDestructive: '#{cmd}' is not permitted."}
     else
       :allow
     end
