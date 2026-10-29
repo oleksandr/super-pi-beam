@@ -11,7 +11,6 @@ defmodule SuperPi.MCP.ServerDefectsTest do
 
   alias SuperPi.MCP.Server
 
-  @moduletag :known_bug
 
   setup do
     SuperPi.Tools.ensure_catalog_ets!()

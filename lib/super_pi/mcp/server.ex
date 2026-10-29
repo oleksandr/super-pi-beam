@@ -69,6 +69,10 @@ defmodule SuperPi.MCP.Server do
 
   # --- Method Dispatch ---
 
+  defp dispatch("initialize", params, id, state) when not is_map(params) do
+    {:reply, jsonrpc_error(id, -32602, "Invalid params: initialize requires an object"), state}
+  end
+
   defp dispatch("initialize", params, id, state) do
     client_info = Map.get(params, "clientInfo", %{})
 
@@ -90,7 +94,7 @@ defmodule SuperPi.MCP.Server do
     {:reply, reply, next_state}
   end
 
-  defp dispatch("notifications/initialized", _params, _id, state) do
+  defp dispatch("notifications/" <> _notif, _params, _id, state) do
     {:noreply, state}
   end
 
@@ -102,86 +106,184 @@ defmodule SuperPi.MCP.Server do
     {:stop, :normal, state}
   end
 
-  defp dispatch("tools/list", _params, id, state) do
-    tools = tool_definitions()
-    {:reply, jsonrpc_result(id, %{"tools" => tools}), state}
+  defp dispatch("tools/list", params, id, state) do
+    if is_map(params) and Map.get(params, "cursor") != nil do
+      {:reply, jsonrpc_error(id, -32602, "Invalid cursor"), state}
+    else
+      tools = tool_definitions()
+      {:reply, jsonrpc_result(id, %{"tools" => tools}), state}
+    end
   end
 
-  defp dispatch("tools/call", %{"name" => name} = params, id, state) do
+  defp dispatch("tools/call", params, id, state) when not is_map(params) do
+    {:reply, jsonrpc_error(id, -32602, "Invalid params: tools/call requires an object"), state}
+  end
+
+  defp dispatch("tools/call", %{"name" => name} = params, id, state) when is_binary(name) do
     args = Map.get(params, "arguments", %{})
 
-    result =
-      case name do
-        "harness_task" ->
-          case Map.get(args, "prompt") || Map.get(args, :prompt) do
-            prompt when is_binary(prompt) and byte_size(prompt) > 0 ->
-              execute_harness_task(prompt)
+    if not is_map(args) do
+      reply =
+        jsonrpc_result(id, %{
+          "content" => [%{"type" => "text", "text" => "Invalid arguments: arguments must be an object"}],
+          "isError" => true
+        })
 
-            _ ->
-              %{"output" => "Missing required argument 'prompt'", "is_error" => true}
-          end
+      {:reply, reply, state}
+    else
+      result =
+        case name do
+          "harness_task" ->
+            case Map.get(args, "prompt") || Map.get(args, :prompt) do
+              prompt when is_binary(prompt) and byte_size(prompt) > 0 ->
+                execute_harness_task(prompt)
 
-        other ->
-          Tools.execute(other, args)
-      end
+              _ ->
+                %{"output" => "Missing required argument 'prompt'", "is_error" => true}
+            end
 
-    content_text = Map.get(result, "output", "")
-    is_err = Map.get(result, "is_error", false)
+          other ->
+            Tools.execute(other, args)
+        end
 
-    reply =
-      jsonrpc_result(id, %{
-        "content" => [
-          %{"type" => "text", "text" => to_string(content_text)}
-        ],
-        "isError" => is_err
-      })
+      content_text = sanitize_utf8(Map.get(result, "output", ""))
+      is_err = Map.get(result, "is_error", false)
 
-    {:reply, reply, state}
+      reply =
+        jsonrpc_result(id, %{
+          "content" => [
+            %{"type" => "text", "text" => to_string(content_text)}
+          ],
+          "isError" => is_err
+        })
+
+      {:reply, reply, state}
+    end
   end
 
-  defp dispatch("resources/list", _params, id, state) do
-    resources = [
-      %{
-        "uri" => "superpi://workspace/context",
-        "name" => "Super-Pi Active Context",
-        "description" => "Current 10-rule derived conversation context and system prompt",
-        "mimeType" => "application/json"
-      },
-      %{
-        "uri" => "superpi://workspace/tools",
-        "name" => "Super-Pi Active Tool Loadouts",
-        "description" => "Active tool declarations and exposure modes",
-        "mimeType" => "application/json"
-      }
-    ]
+  defp dispatch("tools/call", params, id, state) when is_map(params) do
+    case Map.get(params, "name") do
+      nil ->
+        {:reply, jsonrpc_error(id, -32602, "Missing required parameter 'name'"), state}
 
-    {:reply, jsonrpc_result(id, %{"resources" => resources}), state}
+      _not_string ->
+        reply =
+          jsonrpc_result(id, %{
+            "content" => [%{"type" => "text", "text" => "Tool name must be a string"}],
+            "isError" => true
+          })
+
+        {:reply, reply, state}
+    end
   end
 
-  defp dispatch("resources/read", %{"uri" => uri}, id, state) do
-    content =
-      case uri do
-        "superpi://workspace/context" ->
+  defp dispatch("resources/list", params, id, state) do
+    if is_map(params) and Map.get(params, "cursor") != nil do
+      {:reply, jsonrpc_error(id, -32602, "Invalid cursor"), state}
+    else
+      resources = [
+        %{
+          "uri" => "superpi://workspace/context",
+          "name" => "Super-Pi Active Context",
+          "description" => "Current 10-rule derived conversation context and system prompt",
+          "mimeType" => "application/json"
+        },
+        %{
+          "uri" => "superpi://workspace/tools",
+          "name" => "Super-Pi Active Tool Loadouts",
+          "description" => "Active tool declarations and exposure modes",
+          "mimeType" => "application/json"
+        }
+      ]
+
+      {:reply, jsonrpc_result(id, %{"resources" => resources}), state}
+    end
+  end
+
+  defp dispatch("resources/read", params, id, state) when not is_map(params) do
+    {:reply, jsonrpc_error(id, -32602, "Invalid params: resources/read requires an object"), state}
+  end
+
+  defp dispatch("resources/read", %{"uri" => uri}, id, state) when is_binary(uri) do
+    case uri do
+      "superpi://workspace/context" ->
+        content =
           Jason.encode!(%{
             "status" => "ready",
             "working_directory" => File.cwd!(),
             "tools" => Tools.active_llm_tools()
           })
 
-        "superpi://workspace/tools" ->
-          Jason.encode!(Tools.active_llm_tools())
+        reply =
+          jsonrpc_result(id, %{
+            "contents" => [
+              %{
+                "uri" => uri,
+                "mimeType" => "application/json",
+                "text" => content
+              }
+            ]
+          })
 
-        other ->
-          Jason.encode!(%{"error" => "unknown resource uri", "uri" => other})
-      end
+        {:reply, reply, state}
+
+      "superpi://workspace/tools" ->
+        content = Jason.encode!(Tools.active_llm_tools())
+
+        reply =
+          jsonrpc_result(id, %{
+            "contents" => [
+              %{
+                "uri" => uri,
+                "mimeType" => "application/json",
+                "text" => content
+              }
+            ]
+          })
+
+        {:reply, reply, state}
+
+      _other ->
+        {:reply, jsonrpc_error(id, -32002, "Resource not found: #{uri}"), state}
+    end
+  end
+
+  defp dispatch("resources/read", _params, id, state) do
+    {:reply, jsonrpc_error(id, -32602, "Missing required parameter 'uri'"), state}
+  end
+
+  defp dispatch("prompts/list", params, id, state) do
+    if is_map(params) and Map.get(params, "cursor") != nil do
+      {:reply, jsonrpc_error(id, -32602, "Invalid cursor"), state}
+    else
+      prompts = [
+        %{
+          "name" => "plan_architecture",
+          "description" => "Creates an architectural implementation plan before executing code changes",
+          "arguments" => [
+            %{"name" => "goal", "description" => "Engineering task description", "required" => true}
+          ]
+        }
+      ]
+
+      {:reply, jsonrpc_result(id, %{"prompts" => prompts}), state}
+    end
+  end
+
+  defp dispatch("prompts/get", %{"name" => "plan_architecture"} = params, id, state) do
+    args = Map.get(params, "arguments", %{})
+    goal = Map.get(args, "goal", "")
 
     reply =
       jsonrpc_result(id, %{
-        "contents" => [
+        "description" => "Plan architecture for #{goal}",
+        "messages" => [
           %{
-            "uri" => uri,
-            "mimeType" => "application/json",
-            "text" => content
+            "role" => "user",
+            "content" => %{
+              "type" => "text",
+              "text" => "Please create an architectural plan for: #{goal}"
+            }
           }
         ]
       })
@@ -189,18 +291,12 @@ defmodule SuperPi.MCP.Server do
     {:reply, reply, state}
   end
 
-  defp dispatch("prompts/list", _params, id, state) do
-    prompts = [
-      %{
-        "name" => "plan_architecture",
-        "description" => "Creates an architectural implementation plan before executing code changes",
-        "arguments" => [
-          %{"name" => "goal", "description" => "Engineering task description", "required" => true}
-        ]
-      }
-    ]
+  defp dispatch("prompts/get", %{"name" => unknown}, id, state) do
+    {:reply, jsonrpc_error(id, -32602, "Unknown prompt: #{unknown}"), state}
+  end
 
-    {:reply, jsonrpc_result(id, %{"prompts" => prompts}), state}
+  defp dispatch("prompts/get", _params, id, state) do
+    {:reply, jsonrpc_error(id, -32602, "Missing required parameter 'name'"), state}
   end
 
   defp dispatch(unknown_method, _params, id, state) do
@@ -313,36 +409,50 @@ defmodule SuperPi.MCP.Server do
     conv = Storage.create_conversation!(agent: harness.agent_defaults())
     {:ok, machine_pid} = SuperPi.Conversation.Machine.start_link(conversation_id: conv.id, extensions: extensions)
 
-    case SuperPi.Conversation.Machine.submit(machine_pid, prompt, mode: :queue, timeout: 60_000) do
-      {:ok, res} ->
-        output =
-          case res do
-            %{"content" => blocks} when is_list(blocks) ->
-              Enum.map_join(blocks, "\n", fn
-                %{"text" => t} -> t
-                %{text: t} -> t
-                t when is_binary(t) -> t
-                _ -> ""
-              end)
+    try do
+      case SuperPi.Conversation.Machine.submit(machine_pid, prompt, mode: :queue, timeout: 60_000) do
+        {:ok, res} ->
+          output =
+            case res do
+              %{"content" => blocks} when is_list(blocks) ->
+                Enum.map_join(blocks, "\n", fn
+                  %{"text" => t} -> t
+                  %{text: t} -> t
+                  t when is_binary(t) -> t
+                  _ -> ""
+                end)
 
-            %{content: blocks} when is_list(blocks) ->
-              Enum.map_join(blocks, "\n", fn
-                %{"text" => t} -> t
-                %{text: t} -> t
-                t when is_binary(t) -> t
-                _ -> ""
-              end)
+              %{content: blocks} when is_list(blocks) ->
+                Enum.map_join(blocks, "\n", fn
+                  %{"text" => t} -> t
+                  %{text: t} -> t
+                  t when is_binary(t) -> t
+                  _ -> ""
+                end)
 
-            other ->
-              inspect(other)
-          end
+              other ->
+                inspect(other)
+            end
 
-        %{"output" => output, "is_error" => false}
+          %{"output" => output, "is_error" => false}
 
-      {:error, reason} ->
-        %{"output" => "Harness task error: #{inspect(reason)}", "is_error" => true}
+        {:error, reason} ->
+          %{"output" => "Harness task error: #{inspect(reason)}", "is_error" => true}
+      end
+    after
+      Process.exit(machine_pid, :kill)
     end
   end
+
+  defp sanitize_utf8(bin) when is_binary(bin) do
+    if String.valid?(bin) do
+      bin
+    else
+      :unicode.characters_to_binary(bin, :latin1, :utf8)
+    end
+  end
+
+  defp sanitize_utf8(other), do: to_string(other)
 
   # --- JSON-RPC Helpers ---
 

@@ -24,7 +24,8 @@ defmodule SuperPi.Env.Local do
         {:ok, content} ->
           offset = Keyword.get(opts, :offset, 1)
           limit = Keyword.get(opts, :limit)
-          {:ok, slice_lines(content, offset, limit)}
+          safe_content = ensure_valid_utf8(content)
+          {:ok, slice_lines(safe_content, offset, limit)}
 
         {:error, reason} ->
           {:error, reason}
@@ -158,6 +159,14 @@ defmodule SuperPi.Env.Local do
   defp unwrap_sandbox({:ok, :ok}), do: :ok
   defp unwrap_sandbox({:ok, {:error, err}}), do: {:error, err}
   defp unwrap_sandbox({:error, err}), do: {:error, err}
+
+  defp ensure_valid_utf8(content) when is_binary(content) do
+    if String.valid?(content) do
+      content
+    else
+      :unicode.characters_to_binary(content, :latin1, :utf8)
+    end
+  end
 
   defp slice_lines(content, offset, nil) when offset <= 1, do: content
 

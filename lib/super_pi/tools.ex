@@ -92,7 +92,12 @@ defmodule SuperPi.Tools do
   Executes one of the 7 built-in tools (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`) or `tool_search`.
   Supports common tool name aliases and argument variations with defensive parameter extraction.
   """
-  def execute(tool_name, args, _ctx \\ %{}) when is_binary(tool_name) and is_map(args) do
+  def execute(tool_name, args, ctx \\ %{})
+  def execute(tool_name, args, _ctx) when not is_binary(tool_name) or not is_map(args) do
+    error_result(to_string(tool_name), "Invalid tool execution arguments: tool_name must be a string and args must be a map")
+  end
+
+  def execute(tool_name, args, _ctx) when is_binary(tool_name) and is_map(args) do
     ensure_catalog_ets!()
 
     case tool_name do
@@ -100,6 +105,9 @@ defmodule SuperPi.Tools do
         case fetch_arg(args, [:path, "path", :file_path, "file_path"]) do
           nil ->
             error_result(name, "Missing required argument 'path'")
+
+          path when not is_binary(path) ->
+            error_result(name, "Argument 'path' must be a string")
 
           path ->
             offset = fetch_arg(args, [:offset, "offset", :start_line, "start_line"], 1)
