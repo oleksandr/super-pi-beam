@@ -1012,23 +1012,21 @@ defmodule SuperPi.Conversation.Machine do
     in_tok = Map.get(usage, "input_tokens", 0) || Map.get(usage, :input_tokens, 0) || 0
     out_tok = Map.get(usage, "output_tokens", 0) || Map.get(usage, :output_tokens, 0) || 0
 
-    if in_tok > 0 or out_tok > 0 do
-      current = SuperPi.Durable.Doc.snapshot("conversation", conversation_id, "pi.usage") || %{}
-      cur_in = Map.get(current, "inputTokens", 0)
-      cur_out = Map.get(current, "outputTokens", 0)
+    current = SuperPi.Durable.Doc.snapshot("conversation", conversation_id, "pi.usage") || %{}
+    cur_in = Map.get(current, "inputTokens", 0)
+    cur_out = Map.get(current, "outputTokens", 0)
 
-      updated = %{
-        "inputTokens" => cur_in + in_tok,
-        "outputTokens" => cur_out + out_tok,
-        "lastTurnInputTokens" => in_tok,
-        "lastTurnOutputTokens" => out_tok,
-        "updatedAt" => System.system_time(:millisecond)
-      }
+    updated = %{
+      "inputTokens" => cur_in + in_tok,
+      "outputTokens" => cur_out + out_tok,
+      "lastTurnInputTokens" => in_tok,
+      "lastTurnOutputTokens" => out_tok,
+      "updatedAt" => System.system_time(:millisecond)
+    }
 
-      Storage.commit(fn seq ->
-        SuperPi.Durable.Doc.put_doc("conversation", conversation_id, "pi.usage", updated, seq)
-      end)
-    end
+    Storage.commit(fn seq ->
+      SuperPi.Durable.Doc.put_doc("conversation", conversation_id, "pi.usage", updated, seq)
+    end)
   rescue
     _ -> :ok
   end

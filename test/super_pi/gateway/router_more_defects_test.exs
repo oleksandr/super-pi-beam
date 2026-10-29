@@ -22,7 +22,6 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
   @opts Router.init([])
 
-  @moduletag :known_bug
 
   defmodule HandledExtension do
     @moduledoc false

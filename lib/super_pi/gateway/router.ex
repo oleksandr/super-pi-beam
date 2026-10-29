@@ -762,16 +762,19 @@ defmodule SuperPi.Gateway.Router do
 
         arg_preview =
           case raw_args do
-            %{"command" => cmd} -> "$ #{to_string(cmd)}\n"
-            %{"path" => p} -> "#{to_string(p)}\n"
-            %{"query" => q} -> "query: #{to_string(q)}\n"
+            %{"command" => cmd} when is_binary(cmd) -> "$ #{cmd}\n"
+            %{"path" => p} when is_binary(p) -> "#{p}\n"
+            %{"query" => q} when is_binary(q) -> "query: #{q}\n"
             m when is_map(m) ->
               case Jason.encode(m) do
                 {:ok, json} -> "#{json}\n"
-                _ -> "\n"
+                _ -> "#{inspect(m)}\n"
               end
             other ->
-              "#{to_string(other)}\n"
+              case Jason.encode(other) do
+                {:ok, json} -> "#{json}\n"
+                _ -> "#{inspect(other)}\n"
+              end
           end
 
         progress_text = "⚙️ Executing #{name}: #{arg_preview}"
@@ -802,7 +805,16 @@ defmodule SuperPi.Gateway.Router do
       {:conversation_event, ^conv_id, %{"type" => "tool_completed", "name" => name} = ev} ->
         err? = Map.get(ev, "is_error", false)
         status_label = if err?, do: "❌", else: "✅"
-        out_raw = ev |> Map.get("output", "") |> to_string() |> String.trim()
+        out_raw =
+          case Map.get(ev, "output", "") do
+            s when is_binary(s) -> s
+            other ->
+              case Jason.encode(other) do
+                {:ok, json} -> json
+                _ -> inspect(other)
+              end
+          end
+          |> String.trim()
 
         out_preview =
           if out_raw != "" do
