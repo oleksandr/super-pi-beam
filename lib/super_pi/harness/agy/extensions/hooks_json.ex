@@ -134,7 +134,7 @@ defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
         "stepIdx" => 1
       })
       |> then(fn p ->
-        if result["is_error"], do: Map.put(p, "error", to_string(result["output"])), else: p
+        if result["is_error"], do: Map.put(p, "error", output_to_string(result["output"])), else: p
       end)
 
     hooks_files
@@ -176,6 +176,16 @@ defmodule SuperPi.Harness.AGY.Extensions.HooksJson do
   end
 
   # --- Helpers & Public Inspection ---
+
+  defp output_to_string(out) when is_binary(out), do: out
+  defp output_to_string(nil), do: ""
+
+  defp output_to_string(out) do
+    case Jason.encode(out) do
+      {:ok, json} -> json
+      _ -> inspect(out)
+    end
+  end
 
   def matcher_matches?("*", _tool_name), do: true
   def matcher_matches?("", _tool_name), do: true
