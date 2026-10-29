@@ -1,0 +1,30 @@
+import Config
+
+config :super_pi,
+  ecto_repos: [SuperPi.Repo.SQLite],
+  storage_backend: :sqlite
+
+config :super_pi, SuperPi.Repo.SQLite,
+  priv: "priv/repo",
+  database: Path.expand("../priv/super_pi_#{config_env()}.db", __DIR__),
+  pool_size: 5,
+  journal_mode: :wal,
+  cache_size: -64000,
+  temp_store: :memory,
+  synchronous: :normal,
+  busy_timeout: 5000
+
+config :super_pi, SuperPi.Repo.Postgres,
+  priv: "priv/repo"
+
+config :super_pi, Oban,
+  engine: Oban.Engines.Lite,
+  repo: SuperPi.Repo.SQLite,
+  queues: [
+    generation_retry: 20,
+    compaction: 5,
+    verification: 10,
+    subagents: 20
+  ]
+
+import_config "#{config_env()}.exs"
