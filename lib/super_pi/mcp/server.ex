@@ -113,8 +113,13 @@ defmodule SuperPi.MCP.Server do
     result =
       case name do
         "harness_task" ->
-          prompt = Map.fetch!(args, "prompt")
-          execute_harness_task(prompt)
+          case Map.get(args, "prompt") || Map.get(args, :prompt) do
+            prompt when is_binary(prompt) and byte_size(prompt) > 0 ->
+              execute_harness_task(prompt)
+
+            _ ->
+              %{"output" => "Missing required argument 'prompt'", "is_error" => true}
+          end
 
         other ->
           Tools.execute(other, args)
@@ -303,15 +308,30 @@ defmodule SuperPi.MCP.Server do
   end
 
   defp execute_harness_task(prompt) do
-    conv = Storage.create_conversation!(agent: %{"tools" => Tools.active_llm_tools()})
-    {:ok, machine_pid} = SuperPi.Conversation.Machine.start_link(conv.id)
+    harness = SuperPi.Harness.resolve("super-pi-agent")
+    extensions = harness.extensions([])
+    conv = Storage.create_conversation!(agent: harness.agent_defaults())
+    {:ok, machine_pid} = SuperPi.Conversation.Machine.start_link(conversation_id: conv.id, extensions: extensions)
 
     case SuperPi.Conversation.Machine.submit(machine_pid, prompt, mode: :queue, timeout: 60_000) do
       {:ok, res} ->
         output =
           case res do
-            %{content: content} when is_list(content) ->
-              Enum.map_join(content, "\n", &(&1[:text] || &1["text"] || ""))
+            %{"content" => blocks} when is_list(blocks) ->
+              Enum.map_join(blocks, "\n", fn
+                %{"text" => t} -> t
+                %{text: t} -> t
+                t when is_binary(t) -> t
+                _ -> ""
+              end)
+
+            %{content: blocks} when is_list(blocks) ->
+              Enum.map_join(blocks, "\n", fn
+                %{"text" => t} -> t
+                %{text: t} -> t
+                t when is_binary(t) -> t
+                _ -> ""
+              end)
 
             other ->
               inspect(other)

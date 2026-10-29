@@ -487,7 +487,7 @@ defmodule SuperPi.RPC.Server do
   end
 
   defp resolve_extensions(params) do
-    key = Map.get(params, "harness") || Map.get(params, "preset")
+    key = Map.get(params, "harness") || Map.get(params, "preset") || Map.get(params, "model")
     SuperPi.Harness.resolve(key).extensions([])
   end
 

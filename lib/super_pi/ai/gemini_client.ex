@@ -309,9 +309,13 @@ defmodule SuperPi.AI.GeminiClient do
   end
 
   defp normalize_gemini_model(model) when is_binary(model) do
+    cleaned =
+      model
+      |> String.replace_prefix("models/", "")
+      |> String.replace_prefix("google/", "")
+
     cond do
-      String.starts_with?(model, "gemini-") -> model
-      String.starts_with?(model, "google/") -> String.replace_prefix(model, "google/", "")
+      String.starts_with?(cleaned, "gemini-") -> cleaned
       true -> @default_gemini_model
     end
   end

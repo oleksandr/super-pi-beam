@@ -249,11 +249,13 @@ defmodule SuperPi.Conversation.Machine do
     case data.llm_responder.(payload, ctx) do
       {:ok, assistant_msg} ->
         assistant_msg = Extension.run_after_response(data.extensions, assistant_msg, ctx)
+        usage = Map.get(assistant_msg, "usage", %{})
+        record_usage!(data.conversation_id, usage)
 
         Storage.append_entry!(data.conversation_id, "pi.message", %{
           "role" => "assistant",
           "content" => Map.get(assistant_msg, "content", []),
-          "usage" => Map.get(assistant_msg, "usage", %{})
+          "usage" => usage
         })
 
         tool_calls =
@@ -728,5 +730,30 @@ defmodule SuperPi.Conversation.Machine do
 
   defp default_tool_executor(tool_name, args, ctx) do
     SuperPi.Tools.execute(tool_name, args, ctx)
+  end
+
+  defp record_usage!(conversation_id, usage) when is_map(usage) do
+    in_tok = Map.get(usage, "input_tokens", 0) || Map.get(usage, :input_tokens, 0) || 0
+    out_tok = Map.get(usage, "output_tokens", 0) || Map.get(usage, :output_tokens, 0) || 0
+
+    if in_tok > 0 or out_tok > 0 do
+      current = SuperPi.Durable.Doc.snapshot("conversation", conversation_id, "pi.usage") || %{}
+      cur_in = Map.get(current, "inputTokens", 0)
+      cur_out = Map.get(current, "outputTokens", 0)
+
+      updated = %{
+        "inputTokens" => cur_in + in_tok,
+        "outputTokens" => cur_out + out_tok,
+        "lastTurnInputTokens" => in_tok,
+        "lastTurnOutputTokens" => out_tok,
+        "updatedAt" => System.system_time(:millisecond)
+      }
+
+      Storage.commit(fn seq ->
+        SuperPi.Durable.Doc.put_doc("conversation", conversation_id, "pi.usage", updated, seq)
+      end)
+    end
+  rescue
+    _ -> :ok
   end
 end

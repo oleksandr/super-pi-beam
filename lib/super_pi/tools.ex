@@ -90,105 +90,134 @@ defmodule SuperPi.Tools do
 
   @doc """
   Executes one of the 7 built-in tools (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`) or `tool_search`.
+  Supports common tool name aliases and argument variations with defensive parameter extraction.
   """
   def execute(tool_name, args, _ctx \\ %{}) when is_binary(tool_name) and is_map(args) do
     ensure_catalog_ets!()
 
     case tool_name do
-      "read" ->
-        path = Map.fetch!(args, "path")
-        offset = Map.get(args, "offset", 1)
-        limit = Map.get(args, "limit")
+      name when name in ["read", "read_file"] ->
+        case fetch_arg(args, [:path, "path", :file_path, "file_path"]) do
+          nil ->
+            error_result(name, "Missing required argument 'path'")
 
-        case Local.read_file(path, offset: offset, limit: limit) do
-          {:ok, content} ->
-            line_count = length(String.split(content, "\n"))
+          path ->
+            offset = fetch_arg(args, [:offset, "offset", :start_line, "start_line"], 1)
+            limit = fetch_arg(args, [:limit, "limit", :end_line, "end_line"])
 
-            %{
-              "output" => content,
-              "structured_output" => %{"path" => path, "lines" => line_count},
-              "details" => %{"path" => path, "line_count" => line_count}
-            }
+            case Local.read_file(path, offset: offset, limit: limit) do
+              {:ok, content} ->
+                line_count = length(String.split(content, "\n"))
 
-          {:error, reason} ->
-            error_result("read", reason)
+                %{
+                  "output" => content,
+                  "structured_output" => %{"path" => path, "lines" => line_count},
+                  "details" => %{"path" => path, "line_count" => line_count}
+                }
+
+              {:error, reason} ->
+                error_result(name, reason)
+            end
         end
 
-      "write" ->
-        path = Map.fetch!(args, "path")
-        content = Map.fetch!(args, "content")
+      name when name in ["write", "write_file"] ->
+        path = fetch_arg(args, [:path, "path", :file_path, "file_path"])
+        content = fetch_arg(args, [:content, "content", :contents, "contents"])
 
-        case Local.write_file(path, content) do
-          :ok ->
-            bytes = byte_size(content)
+        cond do
+          is_nil(path) -> error_result(name, "Missing required argument 'path'")
+          is_nil(content) -> error_result(name, "Missing required argument 'content'")
+          true ->
+            case Local.write_file(path, content) do
+              :ok ->
+                bytes = byte_size(content)
 
-            %{
-              "output" => "Wrote #{bytes} bytes to #{path}",
-              "structured_output" => %{"path" => path, "bytes" => bytes},
-              "details" => %{"path" => path, "bytes_written" => bytes}
-            }
+                %{
+                  "output" => "Wrote #{bytes} bytes to #{path}",
+                  "structured_output" => %{"path" => path, "bytes" => bytes},
+                  "details" => %{"path" => path, "bytes_written" => bytes}
+                }
 
-          {:error, reason} ->
-            error_result("write", reason)
+              {:error, reason} ->
+                error_result(name, reason)
+            end
         end
 
-      "edit" ->
-        path = Map.fetch!(args, "path")
-        old_text = Map.fetch!(args, "old_text")
-        new_text = Map.fetch!(args, "new_text")
+      name when name in ["edit", "edit_file"] ->
+        path = fetch_arg(args, [:path, "path", :file_path, "file_path"])
+        old_text = fetch_arg(args, [:old_text, "old_text", :oldText, "oldText", :old_string, "old_string", :target, "target"])
+        new_text = fetch_arg(args, [:new_text, "new_text", :newText, "newText", :new_string, "new_string", :replacement, "replacement"])
 
-        case Local.edit_file(path, old_text, new_text) do
-          {:ok, %{replacements: count}} ->
-            %{
-              "output" => "Replaced #{count} occurrence(s) in #{path}",
-              "structured_output" => %{"path" => path, "replacements" => count},
-              "details" => %{"path" => path, "replacements" => count}
-            }
+        cond do
+          is_nil(path) -> error_result(name, "Missing required argument 'path'")
+          is_nil(old_text) -> error_result(name, "Missing required argument 'old_text'")
+          is_nil(new_text) -> error_result(name, "Missing required argument 'new_text'")
+          true ->
+            case Local.edit_file(path, old_text, new_text) do
+              {:ok, %{replacements: count}} ->
+                %{
+                  "output" => "Replaced #{count} occurrence(s) in #{path}",
+                  "structured_output" => %{"path" => path, "replacements" => count},
+                  "details" => %{"path" => path, "replacements" => count}
+                }
 
-          {:error, reason} ->
-            error_result("edit", reason)
+              {:error, reason} ->
+                error_result(name, reason)
+            end
         end
 
-      "bash" ->
-        command = Map.fetch!(args, "command")
-        cd = Map.get(args, "cd", File.cwd!())
+      name when name in ["bash", "sh", "terminal", "run_command", "exec"] ->
+        command = fetch_arg(args, [:command, "command", :cmd, "cmd", :script, "script"])
+        cd = fetch_arg(args, [:cd, "cd", :dir, "dir", :cwd, "cwd"], File.cwd!())
 
-        case Local.exec_command("sh", ["-c", command], cd: cd) do
-          {:ok, %{exit_code: code, output: out, spilled_path: spilled}} ->
-            %{
-              "is_error" => code != 0,
-              "output" => out,
-              "structured_output" => %{"exit_code" => code, "spilled_path" => spilled},
-              "details" => %{"exit_code" => code, "spilled_path" => spilled, "command" => command}
-            }
+        case command do
+          nil ->
+            error_result(name, "Missing required argument 'command'")
 
-          {:error, reason} ->
-            error_result("bash", reason)
+          cmd ->
+            case Local.exec_command("sh", ["-c", cmd], cd: cd) do
+              {:ok, %{exit_code: code, output: out, spilled_path: spilled}} ->
+                %{
+                  "is_error" => code != 0,
+                  "output" => out,
+                  "structured_output" => %{"exit_code" => code, "spilled_path" => spilled},
+                  "details" => %{"exit_code" => code, "spilled_path" => spilled, "command" => cmd}
+                }
+
+              {:error, reason} ->
+                error_result(name, reason)
+            end
         end
 
-      "grep" ->
-        root = Map.get(args, "path", File.cwd!())
-        pattern = Map.fetch!(args, "pattern")
+      name when name in ["grep", "search_files"] ->
+        root = fetch_arg(args, [:path, "path", :dir, "dir"], File.cwd!())
+        pattern = fetch_arg(args, [:pattern, "pattern", :query, "query"])
 
-        case Local.scan_lines(root, pattern) do
-          {:ok, matches} ->
-            formatted =
-              matches
-              |> Enum.map(fn m -> "#{m.path}:#{m.line}:#{m.text}" end)
-              |> Enum.join("\n")
+        case pattern do
+          nil ->
+            error_result(name, "Missing required argument 'pattern'")
 
-            %{
-              "output" => formatted,
-              "structured_output" => %{"matches" => matches, "count" => length(matches)},
-              "details" => %{"match_count" => length(matches)}
-            }
+          pat ->
+            case Local.scan_lines(root, pat) do
+              {:ok, matches} ->
+                formatted =
+                  matches
+                  |> Enum.map(fn m -> "#{m.path}:#{m.line}:#{m.text}" end)
+                  |> Enum.join("\n")
 
-          {:error, reason} ->
-            error_result("grep", reason)
+                %{
+                  "output" => formatted,
+                  "structured_output" => %{"matches" => matches, "count" => length(matches)},
+                  "details" => %{"match_count" => length(matches)}
+                }
+
+              {:error, reason} ->
+                error_result(name, reason)
+            end
         end
 
-      "find" ->
-        root = Map.get(args, "path", File.cwd!())
+      name when name in ["find", "find_files"] ->
+        root = fetch_arg(args, [:path, "path", :dir, "dir"], File.cwd!())
 
         case Local.list_files(root) do
           {:ok, files} ->
@@ -199,11 +228,11 @@ defmodule SuperPi.Tools do
             }
 
           {:error, reason} ->
-            error_result("find", reason)
+            error_result(name, reason)
         end
 
-      "ls" ->
-        dir = Map.get(args, "path", File.cwd!())
+      name when name in ["ls", "list_dir", "list_directory"] ->
+        dir = fetch_arg(args, [:path, "path", :dir, "dir"], File.cwd!())
 
         case File.ls(Path.expand(dir)) do
           {:ok, entries} ->
@@ -216,16 +245,22 @@ defmodule SuperPi.Tools do
             }
 
           {:error, reason} ->
-            error_result("ls", reason)
+            error_result(name, reason)
         end
 
       "tool_search" ->
-        query = Map.get(args, "query", "")
+        query = fetch_arg(args, [:query, "query"], "")
         tool_search(query)
 
       other ->
         error_result(other, :unknown_tool)
     end
+  end
+
+  defp fetch_arg(args, keys, default \\ nil) when is_map(args) and is_list(keys) do
+    Enum.find_value(keys, default, fn k ->
+      Map.get(args, k) || Map.get(args, to_string(k))
+    end)
   end
 
   defp error_result(tool, reason) do

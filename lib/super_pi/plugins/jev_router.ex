@@ -22,7 +22,7 @@ defmodule SuperPi.Plugins.JevRouter do
 
   @default_planning_model "gemini-3.1-pro-preview"
   @default_implementation_model "gemini-2.5-flash"
-  @default_edit_tools ["write", "edit"]
+  @default_edit_tools ["write", "edit", "write_file", "edit_file"]
 
   def id, do: "jev_router"
   def name, do: "Jev Dynamic Model Router"

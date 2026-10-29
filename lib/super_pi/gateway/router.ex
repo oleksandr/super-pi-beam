@@ -107,7 +107,7 @@ defmodule SuperPi.Gateway.Router do
     if stream? do
       handle_streaming_completion(conn, conv_id, pid, user_prompt, model)
     else
-      handle_sync_completion(conn, pid, user_prompt, model)
+      handle_sync_completion(conn, conv_id, pid, user_prompt, model)
     end
   end
 
@@ -263,12 +263,24 @@ defmodule SuperPi.Gateway.Router do
 
   # --- Non-Streaming Execution ---
 
-  defp handle_sync_completion(conn, pid, user_prompt, model) do
+  defp handle_sync_completion(conn, conv_id, pid, user_prompt, model) do
     case Machine.submit(pid, user_prompt, mode: :queue, timeout: 120_000) do
       {:ok, assistant_msg} ->
         reply_text = extract_assistant_msg_text(assistant_msg)
         cmpl_id = "chatcmpl-" <> Uniq.UUID.uuid7()
         now = System.system_time(:second)
+
+        usage = Map.get(assistant_msg, "usage", %{})
+        in_tok = Map.get(usage, "input_tokens", 0) || Map.get(usage, :input_tokens, 0) || 0
+        out_tok = Map.get(usage, "output_tokens", 0) || Map.get(usage, :output_tokens, 0) || 0
+
+        {prompt_tok, comp_tok} =
+          if in_tok > 0 or out_tok > 0 do
+            {in_tok, out_tok}
+          else
+            snap = SuperPi.Durable.Doc.snapshot("conversation", conv_id, "pi.usage") || %{}
+            {Map.get(snap, "inputTokens", 20), Map.get(snap, "outputTokens", 20)}
+          end
 
         resp = %{
           "id" => cmpl_id,
@@ -286,9 +298,9 @@ defmodule SuperPi.Gateway.Router do
             }
           ],
           "usage" => %{
-            "prompt_tokens" => 20,
-            "completion_tokens" => 20,
-            "total_tokens" => 40
+            "prompt_tokens" => prompt_tok,
+            "completion_tokens" => comp_tok,
+            "total_tokens" => prompt_tok + comp_tok
           }
         }
 
@@ -441,6 +453,10 @@ defmodule SuperPi.Gateway.Router do
     # Drain any remaining deltas in mailbox
     conn = drain_mailbox_deltas(conn, conv_id, cmpl_id, created, model)
 
+    snap = SuperPi.Durable.Doc.snapshot("conversation", conv_id, "pi.usage") || %{}
+    prompt_tok = Map.get(snap, "lastTurnInputTokens") || Map.get(snap, "inputTokens", 0)
+    comp_tok = Map.get(snap, "lastTurnOutputTokens") || Map.get(snap, "outputTokens", 0)
+
     stop_chunk = %{
       "id" => cmpl_id,
       "object" => "chat.completion.chunk",
@@ -452,7 +468,12 @@ defmodule SuperPi.Gateway.Router do
           "delta" => %{},
           "finish_reason" => "stop"
         }
-      ]
+      ],
+      "usage" => %{
+        "prompt_tokens" => prompt_tok,
+        "completion_tokens" => comp_tok,
+        "total_tokens" => prompt_tok + comp_tok
+      }
     }
 
     case chunk(conn, "data: " <> Jason.encode!(stop_chunk) <> "\n\n") do

@@ -28,13 +28,19 @@ defmodule SuperPi.Plugins.ConfirmDestructive do
   def name, do: "Confirm Destructive Operations"
   def description, do: "Blocks catastrophic and destructive operations unless explicitly confirmed"
 
+  @default_guarded_tools ["bash", "sh", "terminal", "run_command", "exec"]
+
   @impl true
   def before_tool(tool_name, args, ctx) do
     config = Map.get(ctx, :config, [])
-    guarded_tools = Keyword.get(config, :tools, ["bash"])
+    guarded_tools = Keyword.get(config, :tools, @default_guarded_tools)
 
     if tool_name in guarded_tools do
-      cmd = Map.get(args, "command") || Map.get(args, :command) || ""
+      cmd =
+        Map.get(args, "command") || Map.get(args, :command) ||
+        Map.get(args, "cmd") || Map.get(args, :cmd) ||
+        Map.get(args, "script") || Map.get(args, :script) || ""
+
       check_command(cmd, config)
     else
       :allow

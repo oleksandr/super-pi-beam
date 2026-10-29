@@ -18,7 +18,14 @@ defmodule SuperPi.TUI.Owl do
     agent = Doc.snapshot("conversation", conversation_id, "pi.agent") || %{}
     usage = Doc.snapshot("conversation", conversation_id, "pi.usage") || %{}
 
-    model = Map.get(agent, "model", "claude-sonnet-4-5")
+    default_model =
+      if SuperPi.AI.GeminiClient.configured?() do
+        "gemini-3-flash-preview"
+      else
+        "claude-sonnet-4-5"
+      end
+
+    model = Map.get(agent, "model", default_model)
     status = Map.get(live, "status", "idle")
     in_tok = Map.get(usage, "inputTokens", 0)
     out_tok = Map.get(usage, "outputTokens", 0)
@@ -79,11 +86,20 @@ defmodule SuperPi.TUI.Owl do
   end
 
   @doc """
-  Starts an interactive session for `conversation_id`.
+  Starts an interactive session for `conversation_id`, supporting pluggable harnesses and extensions.
   """
   def start_session(opts \\ []) do
-    conv = Storage.ensure_root_conversation!(Keyword.get(opts, :agent, %{}))
-    {:ok, pid} = Machine.start_link(conversation_id: conv.id)
+    harness_key = Keyword.get(opts, :harness, "default")
+    harness = SuperPi.Harness.resolve(harness_key)
+
+    agent_opts = Keyword.get(opts, :agent, %{})
+    defaults = harness.agent_defaults()
+    agent_cfg = Map.merge(defaults, agent_opts)
+
+    conv = Storage.ensure_root_conversation!(agent_cfg)
+    extensions = Keyword.get(opts, :extensions, harness.extensions([]))
+
+    {:ok, pid} = Machine.start_link(conversation_id: conv.id, extensions: extensions)
     {conv.id, pid}
   end
 end

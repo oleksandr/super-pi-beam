@@ -26,13 +26,18 @@ defmodule SuperPi.Plugins.ProtectedPaths do
   def name, do: "Protected Paths Shield"
   def description, do: "Blocks modification and inspection of sensitive paths (.env, .git/, credentials)"
 
+  @default_guarded_tools ["write", "edit", "read", "write_file", "edit_file", "read_file"]
+
   @impl true
   def before_tool(tool_name, args, ctx) do
     config = Map.get(ctx, :config, [])
-    guarded_tools = Keyword.get(config, :tools, ["write", "edit", "read"])
+    guarded_tools = Keyword.get(config, :tools, @default_guarded_tools)
 
     if tool_name in guarded_tools do
-      path = Map.get(args, "path") || Map.get(args, :path) || ""
+      path =
+        Map.get(args, "path") || Map.get(args, :path) ||
+        Map.get(args, "file_path") || Map.get(args, :file_path) || ""
+
       check_path(tool_name, path, config)
     else
       :allow
