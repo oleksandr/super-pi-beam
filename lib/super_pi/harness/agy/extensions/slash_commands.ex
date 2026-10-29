@@ -30,13 +30,16 @@ defmodule SuperPi.Harness.AGY.Extensions.SlashCommands do
           :handled
 
         String.starts_with?(trimmed, "/mode ") ->
-          new_mode = trimmed |> String.replace_prefix("/mode ", "") |> String.trim()
-          Storage.configure_agent!(ctx.conversation_id, %{"executionMode" => new_mode})
+          new_mode = trimmed |> String.replace_prefix("/mode ", "") |> String.trim() |> String.downcase()
+
+          if new_mode in ["auto", "accept-edits", "plan"] do
+            Storage.configure_agent!(ctx.conversation_id, %{"executionMode" => new_mode})
+          end
+
           :handled
 
         String.starts_with?(trimmed, "/plan ") ->
           rest = trimmed |> String.replace_prefix("/plan ", "") |> String.trim()
-          Storage.configure_agent!(ctx.conversation_id, %{"executionMode" => "plan"})
 
           expanded =
             "[MODE: PLAN] Create a clear, step-by-step implementation plan with verification gates before making any changes:\n" <>
@@ -46,6 +49,7 @@ defmodule SuperPi.Harness.AGY.Extensions.SlashCommands do
 
         String.starts_with?(trimmed, "/goal ") ->
           rest = trimmed |> String.replace_prefix("/goal ", "") |> String.trim()
+          Storage.configure_agent!(ctx.conversation_id, %{"goalVerification" => true, "goal" => rest})
 
           expanded =
             "[MODE: GOAL] Execute this task thoroughly until the goal is 100% verified and complete:\n" <>
