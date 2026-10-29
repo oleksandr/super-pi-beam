@@ -22,7 +22,6 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
     Todo
   }
 
-  @moduletag :known_bug
 
   # --- helpers ---
 

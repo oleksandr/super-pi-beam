@@ -23,7 +23,7 @@ defmodule SuperPi.Plugins.AutoCommit do
   @impl true
   def after_run(summary, ctx) do
     config = Map.get(ctx, :config, [])
-    enabled? = Keyword.get(config, :enabled, true)
+    enabled? = get_config(config, :enabled, true)
 
     if enabled? do
       perform_commit(summary, ctx, config)
@@ -34,30 +34,49 @@ defmodule SuperPi.Plugins.AutoCommit do
 
   defp perform_commit(summary, ctx, config) do
     ws = Map.get(ctx, :workspace_root, File.cwd!())
-    prefix = Keyword.get(config, :commit_prefix, "[super-pi]")
+    prefix = get_config(config, :commit_prefix, "[super-pi]")
 
+    if merge_in_progress?(ws) do
+      Logger.debug("[AutoCommit] Merge in progress with unmerged files; skipping auto-commit")
+      :accept
+    else
+      do_perform_commit(ws, summary, prefix)
+    end
+  rescue
+    _ -> :accept
+  end
+
+  defp merge_in_progress?(ws) do
+    File.exists?(Path.join(ws, ".git/MERGE_HEAD")) or
+      case System.cmd("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], cd: ws, stderr_to_stdout: true) do
+        {_, 0} -> true
+        _ -> false
+      end
+  end
+
+  defp do_perform_commit(ws, summary, prefix) do
     case System.cmd("git", ["status", "--porcelain"], cd: ws, stderr_to_stdout: true) do
       {status, 0} when byte_size(status) > 0 ->
-        # Working tree has modifications; stage and commit
+        # Stage all modifications
         System.cmd("git", ["add", "-A"], cd: ws)
 
-        msg =
-          case Map.get(summary, :last_assistant_text) do
-            text when is_binary(text) and byte_size(text) > 0 ->
-              first_line = text |> String.split("\n", parts: 2) |> hd() |> String.trim()
-              trimmed = String.slice(first_line, 0, 72)
-              "#{prefix} #{trimmed}"
+        # Unstage sensitive files like .env so they are never auto-committed
+        System.cmd("git", ["reset", "-q", "HEAD", "--", ".env", ".env.*"], cd: ws)
 
-            _ ->
-              "#{prefix} Agent automated modifications"
-          end
+        case System.cmd("git", ["diff", "--cached", "--quiet"], cd: ws) do
+          {_, 1} ->
+            msg = commit_message(summary, prefix)
 
-        case System.cmd("git", ["commit", "-m", msg], cd: ws, stderr_to_stdout: true) do
-          {_out, 0} ->
-            Logger.info("[AutoCommit] Successfully auto-committed changes: #{msg}")
+            case System.cmd("git", ["commit", "-m", msg], cd: ws, stderr_to_stdout: true) do
+              {_out, 0} ->
+                Logger.info("[AutoCommit] Successfully auto-committed changes: #{msg}")
 
-          {err, _} ->
-            Logger.debug("[AutoCommit] Commit skipped or failed: #{String.trim(err)}")
+              {err, _} ->
+                Logger.debug("[AutoCommit] Commit skipped or failed: #{String.trim(err)}")
+            end
+
+          _ ->
+            :ok
         end
 
       _ ->
@@ -65,7 +84,59 @@ defmodule SuperPi.Plugins.AutoCommit do
     end
 
     :accept
-  rescue
-    _ -> :accept
   end
+
+  defp commit_message(summary, prefix) do
+    assistant_text =
+      Map.get(summary, :last_assistant_text) ||
+        extract_last_message_text(summary)
+
+    case assistant_text do
+      text when is_binary(text) and byte_size(text) > 0 ->
+        first_line = text |> String.split("\n", parts: 2) |> hd() |> String.trim()
+        trimmed = String.slice(first_line, 0, 72)
+        "#{prefix} #{trimmed}"
+
+      _ ->
+        "#{prefix} Agent automated modifications"
+    end
+  end
+
+  defp extract_last_message_text(summary) do
+    case Map.get(summary, :last_message) || Map.get(summary, "last_message") do
+      %{"content" => blocks} when is_list(blocks) ->
+        Enum.find_value(blocks, fn
+          %{"type" => "text", "text" => t} -> t
+          %{type: "text", text: t} -> t
+          _ -> nil
+        end)
+
+      %{content: blocks} when is_list(blocks) ->
+        Enum.find_value(blocks, fn
+          %{"type" => "text", "text" => t} -> t
+          %{type: "text", text: t} -> t
+          _ -> nil
+        end)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp get_config(config, key, default) when is_map(config) do
+    case Map.fetch(config, key) do
+      {:ok, val} -> val
+      :error ->
+        case Map.fetch(config, to_string(key)) do
+          {:ok, val} -> val
+          :error -> default
+        end
+    end
+  end
+
+  defp get_config(config, key, default) when is_list(config) do
+    Keyword.get(config, key, default)
+  end
+
+  defp get_config(_config, _key, default), do: default
 end

@@ -61,26 +61,47 @@ defmodule SuperPi.Plugins.Questionnaire do
 
   @impl true
   def wrap_tool("ask_question", args, _next, ctx) do
-    questions = Map.get(args, "questions") || Map.get(args, :questions) || []
+    args = if is_map(args), do: args, else: %{}
+
+    questions =
+      case Map.get(args, "questions") || Map.get(args, :questions) do
+        list when is_list(list) -> list
+        item when is_map(item) -> [item]
+        str when is_binary(str) -> [%{"question" => str}]
+        _ -> []
+      end
+
     answers_override = Map.get(ctx, :questionnaire_answers) || %{}
 
     answers =
-      Enum.map(questions, fn q ->
-        q_text = Map.get(q, "question") || Map.get(q, :question) || ""
-        options = Map.get(q, "options") || Map.get(q, :options) || []
+      Enum.map(questions, fn
+        q when is_map(q) ->
+          q_text = Map.get(q, "question") || Map.get(q, :question) || ""
 
-        # If caller injected an answer override in context (e.g. from UI respondent), use it;
-        # otherwise pick recommended (first) option
-        selected =
-          case Map.get(answers_override, q_text) do
-            val when not is_nil(val) -> val
-            _ -> List.first(options) || "No answer provided"
-          end
+          options =
+            case Map.get(q, "options") || Map.get(q, :options) do
+              list when is_list(list) -> list
+              str when is_binary(str) -> [str]
+              _ -> []
+            end
 
-        %{
-          "question" => q_text,
-          "selected" => selected
-        }
+          selected =
+            case Map.get(answers_override, q_text) do
+              val when not is_nil(val) -> val
+              _ -> List.first(options) || "No answer provided"
+            end
+
+          %{
+            "question" => q_text,
+            "selected" => selected
+          }
+
+        other ->
+          q_text = to_string(other)
+          %{
+            "question" => q_text,
+            "selected" => Map.get(answers_override, q_text, "No answer provided")
+          }
       end)
 
     rendered =

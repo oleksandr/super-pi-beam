@@ -7,16 +7,21 @@ defmodule SuperPi.Plugins.ConfirmDestructive do
 
   ### Configuration Options (`ctx[:config]` or harness tuple):
   - `:blocked_patterns` - List of extra regexes or command substrings to block.
-  - `:tools` - Tools to guard (default: `["bash"]`).
+  - `:tools` - Tools to guard (default: all shell execution tools).
   """
 
   use SuperPi.Extension
   require Logger
 
   @destructive_patterns [
-    ~r/\brm\s+-(?:r[fF]|[fF]r)\b/,
-    ~r/\bgit\s+reset\s+--hard\b/,
-    ~r/\bgit\s+clean\s+-(?:f[dD]|[dD]f)\b/,
+    ~r/\brm\s+.*-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*(?:\s|$)/i,
+    ~r/\brm\s+.*-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*(?:\s|$)/i,
+    ~r/\brm\s+.*-(?:r\s+-f|f\s+-r)\b/i,
+    ~r/\brm\s+.*--(?:recursive\s+--force|force\s+--recursive)\b/i,
+    ~r/\bgit\s+clean\s+-[a-zA-Z]*f[a-zA-Z]*\b/i,
+    ~r/\bgit\s+reset\s+--hard\b/i,
+    ~r/\bgit\s+push\s+.*(?:--force|-f\b)/i,
+    ~r/\bfind\b.*-delete\b/i,
     ~r/\bDROP\s+(?:TABLE|DATABASE)\b/i,
     ~r/\bTRUNCATE\s+TABLE\b/i
   ]
@@ -32,8 +37,9 @@ defmodule SuperPi.Plugins.ConfirmDestructive do
 
   @impl true
   def before_tool(tool_name, args, ctx) do
+    args = if is_map(args), do: args, else: %{}
     config = Map.get(ctx, :config, [])
-    guarded_tools = Keyword.get(config, :tools, @default_guarded_tools)
+    guarded_tools = get_config(config, :tools, @default_guarded_tools)
 
     if tool_name in guarded_tools do
       cmd =
@@ -61,25 +67,38 @@ defmodule SuperPi.Plugins.ConfirmDestructive do
     end
   end
 
-  defp check_command(_, _config), do: :allow
+  defp check_command(_cmd, _config), do: :allow
 
-  defp effective_patterns(opts) do
+  defp effective_patterns(config) do
     custom =
-      case opts do
-        list when is_list(list) ->
-          if Keyword.keyword?(list) do
-            Keyword.get(list, :blocked_patterns, [])
-          else
-            list
-          end
+      cond do
+        is_list(config) and Keyword.keyword?(config) ->
+          Keyword.get(config, :blocked_patterns, [])
 
-        map when is_map(map) ->
-          Map.get(map, :blocked_patterns, [])
+        is_map(config) ->
+          Map.get(config, :blocked_patterns, Map.get(config, "blocked_patterns", []))
 
-        _ ->
+        true ->
           []
       end
 
     @destructive_patterns ++ custom
   end
+
+  defp get_config(config, key, default) when is_map(config) do
+    case Map.fetch(config, key) do
+      {:ok, val} -> val
+      :error ->
+        case Map.fetch(config, to_string(key)) do
+          {:ok, val} -> val
+          :error -> default
+        end
+    end
+  end
+
+  defp get_config(config, key, default) when is_list(config) do
+    Keyword.get(config, key, default)
+  end
+
+  defp get_config(_config, _key, default), do: default
 end

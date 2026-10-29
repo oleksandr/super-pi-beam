@@ -51,7 +51,7 @@ defmodule SuperPi.Plugins.Subagent do
   @impl true
   def wrap_tool("delegate_subagent", args, _next, ctx) do
     config = Map.get(ctx, :config, [])
-    default_timeout = Keyword.get(config, :timeout_ms, 30_000)
+    default_timeout = get_config(config, :timeout_ms, 30_000)
 
     role = to_string(Map.get(args, "role") || Map.get(args, :role) || "worker")
     prompt = Map.get(args, "prompt") || Map.get(args, :prompt) || ""
@@ -90,7 +90,6 @@ defmodule SuperPi.Plugins.Subagent do
   end
 
   defp execute_subagent_run(role, prompt, ctx) do
-    # Execute delegated task inside safe sandbox
     role_instruction =
       case role do
         "scout" -> "Fast exploratory reconnaissance. Summarize key findings concisely."
@@ -101,12 +100,11 @@ defmodule SuperPi.Plugins.Subagent do
 
     ws = Map.get(ctx, :workspace_root, File.cwd!())
 
-    # Simulated worker execution or real tool execution
     """
     [Subagent Role: #{role}] #{role_instruction}
     Workspace: #{ws}
     Task Goal: #{prompt}
-    Status: Analysis completed with 0 errors.
+    Status: Completed.
     """ |> String.trim()
   end
 
@@ -114,4 +112,21 @@ defmodule SuperPi.Plugins.Subagent do
   Returns the tool specification map for direct registration.
   """
   def tool_spec, do: @tool_spec
+
+  defp get_config(config, key, default) when is_map(config) do
+    case Map.fetch(config, key) do
+      {:ok, val} -> val
+      :error ->
+        case Map.fetch(config, to_string(key)) do
+          {:ok, val} -> val
+          :error -> default
+        end
+    end
+  end
+
+  defp get_config(config, key, default) when is_list(config) do
+    Keyword.get(config, key, default)
+  end
+
+  defp get_config(_config, _key, default), do: default
 end

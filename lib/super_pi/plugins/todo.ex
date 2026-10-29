@@ -50,6 +50,7 @@ defmodule SuperPi.Plugins.Todo do
 
   @impl true
   def wrap_tool("todo", args, _next, ctx) do
+    args = if is_map(args), do: args, else: %{}
     conv_id = Map.get(ctx, :conversation_id)
     action = to_string(Map.get(args, "action") || Map.get(args, :action) || "list")
     text = Map.get(args, "text") || Map.get(args, :text)
@@ -57,47 +58,63 @@ defmodule SuperPi.Plugins.Todo do
 
     todos = get_todos(conv_id)
 
-    {updated_todos, msg} =
-      case action do
-        "add" when is_binary(text) and byte_size(text) > 0 ->
-          next_id = (Enum.map(todos, & &1["id"]) |> Enum.max(fn -> 0 end)) + 1
-          new_item = %{"id" => next_id, "text" => text, "done" => false}
-          list = todos ++ [new_item]
-          {list, "Added todo ##{next_id}: #{text}"}
+    case action do
+      "add" when is_binary(text) and byte_size(text) > 0 ->
+        next_id = (Enum.map(todos, & &1["id"]) |> Enum.max(fn -> 0 end)) + 1
+        new_item = %{"id" => next_id, "text" => text, "done" => false}
+        list = todos ++ [new_item]
+        save_todos(conv_id, list)
 
-        "toggle" when is_integer(item_id) ->
-          list =
-            Enum.map(todos, fn item ->
-              if item["id"] == item_id do
-                Map.update(item, "done", true, &(not &1))
-              else
-                item
-              end
-            end)
+        %{
+          "output" => "Added todo ##{next_id}: #{text}",
+          "structured_output" => %{"todos" => list, "action" => action},
+          "details" => %{"action" => action, "count" => length(list)}
+        }
 
-          status =
-            case Enum.find(list, &(&1["id"] == item_id)) do
-              %{"done" => true} -> "completed"
-              _ -> "pending"
-            end
+      "toggle" ->
+        case Enum.find(todos, &(&1["id"] == item_id)) do
+          nil ->
+            %{
+              "output" => "Todo item ##{item_id} not found",
+              "structured_output" => %{"todos" => todos, "action" => action},
+              "details" => %{"action" => action, "count" => length(todos)},
+              "is_error" => true
+            }
 
-          {list, "Toggled todo ##{item_id} to #{status}"}
+          item ->
+            list =
+              Enum.map(todos, fn i ->
+                if i["id"] == item_id, do: Map.update(i, "done", true, &(not &1)), else: i
+              end)
 
-        "clear" ->
-          list = Enum.filter(todos, &(&1["done"] == false))
-          {list, "Cleared completed todos (remaining: #{length(list)})"}
+            new_done = not Map.get(item, "done", false)
+            status = if new_done, do: "completed", else: "pending"
+            save_todos(conv_id, list)
 
-        _ ->
-          {todos, "Current checklist:\n" <> render_checklist(todos)}
-      end
+            %{
+              "output" => "Toggled todo ##{item_id} to #{status}",
+              "structured_output" => %{"todos" => list, "action" => action},
+              "details" => %{"action" => action, "count" => length(list)}
+            }
+        end
 
-    save_todos(conv_id, updated_todos)
+      "clear" ->
+        list = Enum.filter(todos, &(&1["done"] == false))
+        save_todos(conv_id, list)
 
-    %{
-      "output" => msg,
-      "structured_output" => %{"todos" => updated_todos, "action" => action},
-      "details" => %{"action" => action, "count" => length(updated_todos)}
-    }
+        %{
+          "output" => "Cleared completed todos (remaining: #{length(list)})",
+          "structured_output" => %{"todos" => list, "action" => action},
+          "details" => %{"action" => action, "count" => length(list)}
+        }
+
+      _ ->
+        %{
+          "output" => "Current checklist:\n" <> render_checklist(todos),
+          "structured_output" => %{"todos" => todos, "action" => action},
+          "details" => %{"action" => action, "count" => length(todos)}
+        }
+    end
   end
 
   def wrap_tool(_name, args, next, _ctx) do

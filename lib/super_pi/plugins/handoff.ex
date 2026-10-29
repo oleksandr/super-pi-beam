@@ -50,9 +50,17 @@ defmodule SuperPi.Plugins.Handoff do
 
   @impl true
   def wrap_tool("handoff", args, _next, ctx) do
+    args = if is_map(args), do: args, else: %{}
     goal = Map.get(args, "goal") || Map.get(args, :goal) || ""
     summary = Map.get(args, "summary") || Map.get(args, :summary) || ""
-    files = Map.get(args, "files") || Map.get(args, :files) || []
+
+    files =
+      case Map.get(args, "files") || Map.get(args, :files) do
+        list when is_list(list) -> list
+        str when is_binary(str) -> [str]
+        _ -> []
+      end
+
     parent_conv_id = Map.get(ctx, :conversation_id)
 
     files_bullet =

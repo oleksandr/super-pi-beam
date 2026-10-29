@@ -16,8 +16,8 @@ defmodule SuperPi.Harness.Autonomous do
   alias SuperPi.Plugins
 
   @declarative_plugins [
-    {Plugins.ProtectedPaths, [tools: ["write", "edit", "read"]]},
-    {Plugins.ConfirmDestructive, [tools: ["bash"]]},
+    {Plugins.ProtectedPaths, [tools: ["write", "edit", "read", "write_file", "edit_file", "read_file", "grep", "search_files", "ls", "find", "bash", "sh", "terminal", "run_command", "exec"]]},
+    {Plugins.ConfirmDestructive, [tools: ["bash", "sh", "terminal", "run_command", "exec"]]},
     Plugins.GitCheckpoint,
     {Plugins.AutoCommit, [commit_prefix: "[super-pi-auto]", enabled: true]},
     {Plugins.JevRouter, [planning_model: "gemini-3.1-pro-preview", implementation_model: "gemini-3-flash-preview"]},
