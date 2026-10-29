@@ -37,13 +37,13 @@
 
 ## Prerequisites & Setup
 
-This polyglot monorepo uses [`mise`](https://mise.jdx.dev/) to pin **Erlang/OTP 28.4.2**, **Elixir 1.20.4-otp-28**, **Rust 1.99.1**, and **Go 1.27.2** (see `mise.toml` and `Makefile`).
+This repository uses [`mise`](https://mise.jdx.dev/) to pin **Erlang/OTP 28.4.2** and **Elixir 1.20.4-otp-28** (see `mise.toml` and `Makefile`).
 
 ```bash
-# Build both the Elixir BEAM harness and the Go Bubble Tea TUI (bin/agy-tui)
+# Compile the Elixir BEAM application and fetch dependencies
 make build
 
-# Run the full polyglot test suite (Elixir ExUnitProperties + Go TUI tests)
+# Run the full test suite (Elixir ExUnitProperties property tests + unit tests)
 make test
 ```
 
@@ -80,6 +80,10 @@ In this mode, OpenCode treats Super-Pi-BEAM as an upstream AI provider. When Ope
              "name": "Super-Pi Autonomous Agent",
              "limit": { "context": 128000, "output": 8192 }
            },
+           "super-pi-agy": {
+             "name": "Super-Pi Antigravity Harness",
+             "limit": { "context": 128000, "output": 8192 }
+           },
            "super-pi-planner": {
              "name": "Super-Pi Architecture Planner",
              "limit": { "context": 128000, "output": 8192 }
@@ -98,8 +102,11 @@ In this mode, OpenCode treats Super-Pi-BEAM as an upstream AI provider. When Ope
    # List available models
    opencode models super-pi
 
-   # Run prompt through Super-Pi agent
+   # Run prompt through default Super-Pi agent
    opencode run "What is 15 plus 27?" --model super-pi/super-pi-agent
+
+   # Run prompt through Antigravity harness (with skills, rules, and hooks)
+   opencode run "Audit the codebase rules" --model super-pi/super-pi-agy
    ```
 4. **Inspect Durable Chord v2 Sessions**:
    ```bash
@@ -130,25 +137,57 @@ opencode mcp list
 
 ---
 
-## Experimental Showcase: `super-agy` Antigravity CLI & Go Bubble Tea TUI
+## Pluggable Harness Architecture (`SuperPi.Harness`)
 
-For developers interested in the Antigravity (`agy`) terminal experience, `bin/super-agy` provides an experimental showcase. It pairs a reverse-engineered Go 1.27 **Bubble Tea + Lipgloss + Glamour** TUI (`clients/agy-tui`) with `SuperPi.RPC.Server`:
+Super-Pi-BEAM features a modular, pluggable harness system. Instead of hardcoding persona behaviors into the core engine or coupling them to specific UI clients, all personas implement the `@behaviour SuperPi.Harness` contract:
 
-- Custom Super-Pi-BEAM Greek Pi hero logo with Erlang-to-BEAM color gradient.
-- Exact `agy` inline layout with braille spinners (`⣷ ⣯ ⣟ ⡿ ⢿ ⣻ ⣽ ⣾`), live activity status, and turn cancellation (`esc`).
-- Full viewport mouse wheel and keyboard scrolling (`Shift+Up/Down`, `PageUp/Down`, `Ctrl+Home/End`) with floating position indicators.
-- 5-tier customization discovery (`Rules`, `Skills`, `HooksJson`, `Permissions`, `SlashCommands`).
+```elixir
+defmodule SuperPi.Harness do
+  @callback id() :: String.t()
+  @callback name() :: String.t()
+  @callback description() :: String.t()
+  @callback extensions(keyword()) :: list(module())
+  @callback agent_defaults(keyword()) :: map()
+end
+```
+
+### Built-in Harnesses
+
+- **`SuperPi.Harness.Default` (`super-pi-agent`)**:
+  Clean, unopinionated autonomous coding agent with full workspace access (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `tool_search`) and normative 10-rule context derivation.
+- **`SuperPi.Harness.AGY` (`super-pi-agy`)**:
+  Antigravity workflow harness. Dynamically loads the 5-tier customization extensions:
+  - `Rules`: Hierarchical rule ingestion (`GEMINI.md`, `AGENTS.md`).
+  - `Skills`: Modular skill discovery and progressive disclosure.
+  - `HooksJson`: Lifecycle event triggers and pre-tool execution overrides.
+  - `Permissions`: Workspace boundary and tool security policies.
+  - `SlashCommands`: Client-facing interactive slash commands.
+- **`SuperPi.Harness.Planner` (`super-pi-planner`)**:
+  Read-only architectural planning specialist. Restricts tool exposure to read-only tools and enforces planning prompts.
+
+### Listing Harnesses via CLI
 
 ```bash
-# Launch interactive experimental TUI
-./bin/super-agy
-
-# Launch with initial prompt
-./bin/super-agy -i "Explain the 10 context derivation rules in this repo"
-
-# Run single prompt non-interactively
-./bin/super-agy -p "What skills are available in this workspace?"
+bin/super-pi harness list
 ```
+
+Output:
+```text
+Available Super-Pi Harnesses:
+  * super-pi-agent    Super-Pi Autonomous Agent (Default) - Pure, unopinionated agent with standard tools and 10-rule context derivation
+  * super-pi-agy      Super-Pi Antigravity Harness - Antigravity workflow harness loading Rules, Skills, Hooks, Permissions, and Slash Commands
+  * super-pi-planner  Super-Pi Architecture Planner - Read-only architecture planner with restricted tool exposure
+```
+
+### Adding a Custom Harness
+
+To add a new domain persona (e.g., security auditor, documentation bot, DevOps engineer):
+1. Create `lib/super_pi/harness/my_persona.ex` implementing `@behaviour SuperPi.Harness`.
+2. Register its identifier in `SuperPi.Harness.resolve/1` (or pass it via CLI/config).
+3. The new persona is immediately accessible in OpenCode, the HTTP Gateway, the JSON-RPC server, and the CLI with zero core engine changes.
+
+> [!NOTE]
+> Client user interfaces (such as web UIs, IDE plugins, or previous Go Bubble Tea experiments) connect decoupled over HTTP Gateway, MCP, or JSON-RPC 2.0. The repository remains pure BEAM.
 
 ---
 
@@ -196,6 +235,7 @@ MIX_ENV=test mise exec -- mix test --trace
 lib/
 ├── super_pi.ex
 ├── super_pi/
+│   ├── agy/                       # Antigravity customization discovery & extensions
 │   ├── ai/
 │   │   ├── gemini_client.ex       # Live Google Gemini SSE streaming & tool-calling client
 │   │   ├── stream_normalizer.ex   # Multi-provider SSE normalizer & partial JSON repair
@@ -218,6 +258,12 @@ lib/
 │   │   ├── local.ex               # Local filesystem & gitignore-aware scanner
 │   │   └── sandbox_runner.ex      # Unlinked Task supervisor with :max_heap_size & 4 MiB spill
 │   ├── extension.ex               # Unified 12-hook extension behaviour & pipeline
+│   ├── gateway/
+│   │   └── router.ex              # OpenAI-compatible HTTP Gateway with SSE streaming
+│   ├── harness/                   # Pluggable harness personas (Default, AGY, Planner)
+│   ├── harness.ex                 # SuperPi.Harness behaviour contract & resolver
+│   ├── mcp/
+│   │   └── server.ex              # Model Context Protocol stdio server
 │   ├── repo.ex                    # Runtime-switchable SQLite3 / Postgrex Ecto repo facade
 │   ├── rpc/
 │   │   └── server.ex              # JSON-RPC 2.0 server with K=2 ack-clocked backpressure

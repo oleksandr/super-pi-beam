@@ -43,10 +43,8 @@ defmodule SuperPi.Durable.Storage do
   Allocates and returns the next monotonic sequence number (`Seq`).
   """
   def next_seq! do
-    case Repo.query!("SELECT seq FROM record_ids WHERE name = 'global_seq'").rows do
-      [[current]] ->
-        next = current + 1
-        Repo.query!("UPDATE record_ids SET seq = ? WHERE name = 'global_seq'", [next])
+    case Repo.query!("UPDATE record_ids SET seq = seq + 1 WHERE name = 'global_seq' RETURNING seq").rows do
+      [[next]] ->
         next
 
       [] ->
@@ -55,11 +53,10 @@ defmodule SuperPi.Durable.Storage do
     end
   rescue
     _ ->
-      # PostgreSQL parameter placeholder fallback ($1)
       case Repo.query!("SELECT seq FROM record_ids WHERE name = 'global_seq'").rows do
         [[current]] ->
           next = current + 1
-          Repo.query!("UPDATE record_ids SET seq = $1 WHERE name = 'global_seq'", [next])
+          Repo.query!("UPDATE record_ids SET seq = ? WHERE name = 'global_seq'", [next])
           next
 
         [] ->

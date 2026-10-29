@@ -5,7 +5,7 @@ config :super_pi, SuperPi.Repo.SQLite,
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: 10,
   journal_mode: :wal,
-  busy_timeout: 5000
+  busy_timeout: 30000
 
 config :super_pi, Oban, testing: :manual
 

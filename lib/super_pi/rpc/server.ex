@@ -240,23 +240,12 @@ defmodule SuperPi.RPC.Server do
   # --- Method Dispatch ---
 
   defp dispatch_method("session.open", params, id, client_state) do
-    base_agent = Map.get(params, "agent", %{})
+    harness_key = Map.get(params, "harness") || Map.get(params, "preset", "default")
+    harness = SuperPi.Harness.resolve(harness_key)
 
-    agent_cfg =
-      if Map.get(params, "preset") == "agy" do
-        Map.merge(
-          %{
-            "model" => "gemini-3-flash-preview",
-            "effort" => "medium",
-            "executionMode" => "auto",
-            "workspacePaths" => [File.cwd!()],
-            "tools" => SuperPi.Tools.active_llm_tools()
-          },
-          base_agent
-        )
-      else
-        base_agent
-      end
+    base_agent = Map.get(params, "agent", %{})
+    defaults = harness.agent_defaults(model: Map.get(base_agent, "model"))
+    agent_cfg = Map.merge(defaults, base_agent)
 
     conv =
       case Map.get(params, "conversation_id") do
@@ -268,7 +257,7 @@ defmodule SuperPi.RPC.Server do
           Repo.get!(Conversation, conv_id)
       end
 
-    extensions = resolve_extensions(params)
+    extensions = harness.extensions([])
     ensure_machine_started!(conv.id, extensions)
 
     reply =
@@ -497,11 +486,10 @@ defmodule SuperPi.RPC.Server do
     end
   end
 
-  defp resolve_extensions(%{"preset" => "agy"}) do
-    SuperPi.AGY.CLI.default_extensions()
+  defp resolve_extensions(params) do
+    key = Map.get(params, "harness") || Map.get(params, "preset")
+    SuperPi.Harness.resolve(key).extensions([])
   end
-
-  defp resolve_extensions(_params), do: []
 
   defp jsonrpc_result(id, result) do
     %{"jsonrpc" => "2.0", "id" => id, "result" => result}

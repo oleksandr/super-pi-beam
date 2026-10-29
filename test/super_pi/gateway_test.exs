@@ -44,8 +44,27 @@ defmodule SuperPi.GatewayTest do
 
     model_ids = Enum.map(body["data"], & &1["id"])
     assert "super-pi-agent" in model_ids
+    assert "super-pi-agy" in model_ids
     assert "super-pi-planner" in model_ids
-    assert "super-pi-fast" in model_ids
+  end
+
+  test "POST /v1/chat/completions with super-pi-agy loads AGY extensions" do
+    payload = %{
+      "model" => "super-pi-agy",
+      "messages" => [
+        %{"role" => "user", "content" => "Hello AGY"}
+      ],
+      "stream" => false
+    }
+
+    conn =
+      conn(:post, "/v1/chat/completions", Jason.encode!(payload))
+      |> put_req_header("content-type", "application/json")
+      |> Router.call(@opts)
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+    assert body["object"] == "chat.completion"
   end
 
   test "POST /v1/chat/completions synchronous non-streaming" do

@@ -12,6 +12,7 @@ defmodule SuperPi.Gateway.Router do
   alias SuperPi.Conversation.Machine
   alias SuperPi.Durable.Storage
   alias SuperPi.Durable.Schemas.Conversation
+  alias SuperPi.Harness
   alias SuperPi.Repo
 
   plug Plug.Logger, log: :debug
@@ -38,35 +39,20 @@ defmodule SuperPi.Gateway.Router do
   get "/v1/models" do
     now = System.system_time(:second)
 
-    models = [
-      %{
-        "id" => "super-pi-agent",
-        "object" => "model",
-        "created" => now,
-        "owned_by" => "super-pi",
-        "permission" => [],
-        "root" => "super-pi-agent",
-        "parent" => nil
-      },
-      %{
-        "id" => "super-pi-planner",
-        "object" => "model",
-        "created" => now,
-        "owned_by" => "super-pi",
-        "permission" => [],
-        "root" => "super-pi-planner",
-        "parent" => nil
-      },
-      %{
-        "id" => "super-pi-fast",
-        "object" => "model",
-        "created" => now,
-        "owned_by" => "super-pi",
-        "permission" => [],
-        "root" => "super-pi-fast",
-        "parent" => nil
-      }
-    ]
+    models =
+      Harness.list()
+      |> Enum.map(fn mod ->
+        %{
+          "id" => mod.id(),
+          "object" => "model",
+          "created" => now,
+          "owned_by" => "super-pi",
+          "permission" => [],
+          "root" => mod.id(),
+          "parent" => nil,
+          "description" => mod.description()
+        }
+      end)
 
     send_json(conn, 200, %{"object" => "list", "data" => models})
   end
@@ -77,13 +63,17 @@ defmodule SuperPi.Gateway.Router do
     messages = Map.get(params, "messages", [])
     stream? = Map.get(params, "stream", false)
 
-    Logger.info("[Gateway] 📥 Received POST /v1/chat/completions | model: #{model} | stream: #{stream?} | messages: #{length(messages)}")
+    harness = Harness.resolve(model)
+
+    Logger.info("[Gateway] 📥 Received POST /v1/chat/completions | model: #{model} (harness: #{harness.id()}) | stream: #{stream?} | messages: #{length(messages)}")
 
     # 1. Resolve or create durable conversation
     {conv_id, new_session?} = resolve_conversation(conn, params)
 
-    # 2. Extract system prompt and configure agent profile
-    agent_cfg = build_agent_config(model, messages)
+    # 2. Extract system prompt and configure agent profile via resolved harness
+    system_sections = extract_system_sections(messages)
+    agent_cfg = harness.agent_defaults(model: model, system_sections: system_sections)
+
     if new_session? do
       Storage.configure_agent!(conv_id, agent_cfg)
       seed_prior_messages(conv_id, messages)
@@ -100,8 +90,8 @@ defmodule SuperPi.Gateway.Router do
 
     Logger.info("[Gateway] 💬 Active prompt for ##{conv_id}: #{inspect(prompt_preview)}")
 
-    # 4. Start conversation machine if needed
-    extensions = SuperPi.AGY.CLI.default_extensions()
+    # 4. Start conversation machine with harness extensions
+    extensions = harness.extensions([])
     pid = ensure_machine_started!(conv_id, extensions)
 
     # 5. Handle Streaming vs Non-Streaming
@@ -191,32 +181,17 @@ defmodule SuperPi.Gateway.Router do
     end
   end
 
-  defp build_agent_config(model, messages) do
-    system_sections =
-      messages
-      |> Enum.filter(fn m -> Map.get(m, "role") == "system" end)
-      |> Enum.with_index(1)
-      |> Enum.map(fn {m, idx} ->
-        content = extract_content_text(Map.get(m, "content", ""))
-        %{"id" => "system_#{idx}", "content" => content}
-      end)
-
-    base_sections =
-      if system_sections == [] do
-        [%{"id" => "core", "content" => "You are Super-Pi-BEAM, an autonomous durable AI agent."}]
-      else
-        system_sections
-      end
-
-    %{
-      "model" => model,
-      "effort" => "medium",
-      "executionMode" => "auto",
-      "workspacePaths" => [File.cwd!()],
-      "tools" => SuperPi.Tools.active_llm_tools(),
-      "systemSections" => base_sections
-    }
+  defp extract_system_sections(messages) when is_list(messages) do
+    messages
+    |> Enum.filter(fn m -> Map.get(m, "role") == "system" end)
+    |> Enum.with_index(1)
+    |> Enum.map(fn {m, idx} ->
+      content = extract_content_text(Map.get(m, "content", ""))
+      %{"id" => "system_#{idx}", "content" => content}
+    end)
   end
+
+  defp extract_system_sections(_), do: []
 
   defp seed_prior_messages(conv_id, messages) when is_list(messages) and length(messages) > 1 do
     # All messages except the last user turn are recorded as prior conversational context
