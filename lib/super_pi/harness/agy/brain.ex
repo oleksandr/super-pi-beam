@@ -39,8 +39,11 @@ defmodule SuperPi.Harness.AGY.Brain do
       end)
       |> Enum.unzip()
 
-    File.write!(compact_path, Enum.join(compact_lines, "\n") <> "\n")
-    File.write!(full_path, Enum.join(full_lines, "\n") <> "\n")
+    compact_content = if compact_lines == [], do: "", else: Enum.join(compact_lines, "\n") <> "\n"
+    full_content = if full_lines == [], do: "", else: Enum.join(full_lines, "\n") <> "\n"
+
+    File.write!(compact_path, compact_content)
+    File.write!(full_path, full_content)
 
     %{compact_path: compact_path, full_path: full_path, step_count: length(visible)}
   end
@@ -49,13 +52,30 @@ defmodule SuperPi.Harness.AGY.Brain do
 
   def mcp_list(opts \\ []) do
     cfg_path = mcp_config_path(opts)
-    servers = read_json_map(cfg_path)["mcpServers"] || %{}
+    raw_servers = read_json_map(cfg_path)["mcpServers"]
+    servers = if is_map(raw_servers), do: raw_servers, else: %{}
 
-    Enum.map(servers, fn {name, spec} ->
-      type = if Map.has_key?(spec, "url") or Map.has_key?(spec, "serverUrl"), do: "http", else: "stdio"
-      status = if Map.get(spec, "disabled", false) == true, do: "disabled", else: "enabled"
-      target = Map.get(spec, "url") || Map.get(spec, "serverUrl") || Enum.join([Map.get(spec, "command", "") | Map.get(spec, "args", [])], " ")
-      %{name: name, type: type, status: status, target: String.trim(target)}
+    servers
+    |> Enum.map(fn
+      {name, spec} when is_map(spec) ->
+        type = if Map.has_key?(spec, "url") or Map.has_key?(spec, "serverUrl"), do: "http", else: "stdio"
+        status = if Map.get(spec, "disabled", false) == true, do: "disabled", else: "enabled"
+
+        args_list =
+          case Map.get(spec, "args") do
+            list when is_list(list) -> Enum.map(list, &to_string/1)
+            str when is_binary(str) and str != "" -> [str]
+            _ -> []
+          end
+
+        cmd = to_string(Map.get(spec, "command", ""))
+        parts = if cmd != "", do: [cmd | args_list], else: args_list
+        target = Map.get(spec, "url") || Map.get(spec, "serverUrl") || Enum.join(parts, " ")
+
+        %{name: to_string(name), type: type, status: status, target: String.trim(target)}
+
+      {name, other} ->
+        %{name: to_string(name), type: "unknown", status: "disabled", target: inspect(other)}
     end)
     |> Enum.sort_by(& &1.name)
   end
@@ -142,16 +162,21 @@ defmodule SuperPi.Harness.AGY.Brain do
   def plugin_validate(plugin_dir) when is_binary(plugin_dir) do
     manifest_path = Path.join(plugin_dir, "plugin.json")
 
-    if File.regular?(manifest_path) do
-      case File.read(manifest_path) |> elem(1) |> Jason.decode() do
-        {:ok, map} when is_map(map) ->
-          {:ok, %{valid: true, name: Map.get(map, "name", Path.basename(plugin_dir)), errors: []}}
+    case File.read(manifest_path) do
+      {:ok, raw} ->
+        case Jason.decode(raw) do
+          {:ok, map} when is_map(map) ->
+            {:ok, %{valid: true, name: Map.get(map, "name", Path.basename(plugin_dir)), errors: []}}
 
-        {:error, err} ->
-          {:error, %{valid: false, errors: ["Invalid JSON in plugin.json: #{inspect(err)}"]}}
-      end
-    else
-      {:error, %{valid: false, errors: ["Missing plugin.json in #{plugin_dir}"]}}
+          {:ok, _non_map} ->
+            {:error, %{valid: false, errors: ["plugin.json must be a JSON object"]}}
+
+          {:error, err} ->
+            {:error, %{valid: false, errors: ["Invalid JSON in plugin.json: #{inspect(err)}"]}}
+        end
+
+      {:error, reason} ->
+        {:error, %{valid: false, errors: ["Cannot read plugin.json in #{plugin_dir}: #{inspect(reason)}"]}}
     end
   end
 
@@ -175,12 +200,19 @@ defmodule SuperPi.Harness.AGY.Brain do
         other -> Jason.encode!(other || entry.data)
       end
 
+    created_at =
+      case Map.get(entry, :inserted_at) do
+        %DateTime{} = dt -> DateTime.to_iso8601(dt)
+        %NaiveDateTime{} = ndt -> DateTime.from_naive!(ndt, "Etc/UTC") |> DateTime.to_iso8601()
+        _ -> DateTime.utc_now() |> DateTime.to_iso8601()
+      end
+
     %{
       "step_index" => idx,
       "source" => source,
       "type" => type,
       "status" => "DONE",
-      "created_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "created_at" => created_at,
       "content" => content_str
     }
   end
