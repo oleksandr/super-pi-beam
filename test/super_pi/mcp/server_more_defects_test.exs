@@ -11,7 +11,6 @@ defmodule SuperPi.MCP.ServerMoreDefectsTest do
 
   alias SuperPi.MCP.Server
 
-  @moduletag :known_bug
 
   defp call(method, params) do
     req = %{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params}

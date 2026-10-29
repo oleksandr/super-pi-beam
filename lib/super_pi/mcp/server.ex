@@ -440,7 +440,11 @@ defmodule SuperPi.MCP.Server do
           %{"output" => "Harness task error: #{inspect(reason)}", "is_error" => true}
       end
     after
-      Process.exit(machine_pid, :kill)
+      try do
+        :gen_statem.stop(machine_pid)
+      catch
+        :exit, _ -> :ok
+      end
     end
   end
 
