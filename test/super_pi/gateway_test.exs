@@ -114,6 +114,35 @@ defmodule SuperPi.GatewayTest do
     assert is_binary(body)
     assert String.contains?(body, "data: [DONE]")
     assert String.contains?(body, "chat.completion.chunk")
+    assert String.contains?(body, ~s("choices":[]))
+    assert String.contains?(body, ~s("usage":{))
+  end
+
+  test "POST /v1/chat/completions intercepts title generation requests without corrupting session" do
+    payload = %{
+      "model" => "super-pi-agent",
+      "messages" => [
+        %{"role" => "system", "content" => "You are a title generator. You output ONLY a thread title. Nothing else."},
+        %{"role" => "user", "content" => "Generate a title for this conversation:\nHello world"}
+      ],
+      "stream" => false
+    }
+
+    conn =
+      conn(:post, "/v1/chat/completions", Jason.encode!(payload))
+      |> put_req_header("content-type", "application/json")
+      |> put_req_header("x-session-id", "test-session-123")
+      |> Router.call(@opts)
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+    assert String.starts_with?(body["id"], "chatcmpl-title-")
+    assert hd(body["choices"])["finish_reason"] == "stop"
+    assert is_binary(hd(body["choices"])["message"]["content"])
+
+    # Ensure this title generation did NOT map test-session-123 in ETS to a corrupted conversation
+    sessions = :ets.tab2list(:super_pi_gateway_sessions)
+    assert Enum.find(sessions, fn {sid, _cid} -> sid == "test-session-123" end) == nil
   end
 
   test "POST /v1/chat/completions preserves multi-turn conversational context" do

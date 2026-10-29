@@ -237,6 +237,9 @@ defmodule SuperPi.AI.StreamNormalizer do
   defp normalize_provider_event(%__MODULE__{provider: :openai} = state, event) do
     {start_events, state} = ensure_started(state)
 
+    usage = Map.get(event, "usage")
+    state = if is_map(usage), do: %__MODULE__{state | usage: merge_usage(state.usage, usage)}, else: state
+
     # Support both OpenAI Chat Completions deltas and Responses API events
     cond do
       is_list(Map.get(event, "choices")) ->
@@ -262,6 +265,10 @@ defmodule SuperPi.AI.StreamNormalizer do
 
   defp normalize_provider_event(%__MODULE__{provider: :google} = state, event) do
     {start_events, state} = ensure_started(state)
+
+    usage = Map.get(event, "usageMetadata")
+    state = if is_map(usage), do: %__MODULE__{state | usage: merge_usage(state.usage, usage)}, else: state
+
     candidates = Map.get(event, "candidates", [])
 
     case List.first(candidates) do
@@ -483,10 +490,24 @@ defmodule SuperPi.AI.StreamNormalizer do
   end
 
   defp merge_usage(prev, incoming) when is_map(incoming) do
+    prev = prev || %{}
+
     %{
-      "input_tokens" => Map.get(incoming, "input_tokens", prev["input_tokens"]),
-      "output_tokens" => Map.get(incoming, "output_tokens", prev["output_tokens"]),
-      "cache_read_tokens" => Map.get(incoming, "cache_read_input_tokens", prev["cache_read_tokens"])
+      "input_tokens" =>
+        Map.get(incoming, "promptTokenCount") ||
+          Map.get(incoming, "prompt_tokens") ||
+          Map.get(incoming, "input_tokens") ||
+          Map.get(prev, "input_tokens", 0),
+      "output_tokens" =>
+        Map.get(incoming, "candidatesTokenCount") ||
+          Map.get(incoming, "completion_tokens") ||
+          Map.get(incoming, "output_tokens") ||
+          Map.get(prev, "output_tokens", 0),
+      "cache_read_tokens" =>
+        Map.get(incoming, "cachedContentTokenCount") ||
+          Map.get(incoming, "cache_read_input_tokens") ||
+          Map.get(incoming, "cache_read_tokens") ||
+          Map.get(prev, "cache_read_tokens", 0)
     }
   end
 

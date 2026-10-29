@@ -71,6 +71,13 @@ defmodule SuperPi.Conversation.Machine do
     :gen_statem.call(pid_or_via, :get_state)
   end
 
+  @doc """
+  Updates the active extension pipeline for the conversation machine.
+  """
+  def set_extensions(pid_or_via, extensions) when is_list(extensions) do
+    :gen_statem.call(pid_or_via, {:set_extensions, extensions}, 5_000)
+  end
+
   # --- :gen_statem Callbacks ---
 
   @impl :gen_statem
@@ -112,6 +119,10 @@ defmodule SuperPi.Conversation.Machine do
 
   def handle_event({:call, from}, :get_state, state, data) do
     {:keep_state_and_data, [{:reply, from, {state, data}}]}
+  end
+
+  def handle_event({:call, from}, {:set_extensions, extensions}, _state, %__MODULE__{} = data) do
+    {:keep_state, %__MODULE__{data | extensions: extensions}, [{:reply, from, :ok}]}
   end
 
   # Passive `:write` submission in ANY state appends to history without triggering generation
@@ -655,7 +666,7 @@ defmodule SuperPi.Conversation.Machine do
             (SuperPi.Harness.harness?(model) or String.starts_with?(model, "super-pi-") or model == "default") ->
           case model do
             m when m in ["super-pi-planner", "planner"] -> "gemini-3.1-pro-preview"
-            m when m in ["super-pi-fast", "fast"] -> "gemini-2.5-flash"
+            m when m in ["super-pi-fast", "fast"] -> "gemini-3-flash-preview"
             _ -> "gemini-3-flash-preview"
           end
 

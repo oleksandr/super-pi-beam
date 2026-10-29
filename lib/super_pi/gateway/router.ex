@@ -63,51 +63,67 @@ defmodule SuperPi.Gateway.Router do
     messages = Map.get(params, "messages", [])
     stream? = Map.get(params, "stream", false)
 
-    harness = Harness.resolve(model)
-
-    Logger.info("[Gateway] 📥 Received POST /v1/chat/completions | model: #{model} (harness: #{harness.id()}) | stream: #{stream?} | messages: #{length(messages)}")
-
-    # 1. Resolve or create durable conversation
-    {conv_id, new_session?} = resolve_conversation(conn, params)
-
-    # 2. Extract system prompt and configure agent profile via resolved harness
-    system_sections = extract_system_sections(messages)
-    agent_opts = [system_sections: system_sections]
-
-    agent_opts =
-      if Harness.harness?(model) do
-        agent_opts
-      else
-        Keyword.put(agent_opts, :model, model)
-      end
-
-    agent_cfg = harness.agent_defaults(agent_opts)
-
-    if new_session? do
-      Storage.configure_agent!(conv_id, agent_cfg)
-      seed_prior_messages(conv_id, messages)
-    end
-
-    # 3. Extract the active user prompt
-    user_prompt = extract_last_user_prompt(messages)
-    prompt_preview =
-      if String.length(user_prompt) > 80 do
-        String.slice(user_prompt, 0..80) <> "..."
-      else
-        user_prompt
-      end
-
-    Logger.info("[Gateway] 💬 Active prompt for ##{conv_id}: #{inspect(prompt_preview)}")
-
-    # 4. Start conversation machine with harness extensions
-    extensions = harness.extensions([])
-    pid = ensure_machine_started!(conv_id, extensions)
-
-    # 5. Handle Streaming vs Non-Streaming
-    if stream? do
-      handle_streaming_completion(conn, conv_id, pid, user_prompt, model)
+    # Auxiliary background calls (e.g. OpenCode title generation) are handled
+    # ephemerally so they never corrupt the session's active system prompt or profile.
+    if title_request?(messages) do
+      Logger.info("[Gateway] 🏷️ Intercepted title generator request, handling via lightweight one-shot model")
+      handle_title_generation(conn, messages, model, stream?)
     else
-      handle_sync_completion(conn, conv_id, pid, user_prompt, model)
+      harness = Harness.resolve(model)
+
+      Logger.info("[Gateway] 📥 Received POST /v1/chat/completions | model: #{model} (harness: #{harness.id()}) | stream: #{stream?} | messages: #{length(messages)}")
+
+      # 1. Resolve or create durable conversation
+      {conv_id, new_session?} = resolve_conversation(conn, params)
+
+      # 2. Extract system prompt and configure agent profile via resolved harness
+      system_sections = extract_system_sections(messages)
+      agent_opts = [system_sections: system_sections]
+
+      agent_opts =
+        if Harness.harness?(model) do
+          agent_opts
+        else
+          Keyword.put(agent_opts, :model, model)
+        end
+
+      agent_cfg = harness.agent_defaults(agent_opts)
+
+      current_agent = SuperPi.Durable.Doc.snapshot("conversation", conv_id, "pi.agent") || %{}
+      current_model = Map.get(current_agent, "model")
+
+      if new_session? do
+        Storage.configure_agent!(conv_id, agent_cfg)
+        seed_prior_messages(conv_id, messages)
+      else
+        # If client switched model/harness, update durable pi.agent doc
+        if current_model != Map.get(agent_cfg, "model") or Harness.harness?(model) do
+          updated_agent = Map.merge(current_agent, agent_cfg)
+          Storage.configure_agent!(conv_id, updated_agent)
+        end
+      end
+
+      # 3. Extract the active user prompt
+      user_prompt = extract_last_user_prompt(messages)
+      prompt_preview =
+        if String.length(user_prompt) > 80 do
+          String.slice(user_prompt, 0..80) <> "..."
+        else
+          user_prompt
+        end
+
+      Logger.info("[Gateway] 💬 Active prompt for ##{conv_id}: #{inspect(prompt_preview)}")
+
+      # 4. Start or update conversation machine with harness extensions
+      extensions = harness.extensions([])
+      pid = ensure_machine_started!(conv_id, extensions)
+
+      # 5. Handle Streaming vs Non-Streaming
+      if stream? do
+        handle_streaming_completion(conn, conv_id, pid, user_prompt, model)
+      else
+        handle_sync_completion(conn, conv_id, pid, user_prompt, model)
+      end
     end
   end
 
@@ -141,7 +157,133 @@ defmodule SuperPi.Gateway.Router do
     :ok
   end
 
-  defp resolve_conversation(conn, _params) do
+  defp title_request?(messages) when is_list(messages) do
+    Enum.any?(messages, fn m ->
+      content = extract_content_text(Map.get(m, "content", ""))
+      role = Map.get(m, "role")
+
+      (role == "system" and String.contains?(String.downcase(content), "title generator")) or
+        (role == "user" and String.starts_with?(String.downcase(String.trim(content)), "generate a title"))
+    end)
+  end
+
+  defp title_request?(_), do: false
+
+  defp handle_title_generation(conn, messages, model, stream?) do
+    cmpl_id = "chatcmpl-title-" <> Uniq.UUID.uuid7()
+    now = System.system_time(:second)
+    title_model = "gemini-3-flash-preview"
+
+    title_text =
+      if SuperPi.AI.GeminiClient.configured?() do
+        system_sections = extract_system_sections(messages)
+
+        user_prompt =
+          messages
+          |> Enum.reverse()
+          |> Enum.find_value(fn m ->
+            if Map.get(m, "role") == "user" do
+              extract_content_text(Map.get(m, "content", ""))
+            end
+          end) || "Conversation Title"
+
+        payload = %{
+          model: title_model,
+          messages: [%{"role" => "user", "content" => user_prompt}],
+          system_sections: system_sections
+        }
+
+        case SuperPi.AI.GeminiClient.generate(payload) do
+          {:ok, %{"content" => content}} ->
+            content
+            |> Enum.find_value(fn
+              %{"type" => "text", "text" => t} -> t
+              %{"text" => t} -> t
+              _ -> nil
+            end)
+            |> case do
+              nil -> "Chat Session"
+              text ->
+                text
+                |> String.trim()
+                |> String.trim("\"")
+                |> String.slice(0, 60)
+            end
+
+          _ ->
+            "Chat Session"
+        end
+      else
+        "Chat Session"
+      end
+
+    usage_map = %{
+      "prompt_tokens" => 35,
+      "completion_tokens" => 8,
+      "total_tokens" => 43
+    }
+
+    if stream? do
+      conn =
+        conn
+        |> put_resp_header("content-type", "text/event-stream")
+        |> put_resp_header("cache-control", "no-cache")
+        |> put_resp_header("connection", "keep-alive")
+        |> put_resp_header("x-accel-buffering", "no")
+        |> send_chunked(200)
+
+      delta_chunk = %{
+        "id" => cmpl_id,
+        "object" => "chat.completion.chunk",
+        "created" => now,
+        "model" => model,
+        "choices" => [%{"index" => 0, "delta" => %{"content" => title_text}, "finish_reason" => nil}]
+      }
+
+      stop_chunk = %{
+        "id" => cmpl_id,
+        "object" => "chat.completion.chunk",
+        "created" => now,
+        "model" => model,
+        "choices" => [%{"index" => 0, "delta" => %{}, "finish_reason" => "stop"}],
+        "usage" => usage_map
+      }
+
+      usage_chunk = %{
+        "id" => cmpl_id,
+        "object" => "chat.completion.chunk",
+        "created" => now,
+        "model" => model,
+        "choices" => [],
+        "usage" => usage_map
+      }
+
+      {:ok, conn} = chunk(conn, "data: " <> Jason.encode!(delta_chunk) <> "\n\n")
+      {:ok, conn} = chunk(conn, "data: " <> Jason.encode!(stop_chunk) <> "\n\n")
+      {:ok, conn} = chunk(conn, "data: " <> Jason.encode!(usage_chunk) <> "\n\n")
+      {:ok, conn} = chunk(conn, "data: [DONE]\n\n")
+      conn
+    else
+      resp = %{
+        "id" => cmpl_id,
+        "object" => "chat.completion",
+        "created" => now,
+        "model" => model,
+        "choices" => [
+          %{
+            "index" => 0,
+            "message" => %{"role" => "assistant", "content" => title_text},
+            "finish_reason" => "stop"
+          }
+        ],
+        "usage" => usage_map
+      }
+
+      send_json(conn, 200, resp)
+    end
+  end
+
+  defp resolve_conversation(conn, params) do
     ensure_session_cache!()
 
     header_conv_id =
@@ -150,7 +292,12 @@ defmodule SuperPi.Gateway.Router do
         _ ->
           case get_req_header(conn, "x-session-id") do
             [id | _] when id != "" -> id
-            _ -> nil
+            _ ->
+              case get_req_header(conn, "session-id") do
+                [id | _] when id != "" -> id
+                _ ->
+                  Map.get(params, "session_id") || Map.get(params, "conversation_id")
+              end
           end
       end
 
@@ -253,6 +400,7 @@ defmodule SuperPi.Gateway.Router do
   defp ensure_machine_started!(conv_id, extensions) do
     case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
       [{pid, _}] ->
+        Machine.set_extensions(pid, extensions)
         pid
 
       [] ->
@@ -399,30 +547,7 @@ defmodule SuperPi.Gateway.Router do
       {:conversation_event, ^conv_id, %{"type" => "tool_started", "name" => name} = ev} ->
         args = Map.get(ev, "args", %{})
         Logger.info("[Gateway] ⚙️  Turn ##{conv_id} tool starting: '#{name}' (args: #{inspect(args)})")
-
-        notice = "\n\n> ⚙️ *Executing tool `#{name}`...*\n\n"
-
-        chunk_obj = %{
-          "id" => cmpl_id,
-          "object" => "chat.completion.chunk",
-          "created" => created,
-          "model" => model,
-          "choices" => [
-            %{
-              "index" => 0,
-              "delta" => %{"content" => notice},
-              "finish_reason" => nil
-            }
-          ]
-        }
-
-        case chunk(conn, "data: " <> Jason.encode!(chunk_obj) <> "\n\n") do
-          {:ok, updated_conn} ->
-            stream_sse_loop(updated_conn, conv_id, task_ref, cmpl_id, created, model)
-
-          {:error, _} ->
-            conn
-        end
+        stream_sse_loop(conn, conv_id, task_ref, cmpl_id, created, model)
 
       {:conversation_event, ^conv_id, %{"type" => "tool_completed", "name" => name} = ev} ->
         err? = Map.get(ev, "is_error", false)
@@ -457,6 +582,12 @@ defmodule SuperPi.Gateway.Router do
     prompt_tok = Map.get(snap, "lastTurnInputTokens") || Map.get(snap, "inputTokens", 0)
     comp_tok = Map.get(snap, "lastTurnOutputTokens") || Map.get(snap, "outputTokens", 0)
 
+    usage_map = %{
+      "prompt_tokens" => prompt_tok,
+      "completion_tokens" => comp_tok,
+      "total_tokens" => prompt_tok + comp_tok
+    }
+
     stop_chunk = %{
       "id" => cmpl_id,
       "object" => "chat.completion.chunk",
@@ -469,22 +600,24 @@ defmodule SuperPi.Gateway.Router do
           "finish_reason" => "stop"
         }
       ],
-      "usage" => %{
-        "prompt_tokens" => prompt_tok,
-        "completion_tokens" => comp_tok,
-        "total_tokens" => prompt_tok + comp_tok
-      }
+      "usage" => usage_map
     }
 
-    case chunk(conn, "data: " <> Jason.encode!(stop_chunk) <> "\n\n") do
-      {:ok, conn} ->
-        case chunk(conn, "data: [DONE]\n\n") do
-          {:ok, final_conn} -> final_conn
-          {:error, _} -> conn
-        end
+    usage_chunk = %{
+      "id" => cmpl_id,
+      "object" => "chat.completion.chunk",
+      "created" => created,
+      "model" => model,
+      "choices" => [],
+      "usage" => usage_map
+    }
 
-      {:error, _} ->
-        conn
+    with {:ok, conn} <- chunk(conn, "data: " <> Jason.encode!(stop_chunk) <> "\n\n"),
+         {:ok, conn} <- chunk(conn, "data: " <> Jason.encode!(usage_chunk) <> "\n\n"),
+         {:ok, conn} <- chunk(conn, "data: [DONE]\n\n") do
+      conn
+    else
+      {:error, _} -> conn
     end
   end
 

@@ -229,7 +229,7 @@ defmodule MyCompanyHarness do
     # Intercept destructive terminal operations
     {Plugins.ConfirmDestructive, [tools: ["bash"]]},
     # Dynamic model cascading: Pro reasoning for planning -> Flash for coding
-    {Plugins.JevRouter, [planning_model: "gemini-2.5-pro", implementation_model: "gemini-2.5-flash"]},
+    {Plugins.JevRouter, [planning_model: "gemini-3.1-pro-preview", implementation_model: "gemini-3-flash-preview"]},
     # Fast inline bash evaluations bounded by a 10s timeout
     {Plugins.InlineBash, [timeout_ms: 10_000, max_output_bytes: 8_192]},
     # Automatic turn finalization commit

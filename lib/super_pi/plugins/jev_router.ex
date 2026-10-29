@@ -3,10 +3,10 @@ defmodule SuperPi.Plugins.JevRouter do
   Jev Router Plugin (migrated from Pi ecosystem `jev-router.ts`).
 
   Dynamic model cascading and phase-based routing:
-  - Planning Phase: Routes to a high-reasoning frontier model (`planning_model`, e.g. `gemini-2.5-pro`)
+  - Planning Phase: Routes to a high-reasoning frontier model (`planning_model`, e.g. `gemini-3.1-pro-preview`)
     while the agent is exploring, inspecting, and formulating architectural plans.
   - Implementation Phase: Once the first `write` or `edit` tool is executed, automatically cascades
-    the session to a fast, cost-effective model (`implementation_model`, e.g. `gemini-2.5-flash`).
+    the session to a fast, cost-effective model (`implementation_model`, e.g. `gemini-3-flash-preview`).
 
   Reduces end-to-end token expenditure by 60–80% without sacrificing planning depth.
 
@@ -21,7 +21,7 @@ defmodule SuperPi.Plugins.JevRouter do
   require Logger
 
   @default_planning_model "gemini-3.1-pro-preview"
-  @default_implementation_model "gemini-2.5-flash"
+  @default_implementation_model "gemini-3-flash-preview"
   @default_edit_tools ["write", "edit", "write_file", "edit_file"]
 
   def id, do: "jev_router"

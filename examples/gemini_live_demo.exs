@@ -1,7 +1,7 @@
 # Live Google Gemini End-to-End Agentic Demo (`examples/gemini_live_demo.exs`)
 #
 # Uses your `GEMINI_API_KEY` from the environment to run a multi-turn agentic session
-# on `gemini-2.5-flash` with:
+# on `gemini-3-flash-preview` with:
 # - Real built-in 3-channel tools (`read`, `write`, `edit`, `grep`, `find`, `ls`, `bash`)
 # - Durable SQLite persistence (`SuperPi.Durable.Storage`)
 # - Normative 10-rule context derivation (`SuperPi.Durable.Context`)

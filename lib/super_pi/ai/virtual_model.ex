@@ -18,7 +18,7 @@ defmodule SuperPi.AI.VirtualModel do
       provider: :anthropic,
       model: "claude-haiku-4-5",
       thinking_budget: 0,
-      fallback: {:google, "gemini-2.5-flash"}
+      fallback: {:google, "gemini-3-flash-preview"}
     },
     "balanced" => %{
       provider: :anthropic,

@@ -159,6 +159,51 @@ defmodule SuperPi.AI.StreamNormalizerTest do
       fork_p = VirtualModel.ensure_provider_session!(fork_conv.id, :anthropic, "claude-sonnet-4-5")
       assert fork_p["sessionId"] != p1["sessionId"]
     end
+
+    test "Google Gemini SSE stream normalizer extracts usageMetadata and populates usage tokens in :done payload" do
+      sse_stream =
+        ~s(data: {"candidates":[{"content":{"parts":[{"text":"Hello world"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1250,"candidatesTokenCount":45,"totalTokenCount":1295}}\n\n)
+
+      normalizer = StreamNormalizer.new(:google, "gemini-3-flash-preview")
+      {events, st} = StreamNormalizer.feed_chunk(normalizer, sse_stream)
+      {flush_events, _} = StreamNormalizer.flush(st)
+      all_events = events ++ flush_events
+
+      done_payload =
+        Enum.find_value(all_events, fn
+          {:done, payload} -> payload
+          _ -> nil
+        end)
+
+      assert done_payload != nil
+      assert done_payload.usage["input_tokens"] == 1250
+      assert done_payload.usage["output_tokens"] == 45
+    end
+
+    test "OpenAI SSE stream normalizer extracts usage and populates usage tokens in :done payload" do
+      sse_stream =
+        [
+          ~s(data: {"choices":[{"index":0,"delta":{"content":"Hi"}}]}\n\n),
+          ~s(data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":520,"completion_tokens":12,"total_tokens":532}}\n\n),
+          ~s(data: [DONE]\n\n)
+        ]
+        |> Enum.join("")
+
+      normalizer = StreamNormalizer.new(:openai, "gpt-4o")
+      {events, st} = StreamNormalizer.feed_chunk(normalizer, sse_stream)
+      {flush_events, _} = StreamNormalizer.flush(st)
+      all_events = events ++ flush_events
+
+      done_payload =
+        Enum.find_value(all_events, fn
+          {:done, payload} -> payload
+          _ -> nil
+        end)
+
+      assert done_payload != nil
+      assert done_payload.usage["input_tokens"] == 520
+      assert done_payload.usage["output_tokens"] == 12
+    end
   end
 
   defp split_binary_by_sizes(<<>>, _sizes), do: []
