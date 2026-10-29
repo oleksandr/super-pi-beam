@@ -30,12 +30,26 @@ defmodule SuperPi.Plugins.JevRouter do
 
   @impl true
   def before_request(derived_context, ctx) do
-    if not SuperPi.AI.GeminiClient.configured?() do
+    config = Map.get(ctx, :config, [])
+    fallback_opts = Map.get(ctx, :jev_opts, [])
+    merged_opts = Keyword.merge(fallback_opts, config)
+
+    # The built-in default models are Gemini models: only apply them when Gemini is
+    # usable. Explicitly supplied models (options or env) are always honoured.
+    explicit_models? =
+      Enum.any?(
+        [
+          Keyword.get(merged_opts, :planning_model),
+          Keyword.get(merged_opts, :implementation_model),
+          System.get_env("JEV_PLANNING_MODEL"),
+          System.get_env("JEV_IMPLEMENTATION_MODEL")
+        ],
+        &is_binary/1
+      )
+
+    if not explicit_models? and not SuperPi.AI.GeminiClient.configured?() do
       {:ok, derived_context}
     else
-      config = Map.get(ctx, :config, [])
-      fallback_opts = Map.get(ctx, :jev_opts, [])
-      merged_opts = Keyword.merge(fallback_opts, config)
 
       planning_model =
         Keyword.get(merged_opts, :planning_model) ||
