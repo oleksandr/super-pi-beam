@@ -13,7 +13,21 @@ defmodule SuperPi.DataCase do
 
   setup tags do
     SuperPi.DataCase.setup_sandbox(tags)
+    on_exit(&SuperPi.DataCase.stop_leaked_machines/0)
     :ok
+  end
+
+  @doc """
+  Conversation ids restart at 1 in every sandboxed test, so a machine that outlives its
+  test (started from a Task or an unlinked caller) collides with the next test's machine.
+  """
+  def stop_leaked_machines do
+    SuperPi.Registry
+    |> Registry.select([{{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
+    |> Enum.each(fn
+      {{:conversation_machine, _id}, pid} -> Process.exit(pid, :kill)
+      _ -> :ok
+    end)
   end
 
   def setup_sandbox(tags) do
