@@ -307,10 +307,11 @@ defmodule SuperPi.Harness.AGY.CLI do
   def launch_interactive_tui(conv_id, flags, workspace_dirs, opts \\ []) do
     {:ok, rpc_pid} = SuperPi.RPC.Server.start_link(port: 0)
     port = SuperPi.RPC.Server.port(rpc_pid)
-    tui_bin = Keyword.get(opts, :tui_binary, Path.expand("bin/agy-tui", File.cwd!()))
+    # Never execute a binary found relative to the working directory (untrusted repos).
+    tui_bin = Keyword.get(opts, :tui_binary) || System.find_executable("agy-tui")
 
     res =
-      if File.exists?(tui_bin) do
+      if is_binary(tui_bin) and File.exists?(tui_bin) do
         args =
           [
             "--rpc-addr",
