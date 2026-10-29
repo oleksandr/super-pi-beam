@@ -173,6 +173,10 @@ defmodule SuperPi.Durable.TaskEngine do
   @doc """
   Fails a task with `error_map` and triggers `fail_fast` or `all_settled` reconciliation on its parent.
   """
+  def fail_task(task_id, error_msg) when is_binary(error_msg) do
+    fail_task(task_id, %{"error" => error_msg})
+  end
+
   def fail_task(task_id, error_map) when is_map(error_map) do
     Repo.transaction(fn ->
       task = Repo.get!(TaskSchema, task_id)

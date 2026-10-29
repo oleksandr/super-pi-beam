@@ -16,7 +16,6 @@ defmodule SuperPi.Conversation.MachineDefectsTest do
   alias SuperPi.Durable.Storage
   alias SuperPi.TestSupport.Faults
 
-  @moduletag :known_bug
 
   setup do
     # Machines are linked to the test process. A machine crash must surface as

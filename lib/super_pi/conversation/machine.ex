@@ -26,6 +26,8 @@ defmodule SuperPi.Conversation.Machine do
     :active_task_id,
     :llm_responder,
     :tool_executor,
+    :active_llm_task,
+    retry_count: 0,
     extensions: [],
     pending_tool_calls: [],
     completed_tool_results: [],
@@ -144,10 +146,17 @@ defmodule SuperPi.Conversation.Machine do
       :handled ->
         {:keep_state_and_data, [{:reply, from, {:ok, :handled_by_extension}}]}
 
-      {:continue, transformed_text, _media} ->
+      {:continue, transformed_text, media} ->
+        content_items =
+          [%{"type" => "text", "text" => transformed_text}] ++
+            case media do
+              m when is_list(m) -> m
+              _ -> []
+            end
+
         Storage.append_entry!(data.conversation_id, "pi.message", %{
           "role" => "user",
-          "content" => [%{"type" => "text", "text" => transformed_text}]
+          "content" => content_items
         })
 
         {:ok, gen_task} =
@@ -170,6 +179,10 @@ defmodule SuperPi.Conversation.Machine do
     {:next_state, :compacting, %__MODULE__{data | reply_from: from}, [{:next_event, :internal, {:run_compaction, opts}}]}
   end
 
+  def handle_event({:call, from}, {:compact, _opts}, state, _data) when state != :idle do
+    {:keep_state_and_data, [{:reply, from, {:error, :busy}}]}
+  end
+
   # --- Queued `:queue` submissions while busy use `:postpone` (`REQ-FSM-03`) ---
   def handle_event({:call, _from}, {:submit, :queue, _text, _opts}, busy_state, _data)
       when busy_state not in [:idle, :recovering] do
@@ -177,16 +190,46 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   # --- Preemptive `:steer` submission while executing tools or streaming (`REQ-FSM-03`) ---
-  def handle_event({:call, _from}, {:submit, :steer, text, _opts}, busy_state, %__MODULE__{} = data)
-      when busy_state in [:streaming_llm, :executing_tools] do
+  def handle_event({:call, from}, {:submit, :steer, text, _opts}, busy_state, %__MODULE__{} = data)
+      when busy_state in [:streaming_llm, :executing_tools, :sleeping_backoff] do
     Storage.append_entry!(data.conversation_id, "pi.message", %{
       "role" => "user",
       "content" => [%{"type" => "text", "text" => text}],
       "steer" => true
     })
 
-    # Mark steer_preempted so remaining tool calls in the batch are skipped and we re-enter :preparing_request
-    {:keep_state, %__MODULE__{data | steer_preempted: true, pending_tool_calls: []}, [:postpone]}
+    # For any pending tool calls that will be skipped, record synthetic canceled results
+    # so every assistant tool call is paired with a tool result
+    Enum.each(data.pending_tool_calls, fn tc ->
+      tool_id = Map.get(tc, "id") || "unknown"
+      tool_name = Map.get(tc, "name") || "unknown"
+
+      Storage.append_entry!(data.conversation_id, "pi.message", %{
+        "role" => "tool",
+        "tool_call_id" => tool_id,
+        "name" => tool_name,
+        "is_error" => true,
+        "content" => "Tool execution skipped due to user steering.",
+        "structured_output" => nil,
+        "details" => %{"skipped" => true}
+      })
+    end)
+
+    next_state =
+      if busy_state == :sleeping_backoff do
+        :preparing_request
+      else
+        busy_state
+      end
+
+    actions =
+      if busy_state == :sleeping_backoff do
+        [{:reply, from, {:ok, :steered}}, {:next_event, :internal, :prepare}]
+      else
+        [{:reply, from, {:ok, :steered}}]
+      end
+
+    {:next_state, next_state, %__MODULE__{data | steer_preempted: true, pending_tool_calls: []}, actions}
   end
 
   # Wait for `:steer` if in other transitional states
@@ -256,25 +299,72 @@ defmodule SuperPi.Conversation.Machine do
 
   def handle_event(:internal, {:invoke_llm, payload}, :streaming_llm, %__MODULE__{} = data) do
     ctx = hook_ctx(data)
+    responder = data.llm_responder
 
-    case data.llm_responder.(payload, ctx) do
+    task =
+      case Process.whereis(SuperPi.ToolTaskSupervisor) do
+        nil ->
+          Task.async(fn ->
+            try do
+              responder.(payload, ctx)
+            rescue
+              e -> {:error, {:raised, e}}
+            catch
+              :exit, reason -> {:error, {:exit, reason}}
+            end
+          end)
+
+        _pid ->
+          Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
+            try do
+              responder.(payload, ctx)
+            rescue
+              e -> {:error, {:raised, e}}
+            catch
+              :exit, reason -> {:error, {:exit, reason}}
+            end
+          end)
+      end
+
+    Process.sleep(40)
+
+    {:keep_state, %__MODULE__{data | active_llm_task: task}}
+  end
+
+  def handle_event(:info, {ref, task_res}, :streaming_llm, %__MODULE__{active_llm_task: %Task{ref: ref}} = data) do
+    Process.demonitor(ref, [:flush])
+    next_data = %__MODULE__{data | active_llm_task: nil}
+    ctx = hook_ctx(next_data)
+
+    case task_res do
       {:ok, assistant_msg} ->
-        assistant_msg = Extension.run_after_response(data.extensions, assistant_msg, ctx)
-        usage = Map.get(assistant_msg, "usage", %{})
-        record_usage!(data.conversation_id, usage)
+        content =
+          case Map.get(assistant_msg, "content") do
+            list when is_list(list) -> list
+            _ -> []
+          end
 
-        Storage.append_entry!(data.conversation_id, "pi.message", %{
+        usage = Map.get(assistant_msg, "usage") || %{}
+        record_usage!(next_data.conversation_id, usage)
+
+        assistant_msg =
+          try do
+            Extension.run_after_response(next_data.extensions, assistant_msg, ctx)
+          rescue
+            _ -> assistant_msg
+          end
+
+        Storage.append_entry!(next_data.conversation_id, "pi.message", %{
           "role" => "assistant",
-          "content" => Map.get(assistant_msg, "content", []),
+          "content" => content,
           "usage" => usage
         })
 
         tool_calls =
-          assistant_msg
-          |> Map.get("content", [])
-          |> Enum.filter(fn b -> Map.get(b, "type") == "tool_call" end)
+          content
+          |> Enum.filter(fn b -> is_map(b) and Map.get(b, "type") == "tool_call" end)
 
-        next_data = %__MODULE__{data | last_assistant_message: assistant_msg}
+        next_data = %__MODULE__{next_data | last_assistant_message: assistant_msg, retry_count: 0}
 
         cond do
           next_data.steer_preempted ->
@@ -287,26 +377,78 @@ defmodule SuperPi.Conversation.Machine do
               })
             end
 
+            send(self(), :next_tool)
+
             {:next_state, :executing_tools,
-             %__MODULE__{next_data | pending_tool_calls: tool_calls, completed_tool_results: []},
-             [{:next_event, :internal, :next_tool}]}
+             %__MODULE__{next_data | pending_tool_calls: tool_calls, completed_tool_results: []}}
 
           true ->
             {:next_state, :settling_run, next_data, [{:next_event, :internal, :verify_run}]}
         end
 
       {:retry_after, delay_ms} ->
-        wake_at = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
+        if next_data.retry_count < 3 do
+          wake_at = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
 
-        if data.active_task_id do
-          TaskEngine.sleep_until(data.active_task_id, wake_at, %{"phase" => "backoff"})
+          if next_data.active_task_id do
+            TaskEngine.sleep_until(next_data.active_task_id, wake_at, %{"phase" => "backoff"})
+          end
+
+          {:next_state, :sleeping_backoff, %__MODULE__{next_data | retry_count: next_data.retry_count + 1},
+           [{:state_timeout, delay_ms, :wake_from_backoff}]}
+        else
+          if next_data.active_task_id do
+            TaskEngine.fail_task(next_data.active_task_id, %{"error" => "Rate limit retry cap exceeded (3 attempts)"})
+          end
+
+          actions =
+            if next_data.reply_from do
+              [{:reply, next_data.reply_from, {:error, :rate_limit_exceeded}}]
+            else
+              []
+            end
+
+          {:next_state, :idle, %__MODULE__{next_data | reply_from: nil, active_task_id: nil, retry_count: 0}, actions}
         end
 
-        {:next_state, :sleeping_backoff, data, [{:state_timeout, delay_ms, :wake_from_backoff}]}
-
       {:error, reason} ->
-        finish_run_with_error(data, reason)
+        err_msg =
+          case reason do
+            {:raised, %{message: msg}} -> msg
+            {:raised, e} when is_exception(e) -> Exception.message(e)
+            other -> inspect(other)
+          end
+
+        if next_data.active_task_id do
+          TaskEngine.fail_task(next_data.active_task_id, %{"error" => err_msg})
+        end
+
+        actions =
+          if next_data.reply_from do
+            [{:reply, next_data.reply_from, {:error, err_msg}}]
+          else
+            []
+          end
+
+        {:next_state, :idle, %__MODULE__{next_data | reply_from: nil, active_task_id: nil, retry_count: 0}, actions}
     end
+  end
+
+  def handle_event(:info, {:DOWN, ref, :process, _pid, reason}, :streaming_llm, %__MODULE__{active_llm_task: %Task{ref: ref}} = data) do
+    next_data = %__MODULE__{data | active_llm_task: nil}
+
+    if next_data.active_task_id do
+      TaskEngine.fail_task(next_data.active_task_id, %{"error" => inspect(reason)})
+    end
+
+    actions =
+      if next_data.reply_from do
+        [{:reply, next_data.reply_from, {:error, reason}}]
+      else
+        []
+      end
+
+    {:next_state, :idle, %__MODULE__{next_data | reply_from: nil, active_task_id: nil, retry_count: 0}, actions}
   end
 
   # --- State: :sleeping_backoff ---
@@ -332,13 +474,15 @@ defmodule SuperPi.Conversation.Machine do
     :keep_state_and_data
   end
 
-  def handle_event(:internal, :next_tool, :executing_tools, %__MODULE__{steer_preempted: true} = data) do
+  def handle_event(event_type, :next_tool, :executing_tools, %__MODULE__{steer_preempted: true} = data)
+      when event_type in [:internal, :info] do
     # Steer preemption arrived mid-batch: skip remaining tools and immediately start next turn
     {:next_state, :preparing_request, %__MODULE__{data | steer_preempted: false, pending_tool_calls: []},
      [{:next_event, :internal, :prepare}]}
   end
 
-  def handle_event(:internal, :next_tool, :executing_tools, %__MODULE__{pending_tool_calls: []} = data) do
+  def handle_event(event_type, :next_tool, :executing_tools, %__MODULE__{pending_tool_calls: []} = data)
+      when event_type in [:internal, :info] do
     ctx = hook_ctx(data)
     results = Enum.reverse(data.completed_tool_results)
 
@@ -350,7 +494,14 @@ defmodule SuperPi.Conversation.Machine do
     if has_terminate? do
       {:next_state, :settling_run, data, [{:next_event, :internal, :settle}]}
     else
-      case Extension.run_after_tools(data.extensions, results, ctx) do
+      after_tools_res =
+        try do
+          Extension.run_after_tools(data.extensions, results, ctx)
+        rescue
+          _ -> :continue
+        end
+
+      case after_tools_res do
         {:steer, steer_msg} ->
           Storage.append_entry!(data.conversation_id, "pi.message", %{
             "role" => "user",
@@ -366,20 +517,28 @@ defmodule SuperPi.Conversation.Machine do
         :terminate ->
           {:next_state, :settling_run, data, [{:next_event, :internal, :settle}]}
 
-        :continue ->
+        _other ->
           {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
       end
     end
   end
 
-  def handle_event(:internal, :next_tool, :executing_tools, %__MODULE__{pending_tool_calls: [tc | rest]} = data) do
+  def handle_event(event_type, :next_tool, :executing_tools, %__MODULE__{pending_tool_calls: [tc | rest]} = data)
+      when event_type in [:internal, :info] do
     ctx = hook_ctx(data)
     tool_name = Map.get(tc, "name", "unknown")
     tool_id = Map.get(tc, "id", "call_0")
     raw_args = Map.get(tc, "arguments", %{})
 
+    before_tool_res =
+      try do
+        Extension.run_before_tool(data.extensions, tool_name, raw_args, ctx)
+      rescue
+        e -> {:block, "Extension error: #{Exception.message(e)}"}
+      end
+
     tool_result =
-      case Extension.run_before_tool(data.extensions, tool_name, raw_args, ctx) do
+      case before_tool_res do
         {:block, reason} ->
           publish_stream_event(data.conversation_id, %{
             "type" => "tool_blocked",
@@ -481,7 +640,8 @@ defmodule SuperPi.Conversation.Machine do
         completed_tool_results: [tool_result | data.completed_tool_results]
     }
 
-    {:keep_state, next_data, [{:next_event, :internal, :next_tool}]}
+    send(self(), :next_tool)
+    {:keep_state, next_data}
   end
 
   # --- State: :compacting ---
@@ -576,6 +736,33 @@ defmodule SuperPi.Conversation.Machine do
     end
   end
 
+  def handle_event(:internal, :settle, :settling_run, %__MODULE__{} = data) do
+    if data.active_task_id do
+      TaskEngine.complete_task(data.active_task_id, %{
+        "assistantMessage" => data.last_assistant_message
+      })
+    end
+
+    actions =
+      if data.reply_from do
+        [{:reply, data.reply_from, {:ok, data.last_assistant_message}}]
+      else
+        []
+      end
+
+    {:next_state, :idle, %__MODULE__{data | active_task_id: nil, reply_from: nil, pending_tool_calls: [], completed_tool_results: []}, actions}
+  end
+
+  # --- Catch-all event handlers for unhandled messages ---
+
+  def handle_event({:call, from}, msg, _state, _data) do
+    {:keep_state_and_data, [{:reply, from, {:error, {:unhandled, msg}}}]}
+  end
+
+  def handle_event(_event_type, _event_content, _state, _data) do
+    :keep_state_and_data
+  end
+
   # --- Helpers ---
 
   defp finish_run_with_error(%__MODULE__{} = data, reason) do
@@ -595,18 +782,20 @@ defmodule SuperPi.Conversation.Machine do
 
   defp apply_tool_control_directive(_conv_id, nil), do: :ok
 
-  defp apply_tool_control_directive(conv_id, %{"add_tools" => new_tools}) when is_list(new_tools) do
-    agent = Doc.snapshot("conversation", conv_id, "pi.agent") || %{}
-    existing = Map.get(agent, "tools", [])
-    merged = Enum.uniq_by(existing ++ new_tools, &Map.get(&1, "name"))
-    Storage.configure_agent!(conv_id, %{"tools" => merged})
-  end
+  defp apply_tool_control_directive(conv_id, %{} = control) do
+    if is_list(control["add_tools"]) do
+      agent = Doc.snapshot("conversation", conv_id, "pi.agent") || %{}
+      existing = Map.get(agent, "tools", [])
+      merged = Enum.uniq_by(existing ++ control["add_tools"], &Map.get(&1, "name"))
+      Storage.configure_agent!(conv_id, %{"tools" => merged})
+    end
 
-  defp apply_tool_control_directive(conv_id, %{"handoff" => new_agent_cfg}) when is_map(new_agent_cfg) do
-    Storage.configure_agent!(conv_id, new_agent_cfg)
-  end
+    if is_map(control["handoff"]) do
+      Storage.configure_agent!(conv_id, control["handoff"])
+    end
 
-  defp apply_tool_control_directive(_conv_id, _other), do: :ok
+    :ok
+  end
 
   defp find_compaction_cutoff_id([]), do: nil
 
@@ -643,9 +832,14 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   defp hook_ctx(data) do
+    agent = Doc.snapshot("conversation", data.conversation_id, "pi.agent") || %{}
+    ws_paths = Map.get(agent, "workspacePaths") || []
+    ws_root = List.first(ws_paths) || File.cwd!()
+
     %{
       conversation_id: data.conversation_id,
       active_task_id: data.active_task_id,
+      workspace_root: ws_root,
       emit_event: fn ev -> publish_stream_event(data.conversation_id, ev) end
     }
   end
