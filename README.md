@@ -49,7 +49,106 @@ make test
 
 ---
 
-## Running Demos & Interactive Modes
+## Recommended Harness Evaluation: OpenCode
+
+**OpenCode** is the recommended interface for evaluating and testing the Super-Pi-BEAM harness. Super-Pi-BEAM natively integrates with OpenCode in two complementary modes:
+
+### Mode 1: Upstream Model Provider (OpenAI-Compatible HTTP Gateway)
+In this mode, OpenCode treats Super-Pi-BEAM as an upstream AI provider. When OpenCode submits a prompt, Super-Pi-BEAM runs its BEAM agent loop, executes workspace tools under OTP supervision, and streams back responses via Server-Sent Events (SSE):
+
+1. **Start the Super-Pi Gateway**:
+   ```bash
+   bin/super-pi gateway 4000
+   ```
+2. **Configure OpenCode** (`~/.config/opencode/opencode.json`):
+   ```json
+   {
+     "provider": {
+       "super-pi": {
+         "npm": "@ai-sdk/openai-compatible",
+         "name": "Super-Pi BEAM",
+         "options": {
+           "baseURL": "http://127.0.0.1:4000/v1",
+           "apiKey": "local-key"
+         },
+         "models": {
+           "super-pi-agent": {
+             "name": "Super-Pi Autonomous Agent",
+             "limit": { "context": 128000, "output": 8192 }
+           },
+           "super-pi-planner": {
+             "name": "Super-Pi Architecture Planner",
+             "limit": { "context": 128000, "output": 8192 }
+           },
+           "super-pi-fast": {
+             "name": "Super-Pi Fast Responder",
+             "limit": { "context": 128000, "output": 8192 }
+           }
+         }
+       }
+     }
+   }
+   ```
+3. **Verify Models & Run Queries**:
+   ```bash
+   # List available models
+   opencode models super-pi
+
+   # Run prompt through Super-Pi agent
+   opencode run "What is 15 plus 27?" --model super-pi/super-pi-agent
+   ```
+4. **Inspect Durable Chord v2 Sessions**:
+   ```bash
+   bin/super-pi session list
+   bin/super-pi session show <ID>
+   ```
+
+### Mode 2: Native Model Context Protocol (MCP) Server
+In this mode, OpenCode acts as the client and invokes Super-Pi-BEAM's 4-layer safe sandbox tools (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`, `harness_task`) over standard I/O:
+
+```json
+{
+  "mcp": {
+    "super-pi": {
+      "type": "local",
+      "command": ["/home/oleksandr/Projects/super-pi-beam/bin/super-pi", "mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Verify connection:
+```bash
+opencode mcp list
+# ✓ super-pi connected (/home/oleksandr/Projects/super-pi-beam/bin/super-pi mcp)
+```
+
+---
+
+## Experimental Showcase: `super-agy` Antigravity CLI & Go Bubble Tea TUI
+
+For developers interested in the Antigravity (`agy`) terminal experience, `bin/super-agy` provides an experimental showcase. It pairs a reverse-engineered Go 1.27 **Bubble Tea + Lipgloss + Glamour** TUI (`clients/agy-tui`) with `SuperPi.RPC.Server`:
+
+- Custom Super-Pi-BEAM Greek Pi hero logo with Erlang-to-BEAM color gradient.
+- Exact `agy` inline layout with braille spinners (`⣷ ⣯ ⣟ ⡿ ⢿ ⣻ ⣽ ⣾`), live activity status, and turn cancellation (`esc`).
+- Full viewport mouse wheel and keyboard scrolling (`Shift+Up/Down`, `PageUp/Down`, `Ctrl+Home/End`) with floating position indicators.
+- 5-tier customization discovery (`Rules`, `Skills`, `HooksJson`, `Permissions`, `SlashCommands`).
+
+```bash
+# Launch interactive experimental TUI
+./bin/super-agy
+
+# Launch with initial prompt
+./bin/super-agy -i "Explain the 10 context derivation rules in this repo"
+
+# Run single prompt non-interactively
+./bin/super-agy -p "What skills are available in this workspace?"
+```
+
+---
+
+## Alternative Demos & Interactive Modes
 
 ### 1. Live Google Gemini Agentic Demo
 Ensure `GEMINI_API_KEY` is exported in your environment, then run:
@@ -73,25 +172,6 @@ Starts `SuperPi.RPC.Server` on a local TCP port and drives a full session (`sess
 
 ```bash
 mise exec -- mix run examples/rpc_showcase_client.exs
-```
-
-### 4. `super-agy` — Antigravity CLI (`agy`) Clone & Go Bubble Tea TUI
-`bin/super-agy` (`SuperPi.AGY.CLI`) implements an identical clone of `agy` where every customization subsystem runs as a modular `SuperPi.Extension` behaviour (`Rules`, `Skills`, `HooksJson`, `Permissions`, `SlashCommands`), paired with our native Go 1.27 **Bubble Tea + Lipgloss + Glamour** TUI (`clients/agy-tui`) connected over `SuperPi.RPC.Server`:
-
-```bash
-# Launch the full-screen interactive Antigravity Bubble Tea TUI (default)
-./bin/super-agy
-
-# Launch the interactive TUI with an initial prompt
-./bin/super-agy -i "Explain the 10 context derivation rules in this repo"
-
-# List models, agents, and configured MCP servers from ~/.gemini/config/mcp_config.json
-./bin/super-agy models
-./bin/super-agy agents
-./bin/super-agy mcp list
-
-# Run a single prompt non-interactively (-p) with live skill & rule discovery
-./bin/super-agy -p "What skills are available in this workspace?"
 ```
 
 ---

@@ -38,6 +38,8 @@ defmodule SuperPi.MixProject do
       # HTTP, Streaming LLM, & JSON
       {:req, "~> 0.5"},
       {:finch, "~> 0.19"},
+      {:bandit, "~> 1.6"},
+      {:plug, "~> 1.16"},
       {:jason, "~> 1.4"},
       {:jaxon, "~> 2.0"},
       {:nimble_options, "~> 1.1"},

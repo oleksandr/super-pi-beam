@@ -2,7 +2,9 @@ import Config
 
 config :super_pi,
   ecto_repos: [SuperPi.Repo.SQLite],
-  storage_backend: :sqlite
+  storage_backend: :sqlite,
+  gateway_port: 4000,
+  start_gateway: false
 
 config :super_pi, SuperPi.Repo.SQLite,
   priv: "priv/repo",
@@ -12,7 +14,7 @@ config :super_pi, SuperPi.Repo.SQLite,
   cache_size: -64000,
   temp_store: :memory,
   synchronous: :normal,
-  busy_timeout: 5000
+  busy_timeout: 30000
 
 config :super_pi, SuperPi.Repo.Postgres,
   priv: "priv/repo"

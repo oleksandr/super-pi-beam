@@ -19,12 +19,22 @@ CMD="${1:-help}"
 shift || true
 
 case "${CMD}" in
+  gateway|serve)
+    PORT="${1:-4000}"
+    echo "Starting Super-Pi-BEAM Upstream Inference Gateway on http://127.0.0.1:${PORT}..." >&2
+    exec mise exec -- mix run --no-halt -e "
+      Application.put_env(:super_pi, :gateway_port, ${PORT})
+      {:ok, _} = Supervisor.start_child(SuperPi.Supervisor, {SuperPi.Gateway.Server, port: ${PORT}})
+      Process.sleep(:infinity)
+    "
+    ;;
+
   mcp)
     exec mise exec -- mix run --no-halt -e "SuperPi.MCP.Server.run_stdio()"
     ;;
 
   rpc)
-    PORT="${1:-4000}"
+    PORT="${1:-4001}"
     echo "Starting SuperPi.RPC.Server on port ${PORT}..." >&2
     exec mise exec -- mix run --no-halt -e "SuperPi.RPC.Server.start_link(port: ${PORT}); Process.sleep(:infinity)"
     ;;
@@ -79,25 +89,37 @@ case "${CMD}" in
 Usage: super-pi <command> [options]
 
 Commands:
+  gateway [port] Run OpenAI-compatible HTTP upstream inference gateway (default port: 4000)
+                 Connects OpenCode, Cursor, Aider, and LibreChat to Super-Pi
   mcp            Run standard Model Context Protocol (MCP) server over stdio
                  Connects directly to OpenCode, Claude Desktop, Cursor, and Zed
-  rpc [port]     Run standalone JSON-RPC 2.0 server (default port: 4000)
+  rpc [port]     Run standalone JSON-RPC 2.0 server (default port: 4001)
   session list   List recent durable conversations
   session show   Display conversation state and documents
   help           Show this help text
 
 Examples:
-  # Connect to OpenCode:
-  opencode mcp add super-pi
+  # 1. Run upstream inference gateway for OpenCode:
+  bin/super-pi gateway 4000
 
-  # Or configure in ~/.config/opencode/opencode.json:
-  "mcp": {
+  # 2. Configure in ~/.config/opencode/opencode.json:
+  "provider": {
     "super-pi": {
-      "type": "local",
-      "command": ["${ROOT_DIR}/bin/super-pi", "mcp"],
-      "enabled": true
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://127.0.0.1:4000/v1",
+        "apiKey": "local-key"
+      },
+      "models": {
+        "super-pi-agent": {
+          "name": "Super-Pi Autonomous Agent"
+        }
+      }
     }
   }
+
+  # 3. Connect as MCP Tool Server in OpenCode:
+  opencode mcp list
 EOF
     ;;
 

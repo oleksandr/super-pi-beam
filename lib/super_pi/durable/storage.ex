@@ -20,12 +20,21 @@ defmodule SuperPi.Durable.Storage do
   and allocating a monotonic `seq` number.
   """
   def commit(fun) when is_function(fun, 1) do
+    opts =
+      case Application.get_env(:super_pi, :storage_backend, :sqlite) do
+        :sqlite -> [mode: :immediate]
+        _ -> []
+      end
+
     {:ok, result} =
-      Repo.transaction(fn ->
-        seq = next_seq!()
-        drain_pending_deferred_in_tx(seq)
-        fun.(seq)
-      end)
+      Repo.transaction(
+        fn ->
+          seq = next_seq!()
+          drain_pending_deferred_in_tx(seq)
+          fun.(seq)
+        end,
+        opts
+      )
 
     result
   end

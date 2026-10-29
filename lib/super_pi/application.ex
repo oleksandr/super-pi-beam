@@ -7,6 +7,14 @@ defmodule SuperPi.Application do
   def start(_type, _args) do
     SuperPi.Durable.Doc.ensure_ets!()
     SuperPi.Durable.DeferredFlusher.ensure_pending_ets!()
+    SuperPi.Gateway.Router.ensure_session_cache!()
+
+    gateway_children =
+      if Application.get_env(:super_pi, :start_gateway, false) do
+        [{SuperPi.Gateway.Server, port: Application.get_env(:super_pi, :gateway_port, 4000)}]
+      else
+        []
+      end
 
     children = [
       SuperPi.Repo.active_repo(),
@@ -16,7 +24,7 @@ defmodule SuperPi.Application do
       {Task.Supervisor, name: SuperPi.ToolTaskSupervisor},
       SuperPi.Durable.DeferredFlusher,
       {Oban, Application.fetch_env!(:super_pi, Oban)}
-    ]
+    ] ++ gateway_children
 
     opts = [strategy: :rest_for_one, name: SuperPi.Supervisor]
     Supervisor.start_link(children, opts)

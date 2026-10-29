@@ -626,14 +626,43 @@ defmodule SuperPi.Conversation.Machine do
     model = to_string(Map.get(payload, :model, "claude-sonnet-4-5"))
     conv_id = Map.get(ctx, :conversation_id)
 
-    if String.starts_with?(model, "gemini-") and SuperPi.AI.GeminiClient.configured?() do
+    effective_model =
+      cond do
+        String.starts_with?(model, "gemini-") ->
+          model
+
+        model in ["super-pi-agent", "super-pi-planner", "super-pi-fast", "default"] and
+            SuperPi.AI.GeminiClient.configured?() ->
+          "gemini-3-flash-preview"
+
+        true ->
+          model
+      end
+
+    if String.starts_with?(effective_model, "gemini-") and SuperPi.AI.GeminiClient.configured?() do
+      payload = Map.put(payload, :model, effective_model)
+
       SuperPi.AI.GeminiClient.generate(payload,
         on_delta: fn
+          {:text_delta, %{index: idx, delta: delta}} ->
+            publish_stream_event(conv_id, %{"type" => "text_delta", "index" => idx, "delta" => delta})
+
           {:text_delta, idx, delta} ->
             publish_stream_event(conv_id, %{"type" => "text_delta", "index" => idx, "delta" => delta})
 
+          {:thinking_delta, %{index: idx, delta: delta}} ->
+            publish_stream_event(conv_id, %{"type" => "thinking_delta", "index" => idx, "delta" => delta})
+
           {:thinking_delta, idx, delta} ->
             publish_stream_event(conv_id, %{"type" => "thinking_delta", "index" => idx, "delta" => delta})
+
+          {:toolcall_delta, %{index: idx, raw_json_delta: delta, partial_args: partial_args}} ->
+            publish_stream_event(conv_id, %{
+              "type" => "toolcall_delta",
+              "index" => idx,
+              "delta" => delta,
+              "partial_args" => partial_args
+            })
 
           {:toolcall_delta, idx, delta, partial_args} ->
             publish_stream_event(conv_id, %{
