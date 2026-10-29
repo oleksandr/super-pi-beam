@@ -2,12 +2,12 @@ defmodule SuperPi.Harness.Interactive do
   @moduledoc """
   Human-Collaborative Interactive Harness (`super-pi-interactive`).
 
-  Declaratively composed of clarification and distillation plugins:
+  Declaratively composed of clarification and distillation plugins with concrete configurations:
   - `Questionnaire`: Human-in-the-loop clarification tool with recommended options.
-  - `InlineBash`: Zero-turn prompt shell expansion (`!{cmd}`).
+  - `InlineBash`: Zero-turn prompt shell expansion (`!{cmd}`) with 10s execution bound.
   - `StructuredOutput`: Terminating tool for emitting machine-readable results without extra turn cost.
   - `Handoff`: Context transfer to clean child sessions with zero token bloat.
-  - `Subagent`: Delegated concurrent background tasks under OTP supervision.
+  - `Subagent`: Delegated concurrent background tasks under OTP supervision with 30s timeout.
   """
 
   @behaviour SuperPi.Harness
@@ -15,10 +15,10 @@ defmodule SuperPi.Harness.Interactive do
 
   @declarative_plugins [
     Plugins.Questionnaire,
-    Plugins.InlineBash,
+    {Plugins.InlineBash, [timeout_ms: 10_000, max_output_bytes: 8_192]},
     Plugins.StructuredOutput,
     Plugins.Handoff,
-    Plugins.Subagent
+    {Plugins.Subagent, [timeout_ms: 30_000]}
   ]
 
   @impl true

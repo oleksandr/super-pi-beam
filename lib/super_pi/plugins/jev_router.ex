@@ -9,6 +9,12 @@ defmodule SuperPi.Plugins.JevRouter do
     the session to a fast, cost-effective model (`implementation_model`, e.g. `gemini-2.5-flash`).
 
   Reduces end-to-end token expenditure by 60–80% without sacrificing planning depth.
+
+  ### Configuration Options (`ctx[:config]` or harness tuple):
+  - `:planning_model` - Model identifier for planning phase.
+  - `:implementation_model` - Model identifier for implementation phase.
+  - `:edit_tools` - List of tool names that trigger transition to implementation phase (default: `["write", "edit"]`).
+  - Environment variables: `JEV_PLANNING_MODEL`, `JEV_IMPLEMENTATION_MODEL`.
   """
 
   use SuperPi.Extension
@@ -16,7 +22,7 @@ defmodule SuperPi.Plugins.JevRouter do
 
   @default_planning_model "gemini-2.5-pro"
   @default_implementation_model "gemini-2.5-flash"
-  @edit_tools ["write", "edit"]
+  @default_edit_tools ["write", "edit"]
 
   def id, do: "jev_router"
   def name, do: "Jev Dynamic Model Router"
@@ -24,12 +30,24 @@ defmodule SuperPi.Plugins.JevRouter do
 
   @impl true
   def before_request(derived_context, ctx) do
-    opts = Map.get(ctx, :jev_opts, [])
-    planning_model = Keyword.get(opts, :planning_model, @default_planning_model)
-    implementation_model = Keyword.get(opts, :implementation_model, @default_implementation_model)
+    config = Map.get(ctx, :config, [])
+    fallback_opts = Map.get(ctx, :jev_opts, [])
+    merged_opts = Keyword.merge(fallback_opts, config)
+
+    planning_model =
+      Keyword.get(merged_opts, :planning_model) ||
+        System.get_env("JEV_PLANNING_MODEL") ||
+        @default_planning_model
+
+    implementation_model =
+      Keyword.get(merged_opts, :implementation_model) ||
+        System.get_env("JEV_IMPLEMENTATION_MODEL") ||
+        @default_implementation_model
+
+    edit_tools = Keyword.get(merged_opts, :edit_tools, @default_edit_tools)
 
     messages = Map.get(derived_context, :messages, [])
-    phase = determine_phase(messages)
+    phase = determine_phase(messages, edit_tools)
 
     effective_model =
       case phase do
@@ -50,20 +68,22 @@ defmodule SuperPi.Plugins.JevRouter do
 
   @doc """
   Determines the current work phase (:planning or :implementation) by inspecting
-  whether any edit tools ('write' or 'edit') have been called in previous turns.
+  whether any edit tools have been called in previous turns.
   """
-  def determine_phase(messages) when is_list(messages) do
+  def determine_phase(messages, edit_tools \\ @default_edit_tools)
+
+  def determine_phase(messages, edit_tools) when is_list(messages) do
     has_edit_call? =
       Enum.any?(messages, fn msg ->
         case msg do
           %{"role" => "assistant", "content" => blocks} when is_list(blocks) ->
             Enum.any?(blocks, fn
-              %{"type" => "tool_call", "name" => name} -> name in @edit_tools
+              %{"type" => "tool_call", "name" => name} -> name in edit_tools
               _ -> false
             end)
 
           %{"role" => "tool", "name" => name} ->
-            name in @edit_tools
+            name in edit_tools
 
           _ ->
             false
@@ -73,5 +93,5 @@ defmodule SuperPi.Plugins.JevRouter do
     if has_edit_call?, do: :implementation, else: :planning
   end
 
-  def determine_phase(_), do: :planning
+  def determine_phase(_, _), do: :planning
 end

@@ -214,22 +214,45 @@ Super-Pi-BEAM includes a library of **13 modular plugins** migrated from the Pi 
 | **`GitCheckpoint`** | `SuperPi.Plugins.GitCheckpoint` | **Atomic rollback**: takes git stash checkpoints before tool mutations to support clean fork recovery. |
 | **`AutoCommit`** | `SuperPi.Plugins.AutoCommit` | **Turn finalization**: automatically stages and commits modified files when an agent run finishes. |
 
+### First-Class Plugin Configuration Architecture
+
+Plugins accept declarative configuration via `{PluginModule, opts}` or `{:alias, opts}` tuples. The `SuperPi.Extension` pipeline runner automatically unpacks these tuples and injects the options into `ctx[:config]` for all 12 extension lifecycle hooks (`run_on_input`, `run_before_agent_start`, `run_before_tool`, `run_after_run`, etc.).
+
 ```elixir
-# Declarative assembly in custom harnesses:
 defmodule MyCompanyHarness do
   @behaviour SuperPi.Harness
+  alias SuperPi.Plugins
+
+  @declarative_plugins [
+    # Guard against accidental secret leaks and credential reads
+    {Plugins.ProtectedPaths, [tools: ["write", "edit", "read"]]},
+    # Intercept destructive terminal operations
+    {Plugins.ConfirmDestructive, [tools: ["bash"]]},
+    # Dynamic model cascading: Pro reasoning for planning -> Flash for coding
+    {Plugins.JevRouter, [planning_model: "gemini-2.5-pro", implementation_model: "gemini-2.5-flash"]},
+    # Fast inline bash evaluations bounded by a 10s timeout
+    {Plugins.InlineBash, [timeout_ms: 10_000, max_output_bytes: 8_192]},
+    # Automatic turn finalization commit
+    {Plugins.AutoCommit, [commit_prefix: "[my-agent]", enabled: true]}
+  ]
 
   @impl true
-  def extensions(opts) do
-    SuperPi.Plugins.resolve_all([
-      SuperPi.Plugins.ProtectedPaths,
-      SuperPi.Plugins.ConfirmDestructive,
-      SuperPi.Plugins.JevRouter,
-      SuperPi.Plugins.StructuredOutput
-    ])
+  def extensions(opts \\ []) do
+    extra = Keyword.get(opts, :extra_plugins, [])
+    Plugins.resolve_all(@declarative_plugins ++ extra)
   end
 end
 ```
+
+### Configuration Matrix: Files vs Environment Variables vs Session State
+
+To maintain clean separation of concerns, Super-Pi-BEAM enforces a 3-tier configuration hierarchy:
+
+| Configuration Scope | Target Storage / Location | What Belongs Here |
+| :--- | :--- | :--- |
+| **Tier 1: Declarative Files** | `lib/super_pi/harness/*.ex` (or application codebase) | **Architectural Structure & Constraints**: Plugin pipeline assembly, tool definitions, static execution boundaries (`timeout_ms`, `max_output_bytes`), auto-commit prefixes, and default cascade models. Kept in version control. |
+| **Tier 2: Environment Variables** | `.env` / Shell Environment | **Secrets & Infrastructure Adapters**: API tokens (`GEMINI_API_KEY`, `OPENAI_API_KEY`), database engine selection (`SUPER_PI_DB_ADAPTER=postgres`), port bindings (`SUPER_PI_GATEWAY_PORT`), fast operational overrides (`JEV_PLANNING_MODEL`, `JEV_IMPLEMENTATION_MODEL`), and host-specific path rules (`PROTECTED_PATHS`). Never committed. |
+| **Tier 3: Durable Session State** | `pi.agent` document in SQLite / Postgres | **Dynamic Runtime Overrides**: Per-turn parameters passed by OpenCode, Gateway requests, or MCP callers (`model`, `temperature`, `thinking`, `effort`). Persisted durably across process crashes and branch forks. |
 
 ### Adding a Custom Harness
 
@@ -311,16 +334,18 @@ lib/
 │   ├── extension.ex               # Unified 12-hook extension behaviour & pipeline
 │   ├── gateway/
 │   │   └── router.ex              # OpenAI-compatible HTTP Gateway with SSE streaming
-│   ├── harness/                   # Pluggable harness personas (Default, AGY, Planner)
+│   ├── harness/                   # Pluggable harness personas (Default, Autonomous, Interactive, AGY, Planner)
 │   │   ├── agy/                   # Encapsulated AGY submodules (discovery, brain, CLI, extensions)
 │   │   ├── agy.ex
-│   │   ├── default.ex
-│   │   └── planner.ex
+│   │   ├── autonomous.ex          # Enterprise autonomous harness with Jev cascading & auto-commit
+│   │   ├── default.ex             # Standard autonomous coding agent harness
+│   │   ├── interactive.ex         # Human-in-the-loop interactive harness with questionnaires & handoffs
+│   │   └── planner.ex             # Read-only architectural planning harness
 │   ├── harness.ex                 # SuperPi.Harness behaviour contract & resolver
 │   ├── mcp/
 │   │   └── server.ex              # Model Context Protocol stdio server
-│   ├── plugins/                   # Reusable Pi ecosystem plugins (GitCheckpoint, AutoCommit, ConfirmDestructive)
-│   ├── plugins.ex                 # SuperPi.Plugins registry & resolver
+│   ├── plugins/                   # 13 reusable Pi ecosystem plugins (JevRouter, Handoff, InlineBash, etc.)
+│   ├── plugins.ex                 # SuperPi.Plugins registry, aliases, & option resolver
 │   ├── repo.ex                    # Runtime-switchable SQLite3 / Postgrex Ecto repo facade
 │   ├── rpc/
 │   │   └── server.ex              # JSON-RPC 2.0 server with K=2 ack-clocked backpressure

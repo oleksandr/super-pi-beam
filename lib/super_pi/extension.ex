@@ -135,9 +135,23 @@ defmodule SuperPi.Extension do
 
   # --- Pipeline Runners ---
 
+  defp unpack_ext({mod, opts}), do: {mod, opts}
+  defp unpack_ext(mod) when is_atom(mod), do: {mod, []}
+
+  defp ext_ctx({_mod, opts}, ctx) do
+    Map.put(ctx, :config, opts)
+  end
+
+  defp ext_ctx(mod, ctx) when is_atom(mod) do
+    Map.put(ctx, :config, [])
+  end
+
   def run_on_input(extensions, input, ctx) do
     Enum.reduce_while(extensions, {:continue, input, []}, fn ext, {:continue, cur_input, cur_media} ->
-      case ext.on_input(cur_input, ctx) do
+      {mod, _opts} = unpack_ext(ext)
+      mod_ctx = ext_ctx(ext, ctx)
+
+      case mod.on_input(cur_input, mod_ctx) do
         :continue -> {:cont, {:continue, cur_input, cur_media}}
         {:transform, new_input, new_media} -> {:cont, {:continue, new_input, cur_media ++ new_media}}
         :handled -> {:halt, :handled}
@@ -147,14 +161,19 @@ defmodule SuperPi.Extension do
 
   def run_before_agent_start(extensions, agent_cfg, ctx) do
     Enum.reduce(extensions, agent_cfg, fn ext, acc ->
-      {:ok, next} = ext.before_agent_start(acc, ctx)
+      {mod, _opts} = unpack_ext(ext)
+      mod_ctx = ext_ctx(ext, ctx)
+      {:ok, next} = mod.before_agent_start(acc, mod_ctx)
       next
     end)
   end
 
   def run_before_compact(extensions, req, ctx) do
     Enum.reduce_while(extensions, :default, fn ext, _acc ->
-      case ext.before_compact(req, ctx) do
+      {mod, _opts} = unpack_ext(ext)
+      mod_ctx = ext_ctx(ext, ctx)
+
+      case mod.before_compact(req, mod_ctx) do
         :default -> {:cont, :default}
         {:compacted, summary, data} -> {:halt, {:compacted, summary, data}}
         :cancel -> {:halt, :cancel}
@@ -164,14 +183,19 @@ defmodule SuperPi.Extension do
 
   def run_before_request(extensions, derived, ctx) do
     Enum.reduce(extensions, derived, fn ext, acc ->
-      {:ok, next} = ext.before_request(acc, ctx)
+      {mod, _opts} = unpack_ext(ext)
+      mod_ctx = ext_ctx(ext, ctx)
+      {:ok, next} = mod.before_request(acc, mod_ctx)
       next
     end)
   end
 
   def run_before_provider_request(extensions, payload, ctx) do
     Enum.reduce_while(extensions, {:ok, payload}, fn ext, {:ok, acc} ->
-      case ext.before_provider_request(acc, ctx) do
+      {mod, _opts} = unpack_ext(ext)
+      mod_ctx = ext_ctx(ext, ctx)
+
+      case mod.before_provider_request(acc, mod_ctx) do
         {:ok, next} -> {:cont, {:ok, next}}
         {:abort, reason} -> {:halt, {:abort, reason}}
       end
@@ -180,14 +204,19 @@ defmodule SuperPi.Extension do
 
   def run_after_response(extensions, msg, ctx) do
     Enum.reduce(extensions, msg, fn ext, acc ->
-      {:ok, next} = ext.after_response(acc, ctx)
+      {mod, _opts} = unpack_ext(ext)
+      mod_ctx = ext_ctx(ext, ctx)
+      {:ok, next} = mod.after_response(acc, mod_ctx)
       next
     end)
   end
 
   def run_before_tool(extensions, tool_name, args, ctx) do
     Enum.reduce_while(extensions, {:allow, args, []}, fn ext, {:allow, cur_args, overwritten_keys} ->
-      case ext.before_tool(tool_name, cur_args, ctx) do
+      {mod, _opts} = unpack_ext(ext)
+      mod_ctx = ext_ctx(ext, ctx)
+
+      case mod.before_tool(tool_name, cur_args, mod_ctx) do
         :allow ->
           {:cont, {:allow, cur_args, overwritten_keys}}
 
@@ -218,7 +247,9 @@ defmodule SuperPi.Extension do
     chain =
       Enum.reverse(extensions)
       |> Enum.reduce(core_exec_fun, fn ext, next_fn ->
-        fn current_args -> ext.wrap_tool(tool_name, current_args, next_fn, ctx) end
+        {mod, _opts} = unpack_ext(ext)
+        mod_ctx = ext_ctx(ext, ctx)
+        fn current_args -> mod.wrap_tool(tool_name, current_args, next_fn, mod_ctx) end
       end)
 
     chain.(args)
@@ -226,14 +257,19 @@ defmodule SuperPi.Extension do
 
   def run_after_tool(extensions, tool_name, args, result, ctx) do
     Enum.reduce(extensions, result, fn ext, acc ->
-      {:ok, next} = ext.after_tool(tool_name, args, acc, ctx)
+      {mod, _opts} = unpack_ext(ext)
+      mod_ctx = ext_ctx(ext, ctx)
+      {:ok, next} = mod.after_tool(tool_name, args, acc, mod_ctx)
       next
     end)
   end
 
   def run_after_tools(extensions, results, ctx) do
     Enum.reduce_while(extensions, :continue, fn ext, :continue ->
-      case ext.after_tools(results, ctx) do
+      {mod, _opts} = unpack_ext(ext)
+      mod_ctx = ext_ctx(ext, ctx)
+
+      case mod.after_tools(results, mod_ctx) do
         :continue -> {:cont, :continue}
         other -> {:halt, other}
       end
@@ -242,7 +278,10 @@ defmodule SuperPi.Extension do
 
   def run_after_run(extensions, summary, ctx) do
     Enum.reduce_while(extensions, :accept, fn ext, :accept ->
-      case ext.after_run(summary, ctx) do
+      {mod, _opts} = unpack_ext(ext)
+      mod_ctx = ext_ctx(ext, ctx)
+
+      case mod.after_run(summary, mod_ctx) do
         :accept -> {:cont, :accept}
         {:continue, follow_up} -> {:halt, {:continue, follow_up}}
       end

@@ -84,8 +84,15 @@ defmodule SuperPi.Plugins do
   end
 
   @doc """
-  Resolves a plugin specification (atom, string, or module).
+  Resolves a plugin specification (atom, string, module, or {spec, opts} tuple).
   """
+  def resolve({mod_or_name, opts}) when is_list(opts) or is_map(opts) do
+    case resolve(mod_or_name) do
+      nil -> nil
+      resolved_mod -> {resolved_mod, opts}
+    end
+  end
+
   def resolve(module) when is_atom(module) do
     if Code.ensure_loaded?(module) and function_exported?(module, :id, 0) do
       module
@@ -99,20 +106,19 @@ defmodule SuperPi.Plugins do
     Map.get(@aliases, normalized)
   end
 
-  def resolve({mod_or_name, _opts}) do
-    resolve(mod_or_name)
-  end
-
   def resolve(_), do: nil
 
   @doc """
-  Resolves a declarative list of plugins, ignoring invalid entries.
+  Resolves a declarative list of plugins, preserving configuration options and ignoring invalid entries.
   """
   def resolve_all(specs) when is_list(specs) do
     specs
     |> Enum.map(&resolve/1)
     |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
+    |> Enum.uniq_by(fn
+      {mod, _opts} -> mod
+      mod -> mod
+    end)
   end
 
   def resolve_all(_), do: []

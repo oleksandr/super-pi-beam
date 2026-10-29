@@ -50,9 +50,12 @@ defmodule SuperPi.Plugins.Subagent do
 
   @impl true
   def wrap_tool("delegate_subagent", args, _next, ctx) do
+    config = Map.get(ctx, :config, [])
+    default_timeout = Keyword.get(config, :timeout_ms, 30_000)
+
     role = to_string(Map.get(args, "role") || Map.get(args, :role) || "worker")
     prompt = Map.get(args, "prompt") || Map.get(args, :prompt) || ""
-    timeout = Map.get(args, "timeout_ms") || Map.get(args, :timeout_ms) || 30_000
+    timeout = Map.get(args, "timeout_ms") || Map.get(args, :timeout_ms) || default_timeout
 
     Logger.info("[Subagent] Spawning #{role} subagent for prompt: #{String.slice(prompt, 0, 60)}...")
 

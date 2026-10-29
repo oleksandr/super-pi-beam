@@ -4,6 +4,10 @@ defmodule SuperPi.Plugins.AutoCommit do
 
   Automatically checks for uncommitted git changes when an agent turn completes (`after_run/2`),
   and creates an atomic git commit if repository changes are detected.
+
+  ### Configuration Options (`ctx[:config]` or harness tuple):
+  - `:enabled` - Boolean to toggle auto-commit behavior (default: `true`).
+  - `:commit_prefix` - Prefix string for generated commit messages (default: `"[super-pi]"`).
   """
 
   use SuperPi.Extension
@@ -18,7 +22,19 @@ defmodule SuperPi.Plugins.AutoCommit do
 
   @impl true
   def after_run(summary, ctx) do
+    config = Map.get(ctx, :config, [])
+    enabled? = Keyword.get(config, :enabled, true)
+
+    if enabled? do
+      perform_commit(summary, ctx, config)
+    else
+      :accept
+    end
+  end
+
+  defp perform_commit(summary, ctx, config) do
     ws = Map.get(ctx, :workspace_root, File.cwd!())
+    prefix = Keyword.get(config, :commit_prefix, "[super-pi]")
 
     case System.cmd("git", ["status", "--porcelain"], cd: ws, stderr_to_stdout: true) do
       {status, 0} when byte_size(status) > 0 ->
@@ -30,10 +46,10 @@ defmodule SuperPi.Plugins.AutoCommit do
             text when is_binary(text) and byte_size(text) > 0 ->
               first_line = text |> String.split("\n", parts: 2) |> hd() |> String.trim()
               trimmed = String.slice(first_line, 0, 72)
-              "[super-pi] #{trimmed}"
+              "#{prefix} #{trimmed}"
 
             _ ->
-              "[super-pi] Agent automated modifications"
+              "#{prefix} Agent automated modifications"
           end
 
         case System.cmd("git", ["commit", "-m", msg], cd: ws, stderr_to_stdout: true) do

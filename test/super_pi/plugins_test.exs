@@ -51,17 +51,17 @@ defmodule SuperPi.PluginsTest do
       assert Plugins.resolve(:protected_paths) == ProtectedPaths
       assert Plugins.resolve("protected-paths") == ProtectedPaths
       assert Plugins.resolve("jev-router") == JevRouter
-      assert Plugins.resolve({:inline_bash, []}) == InlineBash
-      assert Plugins.resolve({"subagent", [timeout: 5000]}) == Subagent
+      assert Plugins.resolve({:inline_bash, [timeout_ms: 5000]}) == {InlineBash, [timeout_ms: 5000]}
+      assert Plugins.resolve({"subagent", [timeout_ms: 5000]}) == {Subagent, [timeout_ms: 5000]}
 
       resolved = Plugins.resolve_all([
         :protected_paths,
         "jev-router",
-        {StructuredOutput, []},
+        {StructuredOutput, [terminating: true]},
         :unknown_plugin
       ])
 
-      assert resolved == [ProtectedPaths, JevRouter, StructuredOutput]
+      assert resolved == [ProtectedPaths, JevRouter, {StructuredOutput, [terminating: true]}]
     end
   end
 
@@ -275,28 +275,40 @@ defmodule SuperPi.PluginsTest do
   end
 
   describe "Declarative Showcase Harnesses" do
-    test "SuperPi.Harness.Autonomous resolves all composed plugins" do
+    test "SuperPi.Harness.Autonomous resolves all composed plugins with options" do
       exts = Autonomous.extensions()
-      assert ProtectedPaths in exts
-      assert ConfirmDestructive in exts
-      assert GitCheckpoint in exts
-      assert AutoCommit in exts
-      assert JevRouter in exts
-      assert Todo in exts
-      assert PromptCustomizer in exts
+      mods = Enum.map(exts, fn {m, _} -> m; m -> m end)
+
+      assert ProtectedPaths in mods
+      assert ConfirmDestructive in mods
+      assert GitCheckpoint in mods
+      assert AutoCommit in mods
+      assert JevRouter in mods
+      assert Todo in mods
+      assert PromptCustomizer in mods
+
+      assert {ProtectedPaths, [tools: ["write", "edit", "read"]]} in exts
+      assert {ConfirmDestructive, [tools: ["bash"]]} in exts
+      assert {AutoCommit, [commit_prefix: "[super-pi-auto]", enabled: true]} in exts
+      assert {JevRouter, [planning_model: "gemini-2.5-pro", implementation_model: "gemini-2.5-flash"]} in exts
 
       defaults = Autonomous.agent_defaults()
       assert defaults["effort"] == "high"
       assert defaults["executionMode"] == "auto"
     end
 
-    test "SuperPi.Harness.Interactive resolves all composed plugins" do
+    test "SuperPi.Harness.Interactive resolves all composed plugins with options" do
       exts = Interactive.extensions()
-      assert Questionnaire in exts
-      assert InlineBash in exts
-      assert StructuredOutput in exts
-      assert Handoff in exts
-      assert Subagent in exts
+      mods = Enum.map(exts, fn {m, _} -> m; m -> m end)
+
+      assert Questionnaire in mods
+      assert InlineBash in mods
+      assert StructuredOutput in mods
+      assert Handoff in mods
+      assert Subagent in mods
+
+      assert {InlineBash, [timeout_ms: 10_000, max_output_bytes: 8_192]} in exts
+      assert {Subagent, [timeout_ms: 30_000]} in exts
 
       defaults = Interactive.agent_defaults()
       assert defaults["effort"] == "medium"
@@ -308,6 +320,46 @@ defmodule SuperPi.PluginsTest do
       assert SuperPi.Harness.resolve("super-pi-interactive") == Interactive
       assert SuperPi.Harness.resolve("auto") == Autonomous
       assert SuperPi.Harness.resolve("interactive") == Interactive
+    end
+  end
+
+  describe "Plugin Configuration Injection via Extension Pipeline" do
+    test "ProtectedPaths respects custom patterns passed via ctx[:config]" do
+      # Normal path allowed by default
+      assert ProtectedPaths.before_tool("write", %{"path" => "lib/custom.secret"}, %{}) == :allow
+
+      # Blocked when custom pattern configured in ctx[:config]
+      ctx = %{config: [patterns: [~r/\.secret$/]]}
+      assert {:block, msg} = ProtectedPaths.before_tool("write", %{"path" => "lib/custom.secret"}, ctx)
+      assert msg =~ "path 'lib/custom.secret' is protected"
+    end
+
+    test "SuperPi.Extension pipeline runner injects plugin options into ctx[:config]" do
+      configured_ext = {ProtectedPaths, [patterns: [~r/locked_file\.txt$/]]}
+
+      # Run before_tool through extension pipeline
+      result = SuperPi.Extension.run_before_tool([configured_ext], "write", %{"path" => "locked_file.txt"}, %{})
+      assert {:block, msg} = result
+      assert msg =~ "path 'locked_file.txt' is protected"
+
+      # Verify clean path is allowed
+      assert {:allow, %{"path" => "normal.txt"}} =
+               SuperPi.Extension.run_before_tool([configured_ext], "write", %{"path" => "normal.txt"}, %{})
+    end
+
+    test "JevRouter respects custom planning and implementation models via ctx[:config]" do
+      ctx = %{config: [planning_model: "test-pro-model", implementation_model: "test-flash-model"]}
+
+      # In planning phase
+      assert {:ok, derived} = JevRouter.before_request(%{messages: []}, ctx)
+      assert derived[:model] == "test-pro-model"
+      assert derived[:jev_phase] == :planning
+
+      # In implementation phase (after write tool call)
+      edit_msg = %{"role" => "assistant", "content" => [%{"type" => "tool_call", "name" => "write"}]}
+      assert {:ok, derived_impl} = JevRouter.before_request(%{messages: [edit_msg]}, ctx)
+      assert derived_impl[:model] == "test-flash-model"
+      assert derived_impl[:jev_phase] == :implementation
     end
   end
 end
