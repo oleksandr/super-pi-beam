@@ -287,8 +287,12 @@ defmodule SuperPi.PluginsTest do
       assert Todo in mods
       assert PromptCustomizer in mods
 
-      assert {ProtectedPaths, [tools: ["write", "edit", "read"]]} in exts
-      assert {ConfirmDestructive, [tools: ["bash"]]} in exts
+      assert {ProtectedPaths, opts} = Enum.find(exts, &match?({ProtectedPaths, _}, &1))
+      # Aliases and read tools were added by the security fix; the original three stay guarded.
+      assert Enum.all?(["write", "edit", "read"], &(&1 in opts[:tools]))
+      assert {ConfirmDestructive, cd_opts} = Enum.find(exts, &match?({ConfirmDestructive, _}, &1))
+      # Shell aliases were added by the security fix; bash stays guarded.
+      assert "bash" in cd_opts[:tools]
       assert {AutoCommit, [commit_prefix: "[super-pi-auto]", enabled: true]} in exts
       assert {JevRouter, [planning_model: "gemini-3.1-pro-preview", implementation_model: "gemini-3-flash-preview"]} in exts
 
