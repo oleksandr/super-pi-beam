@@ -257,8 +257,16 @@ defmodule SuperPi.Harness.AGY.CLI do
       |> maybe_put(:llm_responder, Keyword.get(opts, :llm_responder))
       |> maybe_put(:tool_executor, Keyword.get(opts, :tool_executor))
 
-    {:ok, pid} = start_or_attach_machine(conv.id, machine_opts)
+    {:ok, pid, started?} = start_or_attach_machine(conv.id, machine_opts)
 
+    try do
+      run_session(conv, pid, flags, positional, workspace_dirs, app_dir, opts)
+    after
+      if started? and Process.alive?(pid), do: GenServer.stop(pid)
+    end
+  end
+
+  defp run_session(conv, pid, flags, positional, workspace_dirs, app_dir, opts) do
     prompt_text = flags.print || flags.prompt || Enum.join(positional, " ")
 
     result =
@@ -290,7 +298,6 @@ defmodule SuperPi.Harness.AGY.CLI do
           {0, OwlTUI.render_status_bar(conv.id)}
       end
 
-    GenServer.stop(pid)
     result
   end
 
@@ -560,8 +567,11 @@ defmodule SuperPi.Harness.AGY.CLI do
 
   defp start_or_attach_machine(conv_id, opts) do
     case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
-      [{pid, _}] -> {:ok, pid}
-      [] -> Machine.start_link(opts)
+      [{pid, _}] ->
+        {:ok, pid, false}
+
+      [] ->
+        with {:ok, pid} <- Machine.start_link(opts), do: {:ok, pid, true}
     end
   end
 
