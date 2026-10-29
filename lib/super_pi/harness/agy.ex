@@ -18,7 +18,7 @@ defmodule SuperPi.Harness.AGY do
   end
 
   @impl true
-  def extensions(_opts) do
+  def extensions(_opts \\ []) do
     [
       SuperPi.Harness.AGY.Extensions.Rules,
       SuperPi.Harness.AGY.Extensions.Skills,

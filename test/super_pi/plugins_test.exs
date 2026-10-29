@@ -290,7 +290,7 @@ defmodule SuperPi.PluginsTest do
       assert {ProtectedPaths, [tools: ["write", "edit", "read"]]} in exts
       assert {ConfirmDestructive, [tools: ["bash"]]} in exts
       assert {AutoCommit, [commit_prefix: "[super-pi-auto]", enabled: true]} in exts
-      assert {JevRouter, [planning_model: "gemini-2.5-pro", implementation_model: "gemini-2.5-flash"]} in exts
+      assert {JevRouter, [planning_model: "gemini-3.1-pro-preview", implementation_model: "gemini-2.5-flash"]} in exts
 
       defaults = Autonomous.agent_defaults()
       assert defaults["effort"] == "high"

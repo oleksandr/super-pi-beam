@@ -212,8 +212,11 @@ defmodule SuperPi.Conversation.Machine do
     derived = Context.derive(data.conversation_id)
     derived = Extension.run_before_request(data.extensions, derived, ctx)
 
+    effective_payload_model =
+      Map.get(derived, :model) || Map.get(mutated_agent, "model", "claude-sonnet-4-5")
+
     provider_payload = %{
-      model: Map.get(mutated_agent, "model", "claude-sonnet-4-5"),
+      model: effective_payload_model,
       messages: derived.messages,
       system_sections: derived.system_sections,
       tools: derived.tools,
@@ -643,9 +646,16 @@ defmodule SuperPi.Conversation.Machine do
         String.starts_with?(model, "gemini-") ->
           model
 
-        model in ["super-pi-agent", "super-pi-planner", "super-pi-fast", "default"] and
-            SuperPi.AI.GeminiClient.configured?() ->
-          "gemini-3-flash-preview"
+        String.starts_with?(model, "google/") ->
+          String.replace_prefix(model, "google/", "")
+
+        SuperPi.AI.GeminiClient.configured?() and
+            (SuperPi.Harness.harness?(model) or String.starts_with?(model, "super-pi-") or model == "default") ->
+          case model do
+            m when m in ["super-pi-planner", "planner"] -> "gemini-3.1-pro-preview"
+            m when m in ["super-pi-fast", "fast"] -> "gemini-2.5-flash"
+            _ -> "gemini-3-flash-preview"
+          end
 
         true ->
           model

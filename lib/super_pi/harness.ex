@@ -52,6 +52,20 @@ defmodule SuperPi.Harness do
   end
 
   @doc """
+  Returns true if the given model name or ID corresponds to a registered harness.
+  """
+  def harness?(name_or_id) when is_binary(name_or_id) do
+    key =
+      name_or_id
+      |> String.downcase()
+      |> String.replace_prefix("super-pi/", "")
+
+    Map.has_key?(@registry, key)
+  end
+
+  def harness?(_), do: false
+
+  @doc """
   Resolves a model name, alias, or harness ID to its corresponding Harness module.
   Falls back to `SuperPi.Harness.Default` if unknown.
   """

@@ -20,7 +20,7 @@ defmodule SuperPi.Plugins.JevRouter do
   use SuperPi.Extension
   require Logger
 
-  @default_planning_model "gemini-2.5-pro"
+  @default_planning_model "gemini-3.1-pro-preview"
   @default_implementation_model "gemini-2.5-flash"
   @default_edit_tools ["write", "edit"]
 

@@ -18,7 +18,7 @@ defmodule SuperPi.Harness.Default do
   end
 
   @impl true
-  def extensions(_opts), do: []
+  def extensions(_opts \\ []), do: []
 
   @impl true
   def agent_defaults(opts \\ []) do

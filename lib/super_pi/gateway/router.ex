@@ -72,7 +72,16 @@ defmodule SuperPi.Gateway.Router do
 
     # 2. Extract system prompt and configure agent profile via resolved harness
     system_sections = extract_system_sections(messages)
-    agent_cfg = harness.agent_defaults(model: model, system_sections: system_sections)
+    agent_opts = [system_sections: system_sections]
+
+    agent_opts =
+      if Harness.harness?(model) do
+        agent_opts
+      else
+        Keyword.put(agent_opts, :model, model)
+      end
+
+    agent_cfg = harness.agent_defaults(agent_opts)
 
     if new_session? do
       Storage.configure_agent!(conv_id, agent_cfg)

@@ -30,7 +30,7 @@ defmodule SuperPi.AI.VirtualModel do
       provider: :anthropic,
       model: "claude-opus-4-5",
       thinking_budget: 16_384,
-      fallback: {:google, "gemini-2.5-pro"}
+      fallback: {:google, "gemini-3.1-pro-preview"}
     },
     "coding" => %{
       provider: :anthropic,

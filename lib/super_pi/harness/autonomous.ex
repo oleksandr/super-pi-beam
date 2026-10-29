@@ -20,7 +20,7 @@ defmodule SuperPi.Harness.Autonomous do
     {Plugins.ConfirmDestructive, [tools: ["bash"]]},
     Plugins.GitCheckpoint,
     {Plugins.AutoCommit, [commit_prefix: "[super-pi-auto]", enabled: true]},
-    {Plugins.JevRouter, [planning_model: "gemini-2.5-pro", implementation_model: "gemini-2.5-flash"]},
+    {Plugins.JevRouter, [planning_model: "gemini-3.1-pro-preview", implementation_model: "gemini-2.5-flash"]},
     Plugins.Todo,
     Plugins.PromptCustomizer
   ]
