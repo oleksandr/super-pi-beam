@@ -53,7 +53,11 @@ defmodule SuperPi.Harness.AGY.Extensions.Permissions do
           Map.get(args, "CommandLine") || Map.get(args, :command) ||
           Map.get(args, :cmd) || ""
 
-        allow_list = get_in(settings, ["permissions", "allow"]) || []
+        allow_list =
+          case Map.get(settings, "permissions") do
+            %{} = p -> Map.get(p, "allow", []) || []
+            _ -> []
+          end
 
         if mode == "auto" or command_allowed?(cmd_str, allow_list) do
           :allow
@@ -104,6 +108,8 @@ defmodule SuperPi.Harness.AGY.Extensions.Permissions do
     end)
   end
 
+  def command_allowed?(_cmd_str, _allow_list), do: false
+
   def load_effective_settings(agent_cfg) do
     app_dir = Map.get(agent_cfg, "appDataDir", Discovery.default_app_data_dir())
     settings_path = Path.join(app_dir, "settings.json")
@@ -145,7 +151,7 @@ defmodule SuperPi.Harness.AGY.Extensions.Permissions do
         allowed_roots = Enum.map(ws_paths ++ trusted, &real_path/1)
 
         Enum.any?(allowed_roots, fn root ->
-          real_target == root or String.starts_with?(real_target, root <> "/")
+          root == "/" or real_target == root or String.starts_with?(real_target, root <> "/")
         end)
       end
     end
