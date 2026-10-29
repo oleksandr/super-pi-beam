@@ -16,7 +16,7 @@ import (
 func main() {
 	rpcAddr := flag.String("rpc-addr", cmp.Or(os.Getenv("SUPER_PI_RPC_ADDR"), "127.0.0.1:4000"), "SuperPi.RPC.Server TCP address")
 	convID := flag.Int64("conversation", 0, "Conversation ID to open or attach")
-	model := flag.String("model", "gemini-3-flash-preview", "Initial LLM model")
+	model := flag.String("model", "Gemini 3.8 Flash", "Initial LLM model")
 	effort := flag.String("effort", "medium", "Initial reasoning effort")
 	mode := flag.String("mode", "auto", "Execution mode (auto|plan|accept-edits)")
 	workspace := flag.String("workspace", "", "Workspace directory")
@@ -68,9 +68,9 @@ func main() {
 		InitialPrompt:  *prompt,
 	})
 
+	// Notice: No AltScreen! Exact inline mode matching agy
 	var opts []tea.ProgramOption
-	opts = append(opts, tea.WithAltScreen(), tea.WithMouseCellMotion())
-	// Only open /dev/tty if stdin is not a terminal/chardev
+	opts = append(opts, tea.WithMouseCellMotion())
 	if fi, err := os.Stdin.Stat(); err != nil || (fi.Mode()&os.ModeCharDevice) == 0 {
 		if tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
 			defer tty.Close()

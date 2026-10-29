@@ -14,71 +14,92 @@ import (
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/oleksandr/super-pi-beam/clients/agy-tui/internal/banner"
+	"github.com/oleksandr/super-pi-beam/clients/agy-tui/internal/diff"
+	"github.com/oleksandr/super-pi-beam/clients/agy-tui/internal/panels"
 	"github.com/oleksandr/super-pi-beam/clients/agy-tui/internal/rpc"
 )
 
-// ChatItemKind identifies the visual block type in the conversation timeline.
-type ChatItemKind string
+type StepKind string
 
 const (
-	ItemUser      ChatItemKind = "user"
-	ItemAssistant ChatItemKind = "assistant"
-	ItemThinking  ChatItemKind = "thinking"
-	ItemTool      ChatItemKind = "tool"
-	ItemSystem    ChatItemKind = "system"
+	StepUser      StepKind = "user"
+	StepAssistant StepKind = "assistant"
+	StepThinking  StepKind = "thinking"
+	StepCommand   StepKind = "command"
+	StepExplore   StepKind = "explore"
+	StepEdit      StepKind = "edit"
+	StepNotice    StepKind = "notice"
 )
 
-// ChatItem represents an entry in the rich conversation viewport.
-type ChatItem struct {
-	Kind            ChatItemKind
+// StepItem represents a bullet step or message in the scrollback.
+type StepItem struct {
+	Kind            StepKind
 	Text            string
-	ToolCallID      string
 	ToolName        string
-	Arguments       map[string]any
-	OverwrittenKeys []string
+	Path            string
+	Command         string
+	Diff            *diff.DiffBlock
+	Duration        time.Duration
+	Tokens          int
 	IsError         bool
 	Done            bool
 	Collapsed       bool
+	OverwrittenKeys []string
 	Timestamp       time.Time
 }
 
-// SlashCommandSpec describes an interactive slash command in the autocomplete popup.
-type SlashCommandSpec struct {
+// ActivePanel designates any open interactive subview mounted below the composer.
+type ActivePanel int
+
+const (
+	PanelNone ActivePanel = iota
+	PanelModelPicker
+	PanelHelp
+	PanelUsage
+	PanelPermission
+)
+
+type SlashEntry struct {
 	Name        string
 	Description string
+	Action      string
 }
 
-var defaultSlashCommands = []SlashCommandSpec{
-	{Name: "/plan", Description: "Switch to read-only architectural planning mode"},
-	{Name: "/goal", Description: "Run autonomous multi-step goal with verification"},
-	{Name: "/boost", Description: "Maximize reasoning effort (effort=max)"},
-	{Name: "/compact", Description: "Compact conversation context (4-mode cut-point)"},
-	{Name: "/model", Description: "Cycle or switch active LLM model"},
-	{Name: "/mode", Description: "Cycle execution mode (auto -> plan -> accept-edits)"},
-	{Name: "/fork", Description: "Fork current conversation branch"},
-	{Name: "/clear", Description: "Clear local viewport timeline"},
-	{Name: "/help", Description: "Display keyboard shortcuts and slash commands"},
+var allSlashEntries = []SlashEntry{
+	{Name: "/add-dir", Description: "Add a directory to the workspace"},
+	{Name: "/agents", Description: "List available custom agents"},
+	{Name: "/artifact", Description: "View and review artifacts"},
+	{Name: "/btw", Description: "Ask a side question without interrupting the current task"},
+	{Name: "/changelog", Description: "Show release notes and changes"},
+	{Name: "/clear", Description: "Clear conversation and start a new one"},
+	{Name: "/context", Description: "Visualize current context usage"},
+	{Name: "/diff", Description: "View uncommitted changes and per-turn diffs"},
+	{Name: "/effort", Description: "Set the reasoning effort (low|medium|high|max)"},
+	{Name: "/exit", Description: "Exit the CLI"},
+	{Name: "/fork", Description: "Create a branch of the current conversation"},
+	{Name: "/help", Description: "Show available commands and keybindings"},
+	{Name: "/hooks", Description: "Manage hook configurations for tool events"},
+	{Name: "/keybindings", Description: "Set custom keybindings"},
+	{Name: "/mcp", Description: "Manage MCP servers"},
+	{Name: "/model", Description: "Set a model, or run a single prompt on another model"},
+	{Name: "/open", Description: "Open a file or view opened/edited files"},
+	{Name: "/permissions", Description: "Manage tool permissions"},
+	{Name: "/plugin", Description: "Manage plugins"},
+	{Name: "/resume", Description: "Browse and resume past conversations"},
+	{Name: "/rewind", Description: "Rewind conversation to a previous message"},
+	{Name: "/skills", Description: "List available skills"},
+	{Name: "/usage", Description: "View model quota usage"},
+	{Name: "/plan", Description: "Plan carefully before executing a task"},
+	{Name: "/goal", Description: "Run until the specified goal is completely finished"},
+	{Name: "/boost", Description: "Invoke Boost multi-agent orchestrator"},
+	{Name: "/compact", Description: "Compact conversation now"},
 }
 
-var availableModels = []string{
-	"gemini-3-flash-preview",
-	"gemini-4-argon-medium",
-	"gemini-4-argon-high",
-	"claude-opus-5-5-high",
-	"claude-sonnet-5-5-medium",
-}
-
-var availableModes = []string{
-	"auto",
-	"plan",
-	"accept-edits",
-}
-
-// Config holds the initial session configuration passed to the TUI.
+// Config holds initial session settings for the TUI.
 type Config struct {
 	Client         *rpc.Client
 	ConversationID int64
@@ -89,100 +110,89 @@ type Config struct {
 	InitialPrompt  string
 }
 
-// WatchMsg wraps an rpc.WatchEvent for Bubble Tea's Update loop.
+// WatchMsg wraps rpc.WatchEvent for the Bubble Tea loop.
 type WatchMsg rpc.WatchEvent
 
-// UIRequestMsg wraps an rpc.UIRequestParams for Bubble Tea's Update loop.
+// UIRequestMsg wraps rpc.UIRequestParams for the Bubble Tea loop.
 type UIRequestMsg rpc.UIRequestParams
 
 type rpcErrorMsg struct{ err error }
 
-// Model implements tea.Model for the Antigravity CLI clone TUI.
-type Model struct {
-	cfg               Config
-	viewport          viewport.Model
-	composer          textarea.Model
-	spin              spinner.Model
-	mdRenderer        *glamour.TermRenderer
-	width             int
-	height            int
-	ready             bool
-	machineState      string
-	seq               int64
-	items             []ChatItem
-	collapseThinking  bool
-	collapseTools     bool
-	suggestions       []SlashCommandSpec
-	fileSuggestions   []string
-	selectedSuggest   int
-	activeUIRequest   *rpc.UIRequestParams
-	workspaceFiles    []string
+type submitMsg struct {
+	text string
+	mode string
 }
 
-// NewModel initializes the Bubble Tea TUI model.
+// Model implements the exact inline Bubble Tea TUI for Super-Pi-BEAM.
+type Model struct {
+	cfg              Config
+	composer         textarea.Model
+	spin             spinner.Model
+	mdRenderer       *glamour.TermRenderer
+	width            int
+	height           int
+	steps            []StepItem
+	activePanel      ActivePanel
+	panelCursor      int
+	helpTab          int
+	activeUIRequest  *rpc.UIRequestParams
+	suggestions      []SlashEntry
+	fileSuggestions  []string
+	selectedSuggest  int
+	workspaceFiles   []string
+	showTrajectory   bool
+	machineState     string
+	inFlightStepText string
+}
+
+// NewModel constructs an inline agy-class model with the SuperPi logo.
 func NewModel(cfg Config) Model {
 	ta := textarea.New()
-	ta.Placeholder = "Ask Antigravity anything... (/ for commands, @ for files, Enter to send, Ctrl+S to steer)"
+	ta.Placeholder = ""
 	ta.Focus()
-	ta.Prompt = "❯ "
+	ta.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#60A5FA")).Render("> ")
 	ta.CharLimit = 32768
-	ta.SetWidth(94)
-	ta.SetHeight(3)
+	ta.SetWidth(100)
+	ta.SetHeight(1)
 	ta.ShowLineNumbers = false
-	ta.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
+	ta.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j", "shift+enter")
 
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8"))
 
-	vp := viewport.New(98, 20)
-
 	md, _ := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(76),
+		glamour.WithWordWrap(96),
 	)
 
 	wsDir := cmp.Or(cfg.WorkspaceDir, ".")
 	files := scanWorkspaceFiles(wsDir, 150)
 
-	items := []ChatItem{
-		{
-			Kind:      ItemSystem,
-			Text:      fmt.Sprintf("Connected to Super-Pi-BEAM RPC • Conversation #%d • Workspace %s", cfg.ConversationID, wsDir),
-			Done:      true,
-			Timestamp: time.Now(),
-		},
-	}
-
-	m := Model{
+	return Model{
 		cfg: Config{
 			Client:         cfg.Client,
 			ConversationID: cfg.ConversationID,
-			Model:          cmp.Or(cfg.Model, "gemini-3-flash-preview"),
+			Model:          cmp.Or(cfg.Model, "Gemini 3.8 Flash"),
 			Effort:         cmp.Or(cfg.Effort, "medium"),
 			Mode:           cmp.Or(cfg.Mode, "auto"),
 			WorkspaceDir:   wsDir,
 			InitialPrompt:  cfg.InitialPrompt,
 		},
-		viewport:         vp,
-		composer:         ta,
-		spin:             sp,
-		mdRenderer:       md,
-		width:            100,
-		height:           30,
-		ready:            true,
-		machineState:     "idle",
-		items:            items,
-		collapseThinking: false,
-		collapseTools:    false,
-		workspaceFiles:   files,
+		composer:       ta,
+		spin:           sp,
+		mdRenderer:     md,
+		width:          100,
+		height:         35,
+		steps:          nil,
+		activePanel:    PanelNone,
+		workspaceFiles: files,
+		showTrajectory: false,
+		machineState:   "idle",
 	}
-	m.recalculateLayout()
-	m.refreshViewport()
-	return m
 }
 
-// Init starts the spinner, RPC event watcher, and optional initial prompt.
+// Init starts tea commands.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		textarea.Blink,
@@ -191,17 +201,12 @@ func (m Model) Init() tea.Cmd {
 		waitForUIRequest(m.cfg.Client),
 	}
 	if m.cfg.InitialPrompt != "" {
-		prompt := m.cfg.InitialPrompt
+		p := m.cfg.InitialPrompt
 		cmds = append(cmds, func() tea.Msg {
-			return submitPromptMsg{text: prompt, mode: "queue"}
+			return submitMsg{text: p, mode: "queue"}
 		})
 	}
 	return tea.Batch(cmds...)
-}
-
-type submitPromptMsg struct {
-	text string
-	mode string
 }
 
 func waitForRPCEvent(client *rpc.Client) tea.Cmd {
@@ -230,16 +235,15 @@ func waitForUIRequest(client *rpc.Client) tea.Cmd {
 	}
 }
 
-// Update processes keyboard, window resize, spinner, and live RPC streaming events.
+// Update processes keystrokes and streaming events.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = max(msg.Width, 40)
-		m.height = max(msg.Height, 14)
-		m.recalculateLayout()
-		m.refreshViewport()
+		m.width = max(msg.Width, 50)
+		m.height = max(msg.Height, 15)
+		m.composer.SetWidth(max(m.width-4, 40))
 		return m, nil
 
 	case spinner.TickMsg:
@@ -247,65 +251,121 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
 
-	case submitPromptMsg:
+	case submitMsg:
 		return m.handleSubmit(msg.text, msg.mode)
 
 	case WatchMsg:
 		m.applyWatchEvent(rpc.WatchEvent(msg))
-		m.refreshViewport()
 		cmds = append(cmds, waitForRPCEvent(m.cfg.Client))
 		return m, tea.Batch(cmds...)
 
 	case UIRequestMsg:
 		req := rpc.UIRequestParams(msg)
 		m.activeUIRequest = &req
-		m.refreshViewport()
+		m.activePanel = PanelPermission
 		cmds = append(cmds, waitForUIRequest(m.cfg.Client))
 		return m, tea.Batch(cmds...)
 
 	case rpcErrorMsg:
-		m.items = append(m.items, ChatItem{
-			Kind:      ItemSystem,
+		m.steps = append(m.steps, StepItem{
+			Kind:      StepNotice,
 			Text:      fmt.Sprintf("RPC Error: %v", msg.err),
 			IsError:   true,
 			Done:      true,
 			Timestamp: time.Now(),
 		})
-		m.refreshViewport()
 		return m, nil
 
 	case tea.KeyMsg:
-		// 1. Handle active interactive permission / UI modal first
-		if m.activeUIRequest != nil {
+		// Active panel keystroke interceptors
+		if m.activePanel != PanelNone {
 			switch msg.String() {
-			case "y", "Y", "enter":
-				return m.resolveUIModal("allow")
-			case "a", "A":
-				return m.resolveUIModal("always_allow")
-			case "n", "N", "esc":
-				return m.resolveUIModal("deny")
+			case "esc", "ctrl+c":
+				m.closePanel()
+				return m, nil
+			}
+
+			switch m.activePanel {
+			case PanelModelPicker:
+				switch msg.String() {
+				case "up":
+					m.panelCursor = (m.panelCursor - 1 + len(panels.DefaultModels)) % len(panels.DefaultModels)
+					return m, nil
+				case "down":
+					m.panelCursor = (m.panelCursor + 1) % len(panels.DefaultModels)
+					return m, nil
+				case "left":
+					m.cycleEffort(-1)
+					return m, nil
+				case "right":
+					m.cycleEffort(1)
+					return m, nil
+				case "enter":
+					chosen := panels.DefaultModels[m.panelCursor]
+					m.cfg.Model = chosen.DisplayName
+					m.steps = append(m.steps, StepItem{
+						Kind:      StepNotice,
+						Text:      fmt.Sprintf("> /model\n  ⎿  Model set to %s (%s)", chosen.DisplayName, strings.Title(m.cfg.Effort)),
+						Done:      true,
+						Timestamp: time.Now(),
+					})
+					m.activePanel = PanelNone
+					return m, nil
+				}
+
+			case PanelHelp:
+				switch msg.String() {
+				case "tab", "right":
+					m.helpTab = (m.helpTab + 1) % 3
+					return m, nil
+				case "left":
+					m.helpTab = (m.helpTab - 1 + 3) % 3
+					return m, nil
+				}
+
+			case PanelPermission:
+				switch msg.String() {
+				case "1", "y", "enter":
+					return m.resolvePermission("allow")
+				case "2", "a":
+					return m.resolvePermission("always_allow_session")
+				case "3":
+					return m.resolvePermission("always_allow_persist")
+				case "4", "n":
+					return m.resolvePermission("deny")
+				}
 			}
 		}
 
-		// 2. Global shortcuts
+		// Global shortcuts
 		switch msg.String() {
-		case "ctrl+c", "esc":
+		case "ctrl+c":
 			return m, tea.Quit
 
-		case "ctrl+t":
-			m.collapseThinking = !m.collapseThinking
-			m.refreshViewport()
-			return m, nil
+		case "ctrl+d":
+			if strings.TrimSpace(m.composer.Value()) == "" {
+				return m, tea.Quit
+			}
 
 		case "ctrl+o":
-			m.collapseTools = !m.collapseTools
-			m.refreshViewport()
+			m.showTrajectory = !m.showTrajectory
 			return m, nil
 
-		case "pgup", "pgdown":
-			var vpCmd tea.Cmd
-			m.viewport, vpCmd = m.viewport.Update(msg)
-			return m, vpCmd
+		case "?":
+			if strings.TrimSpace(m.composer.Value()) == "" {
+				m.activePanel = PanelHelp
+				m.helpTab = 2 // shortcuts tab
+				return m, nil
+			}
+
+		case "ctrl+s":
+			text := strings.TrimSpace(m.composer.Value())
+			if text != "" {
+				m.composer.Reset()
+				m.updateAutocomplete()
+				return m.handleSubmit(text, "steer")
+			}
+			return m, nil
 
 		case "tab":
 			if len(m.suggestions) > 0 {
@@ -342,15 +402,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case "ctrl+s":
-			text := strings.TrimSpace(m.composer.Value())
-			if text != "" {
-				m.composer.Reset()
-				m.updateAutocomplete()
-				return m.handleSubmit(text, "steer")
-			}
-			return m, nil
-
 		case "enter":
 			text := strings.TrimSpace(m.composer.Value())
 			if text != "" {
@@ -361,7 +412,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Also checktea.KeyEnter type explicitly in case terminal sends \r or \n
 		if msg.Type == tea.KeyEnter {
 			text := strings.TrimSpace(m.composer.Value())
 			if text != "" {
@@ -375,22 +425,56 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var taCmd tea.Cmd
 	m.composer, taCmd = m.composer.Update(msg)
+	// Auto-expand composer lines (1 to 6)
+	lines := strings.Count(m.composer.Value(), "\n") + 1
+	m.composer.SetHeight(min(max(lines, 1), 6))
 	m.updateAutocomplete()
 	cmds = append(cmds, taCmd)
 
 	return m, tea.Batch(cmds...)
 }
 
-func (m Model) resolveUIModal(decision string) (tea.Model, tea.Cmd) {
+func (m *Model) closePanel() {
+	cmdName := ""
+	switch m.activePanel {
+	case PanelModelPicker:
+		cmdName = "/model"
+	case PanelHelp:
+		cmdName = "/help"
+	case PanelUsage:
+		cmdName = "/usage"
+	}
+	m.activePanel = PanelNone
+	if cmdName != "" {
+		m.steps = append(m.steps, StepItem{
+			Kind:      StepNotice,
+			Text:      fmt.Sprintf("> %s\n  ⎿  Exited %s command", cmdName, cmdName),
+			Done:      true,
+			Timestamp: time.Now(),
+		})
+	}
+}
+
+func (m *Model) cycleEffort(dir int) {
+	levels := []string{"low", "medium", "high"}
+	idx := slices.Index(levels, m.cfg.Effort)
+	if idx == -1 {
+		idx = 1
+	}
+	next := (idx + dir + len(levels)) % len(levels)
+	m.cfg.Effort = levels[next]
+}
+
+func (m Model) resolvePermission(decision string) (tea.Model, tea.Cmd) {
 	req := m.activeUIRequest
 	m.activeUIRequest = nil
-	m.items = append(m.items, ChatItem{
-		Kind:      ItemSystem,
-		Text:      fmt.Sprintf("Permission Request [%s] -> %s", req.Title, strings.ToUpper(decision)),
+	m.activePanel = PanelNone
+	m.steps = append(m.steps, StepItem{
+		Kind:      StepNotice,
+		Text:      fmt.Sprintf("Permission: %s -> %s", req.Title, strings.ToUpper(decision)),
 		Done:      true,
 		Timestamp: time.Now(),
 	})
-	m.refreshViewport()
 
 	if m.cfg.Client == nil {
 		return m, nil
@@ -400,98 +484,41 @@ func (m Model) resolveUIModal(decision string) (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := client.RespondUI(ctx, reqID, decision); err != nil {
-			return rpcErrorMsg{err: err}
-		}
+		_ = client.RespondUI(ctx, reqID, decision)
 		return nil
 	}
 }
 
 func (m Model) handleSubmit(text string, mode string) (tea.Model, tea.Cmd) {
-	// Handle local TUI slash commands immediately or forward to SuperPi.AGY.Extensions.SlashCommands
-	switch {
-	case text == "/clear":
-		m.items = nil
-		m.refreshViewport()
+	// Handle slash commands that open specialized panels
+	switch text {
+	case "/model":
+		m.activePanel = PanelModelPicker
+		m.panelCursor = 0
 		return m, nil
-
-	case text == "/help":
-		var sb strings.Builder
-		sb.WriteString("### Antigravity TUI Shortcuts & Commands\n")
-		sb.WriteString("- `Enter` — Submit prompt (`queue` mode)\n")
-		sb.WriteString("- `Ctrl+S` — Preempt active tool/stream (`steer` mode)\n")
-		sb.WriteString("- `Alt+Enter` / `Ctrl+J` — Insert newline in composer\n")
-		sb.WriteString("- `Tab` / `Up` / `Down` — Navigate `/slash` and `@file` autocomplete\n")
-		sb.WriteString("- `Ctrl+T` — Toggle collapsible Thinking blocks\n")
-		sb.WriteString("- `Ctrl+O` — Toggle collapsible Tool call blocks\n")
-		sb.WriteString("- `PgUp` / `PgDn` — Scroll conversation viewport\n")
-		for _, sc := range defaultSlashCommands {
-			sb.WriteString(fmt.Sprintf("- `%s` — %s\n", sc.Name, sc.Description))
-		}
-		m.items = append(m.items, ChatItem{
-			Kind:      ItemSystem,
-			Text:      sb.String(),
-			Done:      true,
-			Timestamp: time.Now(),
-		})
-		m.refreshViewport()
+	case "/help":
+		m.activePanel = PanelHelp
+		m.helpTab = 0
 		return m, nil
-
-	case text == "/model":
-		idx := slices.Index(availableModels, m.cfg.Model)
-		nextModel := availableModels[(idx+1)%len(availableModels)]
-		m.cfg.Model = nextModel
-		text = "/model " + nextModel
-
-	case text == "/mode":
-		idx := slices.Index(availableModes, m.cfg.Mode)
-		nextMode := availableModes[(idx+1)%len(availableModes)]
-		m.cfg.Mode = nextMode
-		text = "/mode " + nextMode
-
-	case strings.HasPrefix(text, "/model "):
-		m.cfg.Model = strings.TrimSpace(strings.TrimPrefix(text, "/model "))
-
-	case strings.HasPrefix(text, "/mode "):
-		m.cfg.Mode = strings.TrimSpace(strings.TrimPrefix(text, "/mode "))
-
-	case text == "/plan":
-		m.cfg.Mode = "plan"
-
-	case text == "/boost":
-		m.cfg.Effort = "max"
-
-	case text == "/compact":
-		if m.cfg.Client != nil {
-			client := m.cfg.Client
-			convID := m.cfg.ConversationID
-			return m, func() tea.Msg {
-				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				defer cancel()
-				res, err := client.CompactSession(ctx, convID)
-				if err != nil {
-					return rpcErrorMsg{err: err}
-				}
-				return WatchMsg(rpc.WatchEvent{
-					Type:   "system_notice",
-					Output: fmt.Sprintf("Compacted %d entries (kept %d recent). Head entry #%d.", res.CompactedCount, res.KeptCount, res.HeadEntryID),
-				})
-			}
-		}
+	case "/usage", "/credits", "/context":
+		m.activePanel = PanelUsage
+		return m, nil
+	case "/clear":
+		m.steps = nil
+		return m, nil
+	case "/exit", "/quit":
+		return m, tea.Quit
+	case "/diff":
+		m.showTrajectory = true
+		return m, nil
 	}
 
-	badge := ""
-	if mode == "steer" {
-		badge = " [STEER PREEMPT]"
-	}
-
-	m.items = append(m.items, ChatItem{
-		Kind:      ItemUser,
-		Text:      text + badge,
+	m.steps = append(m.steps, StepItem{
+		Kind:      StepUser,
+		Text:      text,
 		Done:      true,
 		Timestamp: time.Now(),
 	})
-	m.refreshViewport()
 
 	if m.cfg.Client == nil {
 		return m, nil
@@ -510,103 +537,94 @@ func (m Model) handleSubmit(text string, mode string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) applyWatchEvent(ev rpc.WatchEvent) {
-	if ev.Seq > m.seq {
-		m.seq = ev.Seq
-	}
-
 	switch ev.Type {
 	case "state_changed":
-		if ev.Status != "" {
-			m.machineState = ev.Status
-		}
+		m.machineState = ev.Status
 
 	case "thinking_delta":
-		if len(m.items) > 0 && m.items[len(m.items)-1].Kind == ItemThinking && !m.items[len(m.items)-1].Done {
-			m.items[len(m.items)-1].Text += ev.Delta
+		if len(m.steps) > 0 && m.steps[len(m.steps)-1].Kind == StepThinking && !m.steps[len(m.steps)-1].Done {
+			m.steps[len(m.steps)-1].Text += ev.Delta
 		} else {
-			m.items = append(m.items, ChatItem{
-				Kind:      ItemThinking,
+			m.steps = append(m.steps, StepItem{
+				Kind:      StepThinking,
 				Text:      ev.Delta,
 				Timestamp: time.Now(),
 			})
 		}
 
 	case "text_delta":
-		// Mark any open thinking block as done
-		for i := range m.items {
-			if m.items[i].Kind == ItemThinking {
-				m.items[i].Done = true
+		// Mark open thinking block as done
+		for i := range m.steps {
+			if m.steps[i].Kind == StepThinking {
+				m.steps[i].Done = true
 			}
 		}
-		if len(m.items) > 0 && m.items[len(m.items)-1].Kind == ItemAssistant && !m.items[len(m.items)-1].Done {
-			m.items[len(m.items)-1].Text += ev.Delta
+		if len(m.steps) > 0 && m.steps[len(m.steps)-1].Kind == StepAssistant && !m.steps[len(m.steps)-1].Done {
+			m.steps[len(m.steps)-1].Text += ev.Delta
 		} else {
-			m.items = append(m.items, ChatItem{
-				Kind:      ItemAssistant,
+			m.steps = append(m.steps, StepItem{
+				Kind:      StepAssistant,
 				Text:      ev.Delta,
 				Timestamp: time.Now(),
 			})
 		}
 
 	case "tool_started":
-		m.items = append(m.items, ChatItem{
-			Kind:            ItemTool,
-			ToolCallID:      ev.ToolCallID,
+		m.inFlightStepText = fmt.Sprintf("Running %s...", ev.Name)
+		kind := StepCommand
+		if ev.Name == "edit" || ev.Name == "write" {
+			kind = StepEdit
+		} else if ev.Name == "read" || ev.Name == "ls" || ev.Name == "find" || ev.Name == "grep" {
+			kind = StepExplore
+		}
+		cmd := ""
+		if c, ok := ev.Arguments["command"].(string); ok {
+			cmd = c
+		}
+		path := ""
+		if p, ok := ev.Arguments["path"].(string); ok {
+			path = p
+		}
+
+		m.steps = append(m.steps, StepItem{
+			Kind:            kind,
 			ToolName:        ev.Name,
-			Arguments:       ev.Arguments,
+			Command:         cmd,
+			Path:            path,
 			OverwrittenKeys: ev.OverwrittenKeys,
 			Done:            false,
 			Timestamp:       time.Now(),
 		})
 
 	case "tool_completed":
-		updated := false
-		for i := len(m.items) - 1; i >= 0; i-- {
-			if m.items[i].Kind == ItemTool && m.items[i].ToolCallID == ev.ToolCallID {
-				m.items[i].Text = ev.Output
-				m.items[i].IsError = ev.IsError
-				m.items[i].Done = true
-				updated = true
+		m.inFlightStepText = ""
+		for i := len(m.steps) - 1; i >= 0; i-- {
+			if !m.steps[i].Done && (m.steps[i].Kind == StepCommand || m.steps[i].Kind == StepEdit || m.steps[i].Kind == StepExplore) {
+				m.steps[i].Done = true
+				m.steps[i].IsError = ev.IsError
+				m.steps[i].Text = ev.Output
+				if m.steps[i].Kind == StepEdit {
+					parsed := diff.ParseSimpleDiff(m.steps[i].Path, "", ev.Output)
+					m.steps[i].Diff = &parsed
+				}
 				break
 			}
 		}
-		if !updated {
-			m.items = append(m.items, ChatItem{
-				Kind:       ItemTool,
-				ToolCallID: ev.ToolCallID,
-				ToolName:   ev.Name,
-				Text:       ev.Output,
-				IsError:    ev.IsError,
-				Done:       true,
-				Timestamp:  time.Now(),
-			})
-		}
-
-	case "tool_blocked":
-		m.items = append(m.items, ChatItem{
-			Kind:       ItemTool,
-			ToolCallID: ev.ToolCallID,
-			ToolName:   ev.Name,
-			Text:       "Blocked: " + ev.Reason,
-			IsError:    true,
-			Done:       true,
-			Timestamp:  time.Now(),
-		})
 
 	case "turn_completed":
 		m.machineState = "idle"
-		// If no streaming text_delta arrived, populate assistant message from turn_completed result
+		m.inFlightStepText = ""
 		hasOpenAssistant := false
-		for i := range m.items {
-			if m.items[i].Kind == ItemAssistant && !m.items[i].Done {
+		for i := range m.steps {
+			if m.steps[i].Kind == StepAssistant && !m.steps[i].Done {
 				hasOpenAssistant = true
 			}
-			m.items[i].Done = true
+			m.steps[i].Done = true
 		}
 		if !hasOpenAssistant && len(ev.Result) > 0 {
 			if fallback := extractTextFromResult(ev.Result); fallback != "" {
-				m.items = append(m.items, ChatItem{
-					Kind:      ItemAssistant,
+				m.steps = append(m.steps, StepItem{
+					Kind:      StepAssistant,
 					Text:      fallback,
 					Done:      true,
 					Timestamp: time.Now(),
@@ -616,18 +634,11 @@ func (m *Model) applyWatchEvent(ev rpc.WatchEvent) {
 
 	case "turn_error":
 		m.machineState = "idle"
-		m.items = append(m.items, ChatItem{
-			Kind:      ItemSystem,
+		m.inFlightStepText = ""
+		m.steps = append(m.steps, StepItem{
+			Kind:      StepNotice,
 			Text:      "Turn Error: " + ev.Error,
 			IsError:   true,
-			Done:      true,
-			Timestamp: time.Now(),
-		})
-
-	case "system_notice":
-		m.items = append(m.items, ChatItem{
-			Kind:      ItemSystem,
-			Text:      ev.Output,
 			Done:      true,
 			Timestamp: time.Now(),
 		})
@@ -641,9 +652,9 @@ func (m *Model) updateAutocomplete() {
 
 	if strings.HasPrefix(val, "/") && !strings.Contains(val, " ") {
 		prefix := strings.ToLower(strings.TrimSpace(val))
-		for _, sc := range defaultSlashCommands {
-			if strings.HasPrefix(sc.Name, prefix) {
-				m.suggestions = append(m.suggestions, sc)
+		for _, se := range allSlashEntries {
+			if strings.HasPrefix(se.Name, prefix) || strings.Contains(se.Name, prefix[1:]) {
+				m.suggestions = append(m.suggestions, se)
 			}
 		}
 		if m.selectedSuggest >= len(m.suggestions) {
@@ -652,7 +663,6 @@ func (m *Model) updateAutocomplete() {
 		return
 	}
 
-	// Check for @file autocomplete token at end of composer
 	if _, after, ok := strings.CutLast(val, "@"); ok && !strings.ContainsAny(after, " \n\t") {
 		query := strings.ToLower(after)
 		for _, f := range m.workspaceFiles {
@@ -677,275 +687,196 @@ func (m *Model) replaceTrailingAtToken(filePath string) {
 	}
 }
 
-func (m *Model) recalculateLayout() {
-	innerW := max(m.width-4, 36)
-	m.composer.SetWidth(innerW)
-	vpHeight := max(m.height-10, 6)
-	m.viewport.Width = m.width - 2
-	m.viewport.Height = vpHeight
-}
-
-func (m *Model) refreshViewport() {
-	var blocks []string
-	contentWidth := max(m.width-8, 36)
-
-	userBadge := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("#0F172A")).
-		Background(lipgloss.Color("#38BDF8")).
-		Padding(0, 1)
-
-	assistantBadge := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("#0F172A")).
-		Background(lipgloss.Color("#A78BFA")).
-		Padding(0, 1)
-
-	thinkingStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#94A3B8")).
-		Italic(true).
-		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(lipgloss.Color("#475569")).
-		PaddingLeft(1)
-
-	toolBoxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#334155")).
-		Padding(0, 1).
-		Width(contentWidth)
-
-	errBoxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#EF4444")).
-		Foreground(lipgloss.Color("#FCA5A5")).
-		Padding(0, 1).
-		Width(contentWidth)
-
-	sysStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#64748B"))
-
-	for _, item := range m.items {
-		switch item.Kind {
-		case ItemUser:
-			header := userBadge.Render("YOU")
-			body := lipgloss.NewStyle().Foreground(lipgloss.Color("#F8FAFC")).PaddingLeft(1).Render(item.Text)
-			blocks = append(blocks, header+"\n"+body)
-
-		case ItemThinking:
-			if m.collapseThinking {
-				blocks = append(blocks, thinkingStyle.Render("💭 Thinking (collapsed — press Ctrl+T to expand)"))
-			} else {
-				status := "💭 Thinking..."
-				if item.Done {
-					status = "💭 Thought process"
-				}
-				blocks = append(blocks, thinkingStyle.Render(status+"\n"+strings.TrimSpace(item.Text)))
-			}
-
-		case ItemAssistant:
-			header := assistantBadge.Render("ANTIGRAVITY")
-			rendered := item.Text
-			if m.mdRenderer != nil && item.Done {
-				if out, err := m.mdRenderer.Render(item.Text); err == nil {
-					rendered = strings.TrimSpace(out)
-				}
-			}
-			blocks = append(blocks, header+"\n"+rendered)
-
-		case ItemTool:
-			icon := "⚙"
-			if item.Done {
-				if item.IsError {
-					icon = "✗"
-				} else {
-					icon = "✓"
-				}
-			}
-			overwriteBadge := ""
-			if len(item.OverwrittenKeys) > 0 {
-				overwriteBadge = fmt.Sprintf(" [Hook Rewrote: %s]", strings.Join(item.OverwrittenKeys, ", "))
-			}
-			title := fmt.Sprintf("%s Tool: %s%s", icon, item.ToolName, overwriteBadge)
-			if m.collapseTools && item.Done {
-				blocks = append(blocks, sysStyle.Render(title+" (collapsed — press Ctrl+O to expand)"))
-				continue
-			}
-			body := strings.TrimSpace(item.Text)
-			if body == "" && !item.Done {
-				body = "Running in 4-layer SandboxRunner..."
-			}
-			lines := strings.Split(body, "\n")
-			if len(lines) > 12 {
-				body = strings.Join(lines[:12], "\n") + fmt.Sprintf("\n... (%d more lines)", len(lines)-12)
-			}
-			box := toolBoxStyle
-			if item.IsError {
-				box = errBoxStyle
-			}
-			blocks = append(blocks, box.Render(lipgloss.NewStyle().Bold(true).Render(title)+"\n"+body))
-
-		case ItemSystem:
-			if item.IsError {
-				blocks = append(blocks, errBoxStyle.Render(item.Text))
-			} else {
-				blocks = append(blocks, sysStyle.Render("• "+item.Text))
-			}
-		}
-	}
-
-	m.viewport.SetContent(strings.Join(blocks, "\n\n"))
-	m.viewport.GotoBottom()
-}
-
-// View renders the full-screen Antigravity TUI layout.
+// View renders the exact inline terminal layout matching agy.
 func (m Model) View() string {
-	header := m.renderHeaderBar()
-	body := m.viewport.View()
-	popup := m.renderPopupOrModal()
-	composer := m.renderComposerBox()
-	footer := m.renderFooterBar()
+	rule := lipgloss.NewStyle().Foreground(lipgloss.Color("#475569")).Render(strings.Repeat("─", max(m.width, 40)))
 
-	parts := []string{header, body}
-	if popup != "" {
-		parts = append(parts, popup)
+	var sections []string
+
+	// 1. Initial Hero Banner if conversation is empty
+	if len(m.steps) == 0 {
+		sections = append(sections, banner.Render(banner.Config{
+			Version:      "1.0.0 (OTP 28.4 / Elixir 1.20)",
+			UserAccount:  "Durable BEAM Harness (SQLite WAL)",
+			ModelDisplay: fmt.Sprintf("%s (%s)", m.cfg.Model, strings.Title(m.cfg.Effort)),
+			Workspace:    m.cfg.WorkspaceDir,
+		}))
+		sections = append(sections, "")
 	}
-	parts = append(parts, composer, footer)
-	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+
+	// 2. Render steps in scrollback
+	for _, s := range m.steps {
+		sections = append(sections, m.renderStepItem(s))
+	}
+
+	// In-flight spinner indicator
+	if m.inFlightStepText != "" {
+		sections = append(sections, fmt.Sprintf("%s  %s", m.spin.View(), m.inFlightStepText))
+	}
+
+	// 3. Top rule
+	sections = append(sections, rule)
+
+	// 4. Composer line
+	sections = append(sections, m.composer.View())
+
+	// 5. Bottom rule
+	sections = append(sections, rule)
+
+	// 6. Inline popup, modal, or panel below composer
+	if m.activePanel != PanelNone {
+		switch m.activePanel {
+		case PanelModelPicker:
+			sections = append(sections, panels.RenderModelPicker(m.panelCursor, m.cfg.Effort, m.width))
+		case PanelHelp:
+			sections = append(sections, panels.RenderHelpTabs(m.helpTab, 0, m.width))
+		case PanelUsage:
+			sections = append(sections, panels.RenderUsagePanel(m.cfg.Model))
+		case PanelPermission:
+			title := ""
+			cmd := ""
+			if m.activeUIRequest != nil {
+				title = m.activeUIRequest.Title
+				cmd = cmp.Or(m.activeUIRequest.Command, m.activeUIRequest.Prompt)
+			}
+			sections = append(sections, panels.RenderPermissionPrompt(title, cmd))
+		}
+	} else if len(m.suggestions) > 0 {
+		sections = append(sections, m.renderSlashPopup())
+	} else if len(m.fileSuggestions) > 0 {
+		sections = append(sections, m.renderFilePopup())
+	}
+
+	// 7. Footer statusline
+	sections = append(sections, m.renderStatusline())
+
+	return strings.Join(sections, "\n")
 }
 
-func (m Model) renderHeaderBar() string {
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("#0F172A")).
-		Background(lipgloss.Color("#38BDF8")).
-		Padding(0, 1)
+func (m Model) renderStepItem(s StepItem) string {
+	bulletGreen := lipgloss.NewStyle().Foreground(lipgloss.Color("#22C55E")).Render("●")
+	bulletYellow := lipgloss.NewStyle().Foreground(lipgloss.Color("#EAB308")).Render("●")
+	elbow := lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Render("  ⎿  ")
 
-	pillStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#E2E8F0")).
-		Background(lipgloss.Color("#1E293B")).
-		Padding(0, 1)
+	switch s.Kind {
+	case StepUser:
+		return fmt.Sprintf("> %s", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#F8FAFC")).Render(s.Text))
 
-	modeColor := lipgloss.Color("#22C55E")
-	if m.cfg.Mode == "plan" {
-		modeColor = lipgloss.Color("#F59E0B")
+	case StepCommand:
+		cmdText := s.Command
+		if cmdText == "" {
+			cmdText = s.Text
+		}
+		line := fmt.Sprintf("%s Ran (%s)", bulletGreen, lipgloss.NewStyle().Foreground(lipgloss.Color("#FBBF24")).Render(cmdText))
+		if s.Done && s.Text != "" && m.showTrajectory {
+			body := strings.TrimSpace(s.Text)
+			lines := strings.Split(body, "\n")
+			if len(lines) > 8 {
+				body = strings.Join(lines[:8], "\n") + "\n            ..."
+			}
+			return fmt.Sprintf("%s\n%sCommand exited with code 0.\n            Command output:\n            %s", line, elbow, body)
+		}
+		return line
+
+	case StepExplore:
+		return fmt.Sprintf("%s Explored 1 file (%s)", bulletGreen, s.Path)
+
+	case StepEdit:
+		if s.Diff != nil && m.showTrajectory {
+			return diff.Render(*s.Diff, m.width)
+		}
+		return fmt.Sprintf("%s Edit(%s)\n%sAdded lines (ctrl+o to expand)", bulletYellow, s.Path, elbow)
+
+	case StepThinking:
+		dur := "3s"
+		tok := "120"
+		head := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8")).Render(fmt.Sprintf("▾ Thought for %s, %s tokens", dur, tok))
+		if m.showTrajectory {
+			body := lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Italic(true).Render("  " + strings.TrimSpace(s.Text))
+			return head + "\n" + body
+		}
+		return head
+
+	case StepAssistant:
+		rendered := s.Text
+		if m.mdRenderer != nil && s.Done {
+			if out, err := m.mdRenderer.Render(s.Text); err == nil {
+				rendered = strings.TrimSpace(out)
+			}
+		}
+		return rendered
+
+	case StepNotice:
+		if s.IsError {
+			return lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444")).Render(s.Text)
+		}
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8")).Render(s.Text)
 	}
-	modePill := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("#0F172A")).
-		Background(modeColor).
-		Padding(0, 1).
-		Render("MODE: " + strings.ToUpper(m.cfg.Mode))
 
-	stateStr := m.machineState
-	if stateStr != "idle" {
-		stateStr = m.spin.View() + " " + stateStr
-	} else {
-		stateStr = "● idle"
+	return s.Text
+}
+
+func (m Model) renderSlashPopup() string {
+	maxShow := 5
+	var rows []string
+	window := m.suggestions
+	if len(window) > maxShow {
+		window = window[:maxShow]
 	}
 
-	left := lipgloss.JoinHorizontal(
-		lipgloss.Center,
-		titleStyle.Render("⚡ SUPER-AGY"),
-		" ",
-		pillStyle.Render(fmt.Sprintf("conv #%d (seq %d)", m.cfg.ConversationID, m.seq)),
-		" ",
-		pillStyle.Render(m.cfg.Model+" ("+m.cfg.Effort+")"),
-		" ",
-		modePill,
+	for i, se := range window {
+		prefix := "  "
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
+		if i == m.selectedSuggest {
+			prefix = "❯ "
+			style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#60A5FA"))
+		}
+		desc := se.Description
+		if len(desc) > 60 {
+			desc = desc[:60] + "..."
+		}
+		rows = append(rows, fmt.Sprintf("%s%-16s %s", style.Render(prefix), style.Render(se.Name), lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Render(desc)))
+	}
+
+	if len(m.suggestions) > maxShow {
+		rows = append(rows, lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Render(fmt.Sprintf("   ↓ %d more", len(m.suggestions)-maxShow)))
+	}
+
+	hints := lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Render(
+		"  " + lipgloss.NewStyle().Foreground(lipgloss.Color("#60A5FA")).Render("↑/↓") + " Navigate · " +
+			lipgloss.NewStyle().Foreground(lipgloss.Color("#60A5FA")).Render("enter") + " Select · " +
+			lipgloss.NewStyle().Foreground(lipgloss.Color("#60A5FA")).Render("tab") + " Complete",
 	)
 
-	right := pillStyle.Render(stateStr)
+	return strings.Join(append(rows, "", hints), "\n")
+}
+
+func (m Model) renderFilePopup() string {
+	var rows []string
+	for i, f := range m.fileSuggestions {
+		prefix := "  "
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
+		if i == m.selectedSuggest {
+			prefix = "❯ "
+			style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#A78BFA"))
+		}
+		rows = append(rows, fmt.Sprintf("%s@%s", prefix, style.Render(f)))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m Model) renderStatusline() string {
+	left := lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Render("? for shortcuts")
+	if m.activePanel != PanelNone {
+		left = lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Render("esc to close")
+	}
+
+	right := lipgloss.NewStyle().Foreground(lipgloss.Color("#64748B")).Render(
+		fmt.Sprintf("%s · %s", m.cfg.Model, m.cfg.Effort),
+	)
+
 	gap := max(m.width-lipgloss.Width(left)-lipgloss.Width(right)-2, 1)
-
-	return lipgloss.NewStyle().
-		Width(m.width).
-		Background(lipgloss.Color("#0F172A")).
-		Render(left + strings.Repeat(" ", gap) + right)
-}
-
-func (m Model) renderPopupOrModal() string {
-	if m.activeUIRequest != nil {
-		modalStyle := lipgloss.NewStyle().
-			Border(lipgloss.DoubleBorder()).
-			BorderForeground(lipgloss.Color("#F59E0B")).
-			Padding(0, 2).
-			Width(max(m.width-4, 40))
-
-		content := fmt.Sprintf(
-			"⚠ PERMISSION REQUIRED: %s\n%s\n\n[y] Allow Once   [a] Always Allow   [n] Deny",
-			m.activeUIRequest.Title,
-			m.activeUIRequest.Prompt,
-		)
-		return modalStyle.Render(content)
-	}
-
-	if len(m.suggestions) > 0 {
-		var rows []string
-		for i, sc := range m.suggestions {
-			prefix := "  "
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
-			if i == m.selectedSuggest {
-				prefix = "▸ "
-				style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#38BDF8"))
-			}
-			rows = append(rows, style.Render(fmt.Sprintf("%s%-12s %s", prefix, sc.Name, sc.Description)))
-		}
-		return lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#38BDF8")).
-			Padding(0, 1).
-			Render(strings.Join(rows, "\n"))
-	}
-
-	if len(m.fileSuggestions) > 0 {
-		var rows []string
-		for i, f := range m.fileSuggestions {
-			prefix := "  "
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color("#94A3B8"))
-			if i == m.selectedSuggest {
-				prefix = "▸ "
-				style = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#A78BFA"))
-			}
-			rows = append(rows, style.Render(fmt.Sprintf("%s@%s", prefix, f)))
-		}
-		return lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#A78BFA")).
-			Padding(0, 1).
-			Render(strings.Join(rows, "\n"))
-	}
-
-	return ""
-}
-
-func (m Model) renderComposerBox() string {
-	borderColor := lipgloss.Color("#38BDF8")
-	if m.cfg.Mode == "plan" {
-		borderColor = lipgloss.Color("#F59E0B")
-	}
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Padding(0, 1).
-		Width(max(m.width-2, 38)).
-		Render(m.composer.View())
-}
-
-func (m Model) renderFooterBar() string {
-	acked := int64(0)
-	if m.cfg.Client != nil {
-		acked = m.cfg.Client.AckedBatches()
-	}
-	help := fmt.Sprintf(
-		" Enter: send • Ctrl+S: steer preempt • /commands • @files • Ctrl+T: thinking (%v) • Ctrl+O: tools (%v) • K=2 acks: %d • Esc: quit",
-		!m.collapseThinking,
-		!m.collapseTools,
-		acked,
-	)
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#64748B")).
-		Width(m.width).
-		Render(help)
+	return left + strings.Repeat(" ", gap) + right
 }
 
 func extractTextFromResult(raw jsontext.Value) string {
