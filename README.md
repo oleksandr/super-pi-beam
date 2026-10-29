@@ -1,6 +1,6 @@
 # Super-Pi-BEAM
 
-**Super-Pi-BEAM** is a durable, fault-tolerant coding agent harness built on **Erlang/OTP 28** and **Elixir 1.20**. It reimplements the **Pi** and **Pi Durable** (`Chord v2`) architecture natively on the BEAM virtual machine.
+**Super-Pi-BEAM** is a durable, fault-tolerant general-purpose agent harness (with production coding presets) built on **Erlang/OTP 28** and **Elixir 1.20**. It reimplements the **Pi** and **Pi Durable** (`Chord v2`) architecture natively on the BEAM virtual machine.
 
 ---
 
@@ -178,6 +178,17 @@ Available Super-Pi Harnesses:
   * super-pi-agy      Super-Pi Antigravity Harness - Antigravity workflow harness loading Rules, Skills, Hooks, Permissions, and Slash Commands
   * super-pi-planner  Super-Pi Architecture Planner - Read-only architecture planner with restricted tool exposure
 ```
+
+### General-Purpose Engine vs Coding Default
+
+While Super-Pi-BEAM ships with software engineering defaults (`super-pi-agent`), the underlying OTP runtime is **strictly general-purpose**:
+- **Universal Kernel**: State machines (`:gen_statem`), transactional persistence (`SQLite`/`Postgres`), crash-immune execution boundaries (`SuperPi.Env`), and streaming protocols run independently of domain logic.
+- **Domain Decoupling**: An agent's domain is defined solely by its prompt guidelines and tool bindings inside a `SuperPi.Harness` module.
+- **Non-Coding Persona Examples**:
+  - **Document & Email Triage**: Ingests Himalaya CLI and Paperless-ngx REST tools for autonomous inbox zero and receipt archiving.
+  - **Financial Intelligence**: Binds Actual Budget or banking APIs for transaction reconciliation, tag audits, and cash-flow reporting.
+  - **Research & Synthesis**: Binds web search, HTTP scrapers, and PDF extractors with write/edit tools disabled.
+  - **Support & Policy Guidance**: Binds FAQ and knowledge-base search with PII sanitization and sentiment escalation hooks.
 
 ### Adding a Custom Harness
 
