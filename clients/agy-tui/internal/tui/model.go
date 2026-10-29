@@ -3,6 +3,8 @@ package tui
 import (
 	"cmp"
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -124,7 +126,7 @@ func NewModel(cfg Config) Model {
 	ta.Focus()
 	ta.Prompt = "❯ "
 	ta.CharLimit = 32768
-	ta.SetWidth(80)
+	ta.SetWidth(94)
 	ta.SetHeight(3)
 	ta.ShowLineNumbers = false
 	ta.KeyMap.InsertNewline.SetKeys("alt+enter", "ctrl+j")
@@ -133,7 +135,7 @@ func NewModel(cfg Config) Model {
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#38BDF8"))
 
-	vp := viewport.New(80, 20)
+	vp := viewport.New(98, 20)
 
 	md, _ := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
@@ -152,7 +154,7 @@ func NewModel(cfg Config) Model {
 		},
 	}
 
-	return Model{
+	m := Model{
 		cfg: Config{
 			Client:         cfg.Client,
 			ConversationID: cfg.ConversationID,
@@ -175,6 +177,9 @@ func NewModel(cfg Config) Model {
 		collapseTools:    false,
 		workspaceFiles:   files,
 	}
+	m.recalculateLayout()
+	m.refreshViewport()
+	return m
 }
 
 // Init starts the spinner, RPC event watcher, and optional initial prompt.
@@ -347,6 +352,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "enter":
+			text := strings.TrimSpace(m.composer.Value())
+			if text != "" {
+				m.composer.Reset()
+				m.updateAutocomplete()
+				return m.handleSubmit(text, "queue")
+			}
+			return m, nil
+		}
+
+		// Also checktea.KeyEnter type explicitly in case terminal sends \r or \n
+		if msg.Type == tea.KeyEnter {
 			text := strings.TrimSpace(m.composer.Value())
 			if text != "" {
 				m.composer.Reset()
@@ -579,8 +595,23 @@ func (m *Model) applyWatchEvent(ev rpc.WatchEvent) {
 
 	case "turn_completed":
 		m.machineState = "idle"
+		// If no streaming text_delta arrived, populate assistant message from turn_completed result
+		hasOpenAssistant := false
 		for i := range m.items {
+			if m.items[i].Kind == ItemAssistant && !m.items[i].Done {
+				hasOpenAssistant = true
+			}
 			m.items[i].Done = true
+		}
+		if !hasOpenAssistant && len(ev.Result) > 0 {
+			if fallback := extractTextFromResult(ev.Result); fallback != "" {
+				m.items = append(m.items, ChatItem{
+					Kind:      ItemAssistant,
+					Text:      fallback,
+					Done:      true,
+					Timestamp: time.Now(),
+				})
+			}
 		}
 
 	case "turn_error":
@@ -915,6 +946,25 @@ func (m Model) renderFooterBar() string {
 		Foreground(lipgloss.Color("#64748B")).
 		Width(m.width).
 		Render(help)
+}
+
+func extractTextFromResult(raw jsontext.Value) string {
+	var payload struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &payload); err == nil {
+		var parts []string
+		for _, b := range payload.Content {
+			if b.Type == "text" && b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+	return ""
 }
 
 func scanWorkspaceFiles(root string, limit int) []string {

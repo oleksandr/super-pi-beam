@@ -68,7 +68,17 @@ func main() {
 		InitialPrompt:  *prompt,
 	})
 
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	var opts []tea.ProgramOption
+	opts = append(opts, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// Only open /dev/tty if stdin is not a terminal/chardev
+	if fi, err := os.Stdin.Stat(); err != nil || (fi.Mode()&os.ModeCharDevice) == 0 {
+		if tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
+			defer tty.Close()
+			opts = append(opts, tea.WithInput(tty), tea.WithOutput(tty))
+		}
+	}
+
+	p := tea.NewProgram(m, opts...)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "agy-tui error: %v\n", err)
 		os.Exit(1)

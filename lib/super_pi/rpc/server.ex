@@ -292,7 +292,7 @@ defmodule SuperPi.RPC.Server do
     pid = ensure_machine_started!(conv_id, extensions)
 
     if async? do
-      Task.Supervisor.start_child(SuperPi.ToolSandboxSupervisor, fn ->
+      Task.Supervisor.start_child(SuperPi.ToolTaskSupervisor, fn ->
         case Machine.submit(pid, text, mode: mode, timeout: 120_000) do
           {:ok, res} ->
             Phoenix.PubSub.broadcast(
