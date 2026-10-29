@@ -55,57 +55,118 @@ defmodule SuperPi.Harness.AGY.CLI do
     Enum.map(@agy_agents, fn {id, desc} -> %{"id" => id, "description" => desc} end)
   end
 
+  @switches [
+    add_dir: :keep,
+    agent: :string,
+    continue: :boolean,
+    conversation: :integer,
+    dangerously_skip_permissions: :boolean,
+    disable_slash_commands: :boolean,
+    effort: :string,
+    help: :boolean,
+    input_format: :string,
+    json_schema: :string,
+    log_file: :string,
+    mode: :string,
+    model: :string,
+    new_project: :boolean,
+    output_format: :string,
+    print: :string,
+    print_timeout: :integer,
+    project: :string,
+    prompt: :string,
+    prompt_interactive: :string,
+    remote_control: :boolean,
+    sandbox: :boolean,
+    settings: :string,
+    json: :boolean,
+    strict: :boolean
+  ]
+
+  @aliases [c: :continue, i: :prompt_interactive, p: :print, h: :help]
+
   @doc """
   Parses command-line arguments (`argv`) into `{:subcommand, cmd, args, flags}` or `{:run, flags, positional}`.
   """
   def parse_args(argv) when is_list(argv) do
-    {parsed, positional, _invalid} =
-      OptionParser.parse(argv,
-        strict: [
-          add_dir: :keep,
-          agent: :string,
-          continue: :boolean,
-          conversation: :integer,
-          dangerously_skip_permissions: :boolean,
-          disable_slash_commands: :boolean,
-          effort: :string,
-          help: :boolean,
-          input_format: :string,
-          json_schema: :string,
-          log_file: :string,
-          mode: :string,
-          model: :string,
-          new_project: :boolean,
-          output_format: :string,
-          print: :string,
-          print_timeout: :integer,
-          project: :string,
-          prompt: :string,
-          prompt_interactive: :string,
-          remote_control: :boolean,
-          sandbox: :boolean,
-          settings: :string,
-          json: :boolean,
-          strict: :boolean
-        ],
-        aliases: [
-          c: :continue,
-          i: :prompt_interactive,
-          p: :print,
-          h: :help
-        ]
+    {flag_tokens, positional} = split_flags(argv)
+
+    {parsed, _rest, _invalid} =
+      OptionParser.parse(flag_tokens,
+        strict: @switches,
+        aliases: @aliases
       )
 
     flags = normalize_flags(parsed)
 
-    case positional do
-      [sub | rest] when sub in ["agent", "agents", "models", "mcp", "plugin", "plugins", "remote-control", "changelog", "help"] ->
-        {:subcommand, sub, rest, flags}
-
-      _ ->
-        {:run, flags, positional}
+    if subcommand?(positional) do
+      [sub | rest] = positional
+      {:subcommand, sub, rest, flags}
+    else
+      {:run, flags, positional}
     end
   end
+
+  # Splits argv into known flag tokens (with their values) and everything else.
+  # Unknown dash words stay in the positional list in their original order, so
+  # prompts such as `explain the --foo flag` and `mcp add fs npx -y pkg` survive.
+  defp split_flags(argv), do: split_flags(argv, [], [])
+
+  defp split_flags([], flags, pos), do: {Enum.reverse(flags), Enum.reverse(pos)}
+  defp split_flags(["--" | rest], flags, pos), do: {Enum.reverse(flags), Enum.reverse(pos) ++ rest}
+
+  defp split_flags(["--" <> long = tok | rest], flags, pos) do
+    {name, has_inline?} =
+      case String.split(long, "=", parts: 2) do
+        [n, _] -> {n, true}
+        [n] -> {n, false}
+      end
+
+    key = name |> String.replace("-", "_") |> existing_switch()
+
+    cond do
+      is_nil(key) -> split_flags(rest, flags, [tok | pos])
+      has_inline? -> split_flags(rest, [tok | flags], pos)
+      @switches[key] in [:boolean] -> split_flags(rest, [tok | flags], pos)
+      true -> take_value(tok, rest, flags, pos)
+    end
+  end
+
+  defp split_flags(["-" <> short = tok | rest], flags, pos) when byte_size(short) == 1 do
+    case @aliases[String.to_atom(short)] do
+      nil ->
+        split_flags(rest, flags, [tok | pos])
+
+      key ->
+        if @switches[key] == :boolean,
+          do: split_flags(rest, [tok | flags], pos),
+          else: take_value(tok, rest, flags, pos)
+    end
+  end
+
+  defp split_flags([tok | rest], flags, pos), do: split_flags(rest, flags, [tok | pos])
+
+  defp take_value(tok, [value | rest], flags, pos), do: split_flags(rest, [value, tok | flags], pos)
+  defp take_value(tok, [], flags, pos), do: split_flags([], [tok | flags], pos)
+
+  defp existing_switch(name) do
+    Enum.find_value(Keyword.keys(@switches), fn k -> if Atom.to_string(k) == name, do: k end)
+  end
+
+  @top_subcommands ["agent", "agents", "models", "changelog", "help"]
+  @mcp_actions ["list", "add", "remove", "enable", "disable"]
+  @plugin_actions ["list", "enable", "disable", "validate"]
+  @remote_actions ["start", "status", "stop"]
+
+  # A leading word is a subcommand only when the shape matches; otherwise the
+  # whole line is a prompt (`help me with this`).
+  defp subcommand?([sub]) when sub in @top_subcommands, do: true
+  defp subcommand?(["help", sub]) when sub in @top_subcommands or sub in ["mcp", "plugin", "plugins"], do: true
+  defp subcommand?([sub]) when sub in ["mcp", "plugin", "plugins", "remote-control"], do: true
+  defp subcommand?(["mcp", action | _]), do: action in @mcp_actions
+  defp subcommand?([sub, action | _]) when sub in ["plugin", "plugins"], do: action in @plugin_actions
+  defp subcommand?(["remote-control", action | _]), do: action in @remote_actions
+  defp subcommand?(_), do: false
 
   @doc """
   Executes the parsed CLI command and returns `{exit_code, output_string}`.
