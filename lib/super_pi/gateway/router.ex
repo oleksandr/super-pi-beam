@@ -182,13 +182,7 @@ defmodule SuperPi.Gateway.Router do
         Logger.debug("[Gateway] 💬 Active prompt for ##{conv_id}")
 
         # 4. Start or update conversation machine with harness extensions
-        extensions =
-          harness.extensions([])
-          |> Enum.reject(fn
-            SuperPi.Plugins.InlineBash -> true
-            {SuperPi.Plugins.InlineBash, _} -> true
-            _ -> false
-          end)
+        extensions = Harness.remote_extensions(harness)
 
         pid = ensure_machine_started!(conv_id, extensions)
 

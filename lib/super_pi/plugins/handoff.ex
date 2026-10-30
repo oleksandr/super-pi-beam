@@ -87,13 +87,18 @@ defmodule SuperPi.Plugins.Handoff do
 
     parent_model = Map.get(parent_agent, "model") || Map.get(parent_agent, :model)
 
+    # The child never has more permission than the parent: it copies the mode, workspace and
+    # permission settings. Without them the child would run in `auto` mode in the server's cwd.
     child_agent =
       %{
         "systemSections" => [
           %{"id" => "handoff_context", "content" => "You are working on a focused thread handed off from session #{parent_conv_id}."}
         ],
-        "tools" => SuperPi.Tools.active_llm_tools()
+        "tools" => SuperPi.Tools.active_llm_tools(),
+        "executionMode" => Map.get(parent_agent, "executionMode", "accept-edits"),
+        "dangerouslySkipPermissions" => Map.get(parent_agent, "dangerouslySkipPermissions") == true
       }
+      |> Map.merge(Map.take(parent_agent, ["workspacePaths", "globalConfigDir", "appDataDir", "settingsOverride", "effort"]))
       |> then(fn a ->
         if parent_model, do: Map.put(a, "model", parent_model), else: a
       end)
@@ -104,6 +109,8 @@ defmodule SuperPi.Plugins.Handoff do
         parent_conversation_id: parent_conv_id,
         agent: child_agent
       )
+
+    if parent_conv_id, do: SuperPi.Auth.claim!(child_conv.id, SuperPi.Auth.owner(parent_conv_id))
 
     Storage.append_entry!(child_conv.id, "pi.message", %{
       "role" => "user",

@@ -127,7 +127,8 @@ defmodule SuperPi.Plugins.Subagent do
 
   defp parse_args(args, config) when is_map(args) do
     default_timeout = config_timeout(config) || Application.get_env(:super_pi, :subagent_timeout_ms, 120_000)
-    timeout_ms = positive_int(args["timeout_ms"]) || default_timeout
+    # The model may shorten the timeout but never raise it above the configured limit.
+    timeout_ms = min(positive_int(args["timeout_ms"]) || default_timeout, default_timeout)
 
     raw =
       case args do
@@ -171,26 +172,55 @@ defmodule SuperPi.Plugins.Subagent do
 
   defp run_all(tasks, timeout_ms, parent_agent, ctx) do
     max_concurrency = Application.get_env(:super_pi, :subagent_max_concurrency, 3)
+    # Each child records what it started here, so a child that is killed can still be cleaned up.
+    started = :ets.new(:subagent_started, [:public, :set])
+    indexed = Enum.with_index(tasks)
 
     results =
-      tasks
-      |> Task.async_stream(
-        fn {role, prompt} -> run_one(role, prompt, timeout_ms, parent_agent, ctx) end,
-        max_concurrency: max_concurrency,
-        timeout: timeout_ms + 10_000,
-        on_timeout: :kill_task,
-        ordered: true
-      )
-      |> Enum.zip(tasks)
-      |> Enum.map(fn
-        {{:ok, result}, {role, _}} -> Map.put(result, "role", role)
-        {{:exit, reason}, {role, _}} -> %{"role" => role, "status" => "failed", "error" => "subagent crashed: #{inspect(reason)}"}
-      end)
+      try do
+        indexed
+        |> Task.async_stream(
+          fn {{role, prompt}, idx} -> run_one(idx, role, prompt, timeout_ms, parent_agent, ctx, started) end,
+          max_concurrency: max_concurrency,
+          # The child's own deadline is `timeout_ms`; this only catches a child that hangs outside it.
+          timeout: timeout_ms + Application.get_env(:super_pi, :subagent_kill_slack_ms, 30_000),
+          on_timeout: :kill_task,
+          ordered: true
+        )
+        |> Enum.zip(indexed)
+        |> Enum.map(fn
+          {{:ok, result}, {{role, _}, _idx}} ->
+            Map.put(result, "role", role)
+
+          {{:exit, reason}, {{role, _}, idx}} ->
+            cleanup_killed(started, idx)
+            %{"role" => role, "status" => "failed", "error" => "subagent crashed: #{inspect(reason)}"}
+        end)
+      after
+        :ets.delete(started)
+      end
 
     render(results)
   end
 
-  defp run_one(role, prompt, timeout_ms, parent_agent, ctx) do
+  # A killed child skipped its own cleanup: fail its task row and stop its machine.
+  defp cleanup_killed(started, idx) do
+    case :ets.lookup(started, idx) do
+      [{^idx, child_id, task_id}] ->
+        finish_child_task(task_id, {:error, "subagent was killed"})
+
+        case Registry.lookup(SuperPi.Registry, {:conversation_machine, child_id}) do
+          [{pid, _}] -> stop_machine(pid, child_id)
+          [] -> :ok
+        end
+
+      [] ->
+        :ok
+    end
+  end
+
+  defp run_one(idx, role, prompt, timeout_ms, parent_agent, ctx, started) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
     parent_task_id = Map.get(ctx, :active_task_id)
     child_agent = child_agent(role, parent_agent)
 
@@ -203,8 +233,11 @@ defmodule SuperPi.Plugins.Subagent do
 
     Auth.claim!(child.id, Auth.owner(ctx.conversation_id))
     task_id = start_child_task(ctx.conversation_id, parent_task_id, role, prompt, child.id)
+    :ets.insert(started, {idx, child.id, task_id})
 
-    outcome = run_machine(child.id, prompt, timeout_ms, ctx)
+    # The time already spent on setup counts against the child's deadline.
+    remaining = max(deadline - System.monotonic_time(:millisecond), 1_000)
+    outcome = run_machine(child.id, prompt, remaining, ctx)
     finish_child_task(task_id, outcome)
 
     base = %{"child_conversation_id" => child.id}
@@ -301,7 +334,7 @@ defmodule SuperPi.Plugins.Subagent do
   end
 
   defp child_extensions do
-    Enum.reject(Harness.default().extensions([]), fn ext ->
+    Enum.reject(Harness.remote_extensions(Harness.default()), fn ext ->
       mod = if is_tuple(ext), do: elem(ext, 0), else: ext
       mod in [__MODULE__, SuperPi.Plugins.Questionnaire, SuperPi.Plugins.Handoff]
     end)

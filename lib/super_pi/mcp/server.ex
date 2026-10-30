@@ -436,7 +436,7 @@ defmodule SuperPi.MCP.Server do
     session = %{
       conversation_id: conv.id,
       workspace_root: File.cwd!(),
-      extensions: harness.extensions([])
+      extensions: SuperPi.Harness.remote_extensions(harness)
     }
 
     {session, Map.put(state, :tool_session, session)}
@@ -444,13 +444,30 @@ defmodule SuperPi.MCP.Server do
 
   defp execute_harness_task(prompt) do
     harness = SuperPi.Harness.default()
-    extensions = harness.extensions([])
+    extensions = SuperPi.Harness.remote_extensions(harness)
     agent = SuperPi.Plugins.Permissions.apply_remote_mode(harness.agent_defaults(), nil)
     conv = Storage.create_conversation!(agent: agent)
-    {:ok, machine_pid} = SuperPi.Conversation.Machine.start_link(conversation_id: conv.id, extensions: extensions)
+    timeout = Application.get_env(:super_pi, :mcp_harness_task_timeout_ms, 60_000)
 
+    # Supervised, not linked: a crashed machine must not take the MCP stdio server down.
+    machine_opts =
+      [conversation_id: conv.id, extensions: extensions] ++ Application.get_env(:super_pi, :mcp_harness_task_opts, [])
+
+    spec = %{
+      id: {:mcp_harness_task, conv.id},
+      start: {SuperPi.Conversation.Machine, :start_link, [machine_opts]},
+      restart: :temporary
+    }
+
+    case DynamicSupervisor.start_child(SuperPi.MachineSupervisor, spec) do
+      {:ok, machine_pid} -> run_harness_task(machine_pid, conv.id, prompt, timeout)
+      {:error, reason} -> %{"output" => "Harness task error: could not start: #{inspect(reason)}", "is_error" => true}
+    end
+  end
+
+  defp run_harness_task(machine_pid, conv_id, prompt, timeout) do
     try do
-      case SuperPi.Conversation.Machine.submit(machine_pid, prompt, mode: :queue, timeout: 60_000) do
+      case SuperPi.Conversation.Machine.submit(machine_pid, prompt, mode: :queue, timeout: timeout) do
         {:ok, res} ->
           output =
             case res do
@@ -479,6 +496,13 @@ defmodule SuperPi.MCP.Server do
         {:error, reason} ->
           %{"output" => "Harness task error: #{inspect(reason)}", "is_error" => true}
       end
+    catch
+      :exit, {:timeout, _} ->
+        SuperPi.Conversation.Machine.cancel(machine_pid)
+        %{"output" => "Harness task timed out after #{timeout} ms", "is_error" => true}
+
+      :exit, reason ->
+        %{"output" => "Harness task failed: #{inspect(reason)}", "is_error" => true}
     after
       try do
         :gen_statem.stop(machine_pid)
@@ -488,7 +512,7 @@ defmodule SuperPi.MCP.Server do
 
       # The registry drops its entry when it sees the process exit, a moment after `stop`
       # returns. Wait so that no caller can find a dead machine.
-      wait_unregistered(conv.id, 100)
+      wait_unregistered(conv_id, 100)
     end
   end
 

@@ -880,7 +880,7 @@ defmodule SuperPi.RPC.Server do
           Repo.get!(Conversation, conv_id)
       end
 
-    extensions = harness.extensions([])
+    extensions = SuperPi.Harness.remote_extensions(harness)
     ensure_machine_started!(conv.id, extensions)
 
     reply =
@@ -895,8 +895,8 @@ defmodule SuperPi.RPC.Server do
 
   defp resolve_extensions(params) do
     case fetch_harness(params) do
-      {:ok, harness} -> harness.extensions([])
-      {:error, _} -> SuperPi.Harness.default().extensions([])
+      {:ok, harness} -> SuperPi.Harness.remote_extensions(harness)
+      {:error, _} -> SuperPi.Harness.remote_extensions(SuperPi.Harness.default())
     end
   end
 

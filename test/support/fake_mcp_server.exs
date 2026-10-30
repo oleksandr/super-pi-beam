@@ -18,7 +18,13 @@ defmodule FakeMCP do
   defp handle(""), do: :ok
 
   defp handle(line) do
+    hang? = System.get_env("FAKE_MCP_MODE") == "hang"
+
     case :json.decode(line) do
+      # FAKE_MCP_MODE=hang: never answer `initialize` (a server that is stuck).
+      %{"method" => "initialize"} when hang? ->
+        :ok
+
       %{"method" => "initialize", "id" => id} ->
         reply(id, %{
           "protocolVersion" => "2024-11-05",

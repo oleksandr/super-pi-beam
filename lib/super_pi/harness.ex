@@ -123,6 +123,21 @@ defmodule SuperPi.Harness do
   def resolve(_), do: SuperPi.Harness.Default
 
   @doc """
+  Extensions of `harness` for a caller that is not the local user (Gateway, RPC, MCP, subagents).
+
+  `InlineBash` runs `!{...}` shell commands from user input with no permission check, so a
+  remote caller must not get it. Use this instead of `harness.extensions([])` on those paths.
+  """
+  @spec remote_extensions(module()) :: [module() | {module(), keyword()}]
+  def remote_extensions(harness) when is_atom(harness) do
+    Enum.reject(harness.extensions([]), fn
+      SuperPi.Plugins.InlineBash -> true
+      {SuperPi.Plugins.InlineBash, _} -> true
+      _ -> false
+    end)
+  end
+
+  @doc """
   Default harness for entry points that receive no harness name (Gateway, RPC, MCP).
 
   Configure it with `config :super_pi, default_harness: "<harness id>"`. The default is

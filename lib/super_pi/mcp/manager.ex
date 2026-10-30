@@ -46,18 +46,24 @@ defmodule SuperPi.MCP.Manager do
     ensure_routes!()
     timeout = Application.get_env(:super_pi, :mcp_startup_timeout_ms, 10_000)
 
-    opts
-    |> TranscriptLogger.mcp_specs()
-    |> Enum.sort_by(&elem(&1, 0))
+    specs = opts |> TranscriptLogger.mcp_specs() |> Enum.sort_by(&elem(&1, 0))
+
+    specs
     |> Task.async_stream(fn {name, spec} -> start_server(name, spec, timeout) end,
       max_concurrency: 8,
       timeout: timeout + 2_000,
       on_timeout: :kill_task,
       ordered: true
     )
+    |> Enum.zip(specs)
     |> Enum.map(fn
-      {:ok, result} -> result
-      {:exit, reason} -> %{server: "?", status: {:error, {:exit, reason}}, tools: 0}
+      {{:ok, result}, _spec} ->
+        result
+
+      {{:exit, reason}, {name, _spec}} ->
+        # The task was killed mid-launch. Stop the client it had started, or its OS process leaks.
+        stop_starting(name)
+        %{server: name, status: {:error, {:exit, reason}}, tools: 0}
     end)
   end
 
@@ -119,13 +125,13 @@ defmodule SuperPi.MCP.Manager do
         %{server: name, status: {:error, :unsupported_transport}, tools: 0}
 
       {command, _} ->
-        case lookup_client(name) do
-          {:ok, _pid} ->
-            %{server: name, status: :running, tools: count_tools(name)}
-
-          :error ->
-            launch(name, command, spec, timeout)
-        end
+        # One launch per server at a time. A concurrent caller waits, then finds it running.
+        :global.trans({{:mcp_launch, name}, self()}, fn ->
+          case lookup_client(name) do
+            {:ok, _pid} -> %{server: name, status: :running, tools: count_tools(name)}
+            :error -> launch(name, command, spec, timeout)
+          end
+        end, [node()], :infinity)
     end
   end
 
@@ -145,16 +151,37 @@ defmodule SuperPi.MCP.Manager do
       restart: :temporary
     }
 
-    with {:ok, pid} <- DynamicSupervisor.start_child(@supervisor, child),
-         :ok <- Client.await_ready(pid, timeout) do
-      :ets.insert(@clients, {name, pid})
-      tools = register_tools(name, pid)
-      %{server: name, status: :started, tools: tools}
-    else
+    case DynamicSupervisor.start_child(@supervisor, child) do
+      {:ok, pid} ->
+        # Recorded before the handshake, so a failure or a killed launch can still stop it.
+        :ets.insert(@clients, {{:starting, name}, pid})
+
+        case Client.await_ready(pid, timeout) do
+          :ok ->
+            :ets.delete(@clients, {:starting, name})
+            :ets.insert(@clients, {name, pid})
+            %{server: name, status: :started, tools: register_tools(name, pid)}
+
+          {:error, reason} = error ->
+            Logger.warning("[MCP] server #{name} failed to start: #{format_reason(reason)}")
+            stop_starting(name)
+            %{server: name, status: error, tools: 0}
+        end
+
       {:error, reason} = error ->
         Logger.warning("[MCP] server #{name} failed to start: #{format_reason(reason)}")
-        stop_server(name)
         %{server: name, status: error, tools: 0}
+    end
+  end
+
+  defp stop_starting(name) do
+    case :ets.lookup(@clients, {:starting, name}) do
+      [{_, pid}] ->
+        DynamicSupervisor.terminate_child(@supervisor, pid)
+        :ets.delete(@clients, {:starting, name})
+
+      [] ->
+        :ok
     end
   end
 
@@ -186,13 +213,6 @@ defmodule SuperPi.MCP.Manager do
     case :ets.lookup(@clients, name) do
       [{^name, pid}] -> if Process.alive?(pid), do: {:ok, pid}, else: :error
       [] -> :error
-    end
-  end
-
-  defp stop_server(name) do
-    case lookup_client(name) do
-      {:ok, pid} -> DynamicSupervisor.terminate_child(@supervisor, pid)
-      :error -> :ok
     end
   end
 
