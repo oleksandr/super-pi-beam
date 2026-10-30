@@ -53,6 +53,8 @@ defmodule SuperPi.MixProject do
       {:owl, "~> 0.12"},
       {:phoenix_pubsub, "~> 2.1"},
       {:telemetry, "~> 1.3"},
+      {:libcluster, "~> 3.4"},
+      {:horde, "~> 0.9"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_metrics_prometheus_core, "~> 1.2"},
       {:opentelemetry_api, "~> 1.4"},

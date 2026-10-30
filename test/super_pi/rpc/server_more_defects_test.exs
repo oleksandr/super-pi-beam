@@ -51,7 +51,7 @@ defmodule SuperPi.RPC.ServerMoreDefectsTest do
 
     pid =
       spawn(fn ->
-        {:ok, _} = Registry.register(SuperPi.Registry, {:conversation_machine, conv_id}, nil)
+        {:ok, _} = Horde.Registry.register(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv_id}, nil)
         send(test, :fake_registered)
 
         receive do
@@ -93,7 +93,7 @@ defmodule SuperPi.RPC.ServerMoreDefectsTest do
 
       assert_receive {:DOWN, ^ref, :process, ^pid, :connection_crashed}, 5_000
 
-      assert [{machine, _}] = Registry.lookup(SuperPi.Registry, {:conversation_machine, conv.id}),
+      assert [{machine, _}] = Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv.id}),
              "machine is gone after its connection process exited"
 
       assert Process.alive?(machine)

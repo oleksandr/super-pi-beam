@@ -19,8 +19,8 @@ defmodule SuperPi.MCP.ServerMoreDefectsTest do
   end
 
   defp machine_keys do
-    Registry.select(SuperPi.Registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
-    |> Enum.filter(&match?({:conversation_machine, _}, &1))
+    SuperPi.Conversation.Locator.all()
+    |> Enum.map(fn {id, _pid} -> {:conversation_machine, id} end)
     |> MapSet.new()
   end
 

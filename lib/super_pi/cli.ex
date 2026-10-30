@@ -317,20 +317,8 @@ defmodule SuperPi.CLI do
 
   defp stop_machine(conv_id, pid) do
     GenServer.stop(pid)
-    wait_unregistered(conv_id, 50)
-  end
-
-  defp wait_unregistered(_conv_id, 0), do: :ok
-
-  defp wait_unregistered(conv_id, tries) do
-    case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
-      [] ->
-        :ok
-
-      _ ->
-        Process.sleep(5)
-        wait_unregistered(conv_id, tries - 1)
-    end
+    SuperPi.Conversation.Locator.await_gone(conv_id, 50)
+    :ok
   end
 
   defp run_session(conv, pid, flags, positional, workspace_dirs, app_dir, opts) do
@@ -809,12 +797,9 @@ defmodule SuperPi.CLI do
   end
 
   defp start_or_attach_machine(conv_id, opts) do
-    case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
-      [{pid, _}] ->
-        {:ok, pid, false}
-
-      [] ->
-        with {:ok, pid} <- Machine.start_link(opts), do: {:ok, pid, true}
+    case SuperPi.Conversation.Locator.whereis(conv_id) do
+      pid when is_pid(pid) -> {:ok, pid, false}
+      nil -> with {:ok, pid} <- Machine.start_link(opts), do: {:ok, pid, true}
     end
   end
 

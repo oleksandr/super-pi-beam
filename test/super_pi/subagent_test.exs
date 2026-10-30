@@ -39,8 +39,8 @@ defmodule SuperPi.SubagentTest do
   end
 
   defp registered_machines do
-    Registry.select(SuperPi.Registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
-    |> Enum.filter(&match?({:conversation_machine, _}, &1))
+    SuperPi.Conversation.Locator.all()
+    |> Enum.map(fn {id, _pid} -> {:conversation_machine, id} end)
   end
 
   describe "a delegated task" do

@@ -63,11 +63,33 @@ defmodule SuperPi.Conversation.Machine do
 
   def start_link(opts) do
     conv_id = Keyword.fetch!(opts, :conversation_id)
-    :gen_statem.start_link(via_tuple(conv_id), __MODULE__, opts, [])
+
+    # The name is registered in `Horde.Registry`, which removes the entry of a machine that has just
+    # exited a moment after it ends. Until then a new machine cannot take the name. `start_link`
+    # would kill its caller with that failure, so start unlinked, retry, then link.
+    case start_registered(conv_id, opts, 100) do
+      {:ok, pid} ->
+        Process.link(pid)
+        {:ok, pid}
+
+      other ->
+        other
+    end
+  end
+
+  defp start_registered(conv_id, opts, tries) do
+    case :gen_statem.start(via_tuple(conv_id), __MODULE__, opts, []) do
+      {:error, {:process_not_registered_via, _}} when tries > 0 ->
+        Process.sleep(10)
+        start_registered(conv_id, opts, tries - 1)
+
+      other ->
+        other
+    end
   end
 
   def via_tuple(conversation_id) do
-    {:via, Registry, {SuperPi.Registry, {:conversation_machine, conversation_id}}}
+    {:via, Horde.Registry, {SuperPi.Conversation.Locator.registry(), SuperPi.Conversation.Locator.key(conversation_id)}}
   end
 
   @doc """

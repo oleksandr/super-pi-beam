@@ -678,23 +678,14 @@ defmodule SuperPi.Gateway.Router do
   defp extract_content_text(_), do: ""
 
   defp ensure_machine_started!(conv_id, extensions) do
-    case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
-      [{pid, _}] ->
+    case SuperPi.Conversation.Locator.whereis(conv_id) do
+      pid when is_pid(pid) ->
         Machine.set_extensions(pid, extensions)
         pid
 
-      [] ->
-        case Process.whereis(SuperPi.MachineSupervisor) do
-          nil ->
-            {:ok, pid} = Machine.start_link(conversation_id: conv_id, extensions: extensions)
-            pid
-
-          _sup ->
-            case DynamicSupervisor.start_child(SuperPi.MachineSupervisor, {Machine, conversation_id: conv_id, extensions: extensions}) do
-              {:ok, pid} -> pid
-              {:error, {:already_started, pid}} -> pid
-            end
-        end
+      nil ->
+        {:ok, pid} = SuperPi.Conversation.Locator.ensure_started(conv_id, extensions: extensions)
+        pid
     end
   end
 

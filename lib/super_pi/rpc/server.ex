@@ -841,15 +841,15 @@ defmodule SuperPi.RPC.Server do
     # A turn that waits for an answer cannot handle the cancel message until the wait ends.
     SuperPi.UI.Broker.cancel_pending(conv_id)
 
-    case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
-      [{pid, _}] ->
+    case SuperPi.Conversation.Locator.whereis(conv_id) do
+      pid when is_pid(pid) ->
         try do
           Machine.cancel(pid)
         catch
           :exit, _ -> :ok
         end
 
-      [] ->
+      nil ->
         :ok
     end
 
@@ -915,23 +915,8 @@ defmodule SuperPi.RPC.Server do
   end
 
   defp ensure_machine_started!(conv_id, extensions) do
-    case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
-      [{pid, _}] ->
-        pid
-
-      [] ->
-        case Process.whereis(SuperPi.MachineSupervisor) do
-          nil ->
-            {:ok, pid} = Machine.start_link(conversation_id: conv_id, extensions: extensions)
-            pid
-
-          _sup ->
-            case DynamicSupervisor.start_child(SuperPi.MachineSupervisor, {Machine, conversation_id: conv_id, extensions: extensions}) do
-              {:ok, pid} -> pid
-              {:error, {:already_started, pid}} -> pid
-            end
-        end
-    end
+    {:ok, pid} = SuperPi.Conversation.Locator.ensure_started(conv_id, extensions: extensions)
+    pid
   end
 
   defp open_session(harness, params, id, client_state) do

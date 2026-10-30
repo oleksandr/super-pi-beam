@@ -296,8 +296,9 @@ defmodule SuperPi.WorkspaceTest do
       {:ok, pid} = Machine.start_link(conversation_id: conv.id, extensions: [], llm_responder: responder)
       {:ok, _} = Machine.submit(pid, "hi", timeout: 10_000)
       assert_received {:tools, names}
-      # `tool_search` has no workspace requirement.
-      assert names == ["artifact_get", "artifact_list", "artifact_put", "tool_search"]
+      # Other tests may register tools in the global catalog, so check what must and must not be there.
+      for tool <- ["artifact_get", "artifact_list", "artifact_put"], do: assert(tool in names)
+      for tool <- ["read", "write", "edit", "bash", "grep", "find", "ls"], do: refute(tool in names)
     end
 
     test "the scratch directory is removed when the turn ends", %{base: base} do

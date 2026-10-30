@@ -74,7 +74,7 @@ defmodule SuperPi.ReviewDefectsTest do
       payload = Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "method" => "session.open", "params" => %{"harness" => "super-pi-interactive"}})
       {%{"result" => %{"conversation_id" => conv_id}}, _, _} = RPC.handle_rpc_payload(payload, RPC.new_client_state())
 
-      [{pid, _}] = Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id})
+      [{pid, _}] = Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv_id})
       {_state, data} = :gen_statem.call(pid, :get_state)
       refute SuperPi.Plugins.InlineBash in Enum.map(data.extensions, &module_of/1)
       on_exit(fn -> Process.exit(pid, :kill) end)
@@ -342,7 +342,7 @@ defmodule SuperPi.ReviewDefectsTest do
       {micros, {:ok, pid}} =
         :timer.tc(fn ->
           spec = %{id: {:rd, conv.id}, start: {SuperPi.Conversation.Machine, :start_link, [[conversation_id: conv.id, extensions: []]]}, restart: :temporary}
-          DynamicSupervisor.start_child(SuperPi.MachineSupervisor, spec)
+          Horde.DynamicSupervisor.start_child(SuperPi.MachineSupervisor, spec)
         end)
 
       assert div(micros, 1000) < 1_000, "starting the machine took #{div(micros, 1000)} ms"

@@ -209,9 +209,9 @@ defmodule SuperPi.Plugins.Subagent do
       [{^idx, child_id, task_id}] ->
         finish_child_task(task_id, {:error, "subagent was killed"})
 
-        case Registry.lookup(SuperPi.Registry, {:conversation_machine, child_id}) do
-          [{pid, _}] -> stop_machine(pid, child_id)
-          [] -> :ok
+        case SuperPi.Conversation.Locator.whereis(child_id) do
+          pid when is_pid(pid) -> stop_machine(pid, child_id)
+          nil -> :ok
         end
 
       [] ->
@@ -249,12 +249,10 @@ defmodule SuperPi.Plugins.Subagent do
   end
 
   defp run_machine(child_id, prompt, timeout_ms, ctx) do
-    machine_opts =
-      [conversation_id: child_id, extensions: child_extensions()] ++ config_machine_opts(Map.get(ctx, :config))
+    machine_opts = [extensions: child_extensions()] ++ config_machine_opts(Map.get(ctx, :config))
 
-    spec = %{id: {:subagent, child_id}, start: {Machine, :start_link, [machine_opts]}, restart: :temporary}
-
-    case DynamicSupervisor.start_child(SuperPi.MachineSupervisor, spec) do
+    # A child runs on the node of its parent (it uses the parent's workspace) and is never restarted.
+    case SuperPi.Conversation.Locator.ensure_started(child_id, machine_opts, restart: :temporary, supervision: :local) do
       {:ok, pid} ->
         try do
           case Machine.submit(pid, prompt, timeout: timeout_ms) do
@@ -289,16 +287,8 @@ defmodule SuperPi.Plugins.Subagent do
       :exit, _ -> :ok
     end
 
-    wait_unregistered(child_id, 100)
-  end
-
-  defp wait_unregistered(_id, 0), do: :ok
-
-  defp wait_unregistered(id, tries) do
-    case Registry.lookup(SuperPi.Registry, {:conversation_machine, id}) do
-      [] -> :ok
-      _ -> Process.sleep(5) && wait_unregistered(id, tries - 1)
-    end
+    SuperPi.Conversation.Locator.await_gone(child_id)
+    :ok
   end
 
   # --- Child configuration ---

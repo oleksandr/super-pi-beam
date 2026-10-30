@@ -166,7 +166,7 @@ defmodule SuperPi.Harness.WorkspaceCliDefectsTest do
       result = safe(fn -> CLI.run(["--conversation", "#{conv.id}", "-p", "hi"], opts) end)
 
       assert match?({:raised, _}, result) or match?({:caught, _, _}, result) or match?({:ok, {1, _}}, result)
-      assert Registry.lookup(SuperPi.Registry, {:conversation_machine, conv.id}) == [], "machine leaked"
+      assert Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv.id}) == [], "machine leaked"
     end
   end
 

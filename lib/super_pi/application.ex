@@ -23,7 +23,12 @@ defmodule SuperPi.Application do
       {Phoenix.PubSub, name: SuperPi.PubSub},
       {Registry, keys: :unique, name: SuperPi.Registry},
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.FileLockSupervisor},
-      {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MachineSupervisor},
+      # One machine per conversation in the whole cluster (see SuperPi.Conversation.Locator).
+      {Horde.Registry, name: SuperPi.ConversationRegistry, keys: :unique, members: :auto},
+      # The restart budget is shared by every conversation, so it is generous: one conversation that
+      # crashes at start must not exhaust it for the others.
+      {Horde.DynamicSupervisor, name: SuperPi.MachineSupervisor, strategy: :one_for_one, members: :auto, max_restarts: 100, max_seconds: 5},
+      {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.LocalMachineSupervisor},
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MCPClientSupervisor},
       SuperPi.UI.Broker,
       {Task.Supervisor, name: SuperPi.ToolTaskSupervisor},

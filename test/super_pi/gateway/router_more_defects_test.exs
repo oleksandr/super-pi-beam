@@ -107,7 +107,7 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
       assert %Plug.Conn{status: 200} = post(chat([user("hi")]))
 
       conv_id = last_conversation_id()
-      [{pid, _}] = Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id})
+      [{pid, _}] = Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv_id})
       {:dictionary, dict} = Process.info(pid, :dictionary)
       ancestors = Keyword.get(dict, :"$ancestors", [])
 
@@ -139,7 +139,7 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
       start_machine(conv,
         llm_responder: fn _p, _c ->
-          [{pid, _}] = Registry.lookup(SuperPi.Registry, {:conversation_machine, conv.id})
+          [{pid, _}] = Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv.id})
           Process.exit(pid, :kill)
           {:error, :unreachable}
         end
@@ -160,7 +160,7 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
       start_machine(conv,
         llm_responder: fn _p, _c ->
-          [{pid, _}] = Registry.lookup(SuperPi.Registry, {:conversation_machine, conv.id})
+          [{pid, _}] = Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv.id})
           Process.exit(pid, :kill)
           {:error, :unreachable}
         end

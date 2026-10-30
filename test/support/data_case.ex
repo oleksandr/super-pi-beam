@@ -21,16 +21,32 @@ defmodule SuperPi.DataCase do
   Conversation ids restart at 1 in every sandboxed test, so a machine that outlives its
   test (started from a Task or an unlinked caller) collides with the next test's machine.
   """
+  defp await_no_machines(0), do: :ok
+
+  defp await_no_machines(tries) do
+    if SuperPi.Conversation.Locator.all() == [] do
+      :ok
+    else
+      Process.sleep(10)
+      await_no_machines(tries - 1)
+    end
+  end
+
   def stop_leaked_machines do
-    SuperPi.Registry
-    |> Registry.select([{{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
-    |> Enum.each(fn
-      {{:conversation_machine, _id}, pid} -> Process.exit(pid, :kill)
-      _ -> :ok
+    # Terminate through the supervisors. Killing a supervised machine would make Horde restart it
+    # (restart: :transient) after the test, when its sandbox connection is gone.
+    Enum.each(SuperPi.Conversation.Locator.all(), fn {_id, pid} ->
+      with {:error, :not_found} <- Horde.DynamicSupervisor.terminate_child(SuperPi.MachineSupervisor, pid),
+           {:error, :not_found} <- DynamicSupervisor.terminate_child(SuperPi.LocalMachineSupervisor, pid) do
+        Process.exit(pid, :kill)
+      end
     end)
   end
 
   def setup_sandbox(tags) do
+    stop_leaked_machines()
+    await_no_machines(200)
+
     repo = SuperPi.Repo.active_repo()
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(repo, shared: not tags[:async])
     if repo == SuperPi.Repo.SQLite, do: Ecto.Adapters.SQL.query!(repo, "PRAGMA foreign_keys = ON")

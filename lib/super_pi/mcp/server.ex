@@ -450,16 +450,9 @@ defmodule SuperPi.MCP.Server do
     timeout = Application.get_env(:super_pi, :mcp_harness_task_timeout_ms, 60_000)
 
     # Supervised, not linked: a crashed machine must not take the MCP stdio server down.
-    machine_opts =
-      [conversation_id: conv.id, extensions: extensions] ++ Application.get_env(:super_pi, :mcp_harness_task_opts, [])
+    machine_opts = [extensions: extensions] ++ Application.get_env(:super_pi, :mcp_harness_task_opts, [])
 
-    spec = %{
-      id: {:mcp_harness_task, conv.id},
-      start: {SuperPi.Conversation.Machine, :start_link, [machine_opts]},
-      restart: :temporary
-    }
-
-    case DynamicSupervisor.start_child(SuperPi.MachineSupervisor, spec) do
+    case SuperPi.Conversation.Locator.ensure_started(conv.id, machine_opts, restart: :temporary, supervision: :local) do
       {:ok, machine_pid} -> run_harness_task(machine_pid, conv.id, prompt, timeout)
       {:error, reason} -> %{"output" => "Harness task error: could not start: #{inspect(reason)}", "is_error" => true}
     end
@@ -512,20 +505,7 @@ defmodule SuperPi.MCP.Server do
 
       # The registry drops its entry when it sees the process exit, a moment after `stop`
       # returns. Wait so that no caller can find a dead machine.
-      wait_unregistered(conv_id, 100)
-    end
-  end
-
-  defp wait_unregistered(_conv_id, 0), do: :ok
-
-  defp wait_unregistered(conv_id, tries) do
-    case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
-      [] ->
-        :ok
-
-      _ ->
-        Process.sleep(5)
-        wait_unregistered(conv_id, tries - 1)
+      SuperPi.Conversation.Locator.await_gone(conv_id)
     end
   end
 
