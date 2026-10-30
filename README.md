@@ -381,7 +381,7 @@ All four carry `Permissions`. `Code`, `Librarian` and `Planner` also carry `Prot
 
 `Assistant` has no `InlineBash`. That plugin runs `!{...}` outside the tool pipeline, so a workspace without a shell would still reach one.
 
-**Older ids still work.** `super-pi-workspace` and `super-pi-auto` resolve to `super-pi-code`. `super-pi-agent`, `super-pi-fast` and `super-pi-interactive` resolve to `super-pi-assistant`. `super-pi-fast` no longer sets a low effort: pass `--effort low`. The old modules (`SuperPi.Harness.Workspace` and the others) remain as shims for one release. They delegate to their successor. Discovery lists only the four current harnesses (`bin/super-pi harnesses`, `GET /v1/models`), while resolution accepts the old ids.
+**Older ids still work.** `super-pi-workspace` and `super-pi-auto` resolve to `super-pi-code`. `super-pi-agent`, `super-pi-fast` and `super-pi-interactive` resolve to `super-pi-assistant`. `super-pi-fast` no longer sets a low effort: pass `--effort low`. Discovery lists only the four current harnesses (`bin/super-pi harnesses`, `GET /v1/models`), while resolution accepts the old ids.
 
 ### Listing Harnesses via CLI
 

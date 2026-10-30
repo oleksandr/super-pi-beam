@@ -415,8 +415,6 @@ defmodule SuperPi.PluginsTest do
       assert SuperPi.Harness.resolve("super-pi-fast") == SuperPi.Harness.Assistant
       assert SuperPi.Harness.resolve("auto") == SuperPi.Harness.Code
       assert SuperPi.Harness.resolve("interactive") == SuperPi.Harness.Assistant
-      assert SuperPi.Harness.resolve(SuperPi.Harness.Autonomous) == SuperPi.Harness.Code
-      assert SuperPi.Harness.resolve("SuperPi.Harness.Workspace") == SuperPi.Harness.Code
     end
   end
 

@@ -116,15 +116,6 @@ defmodule SuperPi.Harness do
     "super-pi-interactive" => SuperPi.Harness.Assistant
   }
 
-  # Modules of earlier releases, kept as shims. A client may pin a module name.
-  @shims %{
-    SuperPi.Harness.Default => SuperPi.Harness.Assistant,
-    SuperPi.Harness.Fast => SuperPi.Harness.Assistant,
-    SuperPi.Harness.Interactive => SuperPi.Harness.Assistant,
-    SuperPi.Harness.Workspace => SuperPi.Harness.Code,
-    SuperPi.Harness.Autonomous => SuperPi.Harness.Code
-  }
-
   @builtin_harnesses [
     SuperPi.Harness.Code,
     SuperPi.Harness.Assistant,
@@ -176,7 +167,6 @@ defmodule SuperPi.Harness do
   """
   def resolve(module) when is_atom(module) do
     cond do
-      Map.has_key?(@shims, module) -> Map.fetch!(@shims, module)
       Code.ensure_loaded?(module) and function_exported?(module, :id, 0) -> module
       true -> Map.get(@registry, to_string(module), default())
     end
@@ -268,12 +258,7 @@ defmodule SuperPi.Harness do
     Enum.find_value([name_or_id, "Elixir." <> name_or_id], fn cand ->
       try do
         mod = String.to_existing_atom(cand)
-
-        cond do
-          Map.has_key?(@shims, mod) -> Map.fetch!(@shims, mod)
-          Code.ensure_loaded?(mod) and function_exported?(mod, :id, 0) -> mod
-          true -> nil
-        end
+        if Code.ensure_loaded?(mod) and function_exported?(mod, :id, 0), do: mod
       rescue
         _ -> nil
       end

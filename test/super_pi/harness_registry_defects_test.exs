@@ -249,9 +249,9 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
       assert Plugins.resolve(SuperPi.Harness.Planner) == nil
     end
 
-    test "a harness module string that names a shim resolves, so the default module is not a sentinel" do
-      assert Harness.harness?("SuperPi.Harness.Default")
+    test "a harness module string resolves; a removed shim module does not" do
       assert Harness.harness?("SuperPi.Harness.Code")
+      refute Harness.harness?("SuperPi.Harness.Default")
       refute Harness.harness?("SuperPi.Harness.NoSuchThing")
     end
 

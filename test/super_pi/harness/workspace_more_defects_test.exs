@@ -12,7 +12,6 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
 
   alias SuperPi.Durable.{Doc, Storage}
   alias SuperPi.Conversation.Machine
-  alias SuperPi.Harness.Workspace
   alias SuperPi.Discovery
   alias SuperPi.Plugins.TranscriptLogger, as: Brain
   alias SuperPi.Plugins.Hooks, as: HooksJson
@@ -604,9 +603,9 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
 
   # --- Finding 8: harness module drift ---
 
-  describe "Workspace harness module" do
+  describe "Code harness module" do
     test "extensions/0 matches CLI.default_extensions/0" do
-      assert Workspace.extensions() == SuperPi.CLI.default_extensions()
+      assert SuperPi.Harness.Code.extensions() == SuperPi.CLI.default_extensions()
     end
   end
 end
