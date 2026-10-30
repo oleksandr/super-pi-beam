@@ -53,6 +53,11 @@ defmodule SuperPi.MixProject do
       {:owl, "~> 0.12"},
       {:phoenix_pubsub, "~> 2.1"},
       {:telemetry, "~> 1.3"},
+      {:telemetry_metrics, "~> 1.0"},
+      {:telemetry_metrics_prometheus_core, "~> 1.2"},
+      {:opentelemetry_api, "~> 1.4"},
+      {:opentelemetry, "~> 1.5"},
+      {:opentelemetry_exporter, "~> 1.8"},
 
       # Testing & Property-Based Verification
       {:stream_data, "~> 1.1", only: [:dev, :test]}

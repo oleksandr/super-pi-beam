@@ -5,6 +5,13 @@ if System.get_env("SUPER_PI_LOG_STDERR") in ["1", "true"] do
   config :logger, :default_handler, config: %{type: :standard_error}
 end
 
+# Export traces over OTLP/HTTP when an endpoint is given, for example http://localhost:4318.
+# Other OTEL_* variables (OTEL_SERVICE_NAME, OTEL_RESOURCE_ATTRIBUTES) are read by the SDK.
+if endpoint = System.get_env("OTEL_EXPORTER_OTLP_ENDPOINT") do
+  config :opentelemetry, traces_exporter: :otlp
+  config :opentelemetry_exporter, otlp_protocol: :http_protobuf, otlp_endpoint: endpoint
+end
+
 case System.get_env("SUPER_PI_STORAGE_BACKEND") do
   "postgres" ->
     database_url =

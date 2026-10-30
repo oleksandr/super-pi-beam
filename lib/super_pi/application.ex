@@ -27,6 +27,7 @@ defmodule SuperPi.Application do
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MachineSupervisor},
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MCPClientSupervisor},
       {Task.Supervisor, name: SuperPi.ToolTaskSupervisor},
+      {TelemetryMetricsPrometheus.Core, name: SuperPi.Telemetry.reporter_name(), metrics: SuperPi.Telemetry.metrics()},
       SuperPi.Durable.DeferredFlusher,
       {Oban, Application.fetch_env!(:super_pi, Oban)}
     ] ++ gateway_children

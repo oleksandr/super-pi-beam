@@ -19,6 +19,7 @@ defmodule SuperPi.Gateway.Router do
 
   plug Plug.Logger, log: :debug
   plug :match
+  plug :trace_request
   plug :authenticate
   plug Plug.Parsers,
     parsers: [:json],
@@ -68,6 +69,13 @@ defmodule SuperPi.Gateway.Router do
       "version" => "0.1.0",
       "description" => "Super-Pi-BEAM OpenAI-Compatible Upstream Inference Gateway"
     })
+  end
+
+  # Prometheus text format. Behind the same authentication as the API.
+  get "/metrics" do
+    conn
+    |> put_resp_content_type("text/plain; version=0.0.4")
+    |> send_resp(200, SuperPi.Telemetry.scrape())
   end
 
   get "/health" do
@@ -418,6 +426,22 @@ defmodule SuperPi.Gateway.Router do
     end
   end
 
+  # One span per request. A streamed response ends the span when the headers are sent.
+  defp trace_request(conn, _opts) do
+    handle =
+      SuperPi.Telemetry.start_span("super_pi.gateway.request", %{
+        "http.request.method" => conn.method,
+        "url.path" => conn.request_path
+      })
+
+    register_before_send(conn, fn conn ->
+      status = conn.status || 0
+      outcome = if status >= 500, do: {:error, "HTTP #{status}"}, else: :ok
+      SuperPi.Telemetry.stop_span(handle, outcome, %{"http.response.status_code" => status})
+      conn
+    end)
+  end
+
   # A model is a harness id (a virtual model that selects an agent persona) or a name that
   # a registered provider serves (passed through to that provider). Anything else is a
   # client error, as in other OpenAI-compatible gateways, so a typo never silently runs
@@ -704,7 +728,7 @@ defmodule SuperPi.Gateway.Router do
   # --- Non-Streaming Execution ---
 
   defp handle_sync_completion(conn, conv_id, pid, user_prompt, model) do
-    case safe_machine_submit(pid, user_prompt, mode: :queue, timeout: 120_000) do
+    case safe_machine_submit(pid, user_prompt, mode: :queue, timeout: 120_000, otel_ctx: SuperPi.Telemetry.current_ctx()) do
       {:ok, assistant_msg} ->
         reply_text =
           case assistant_msg do
@@ -811,9 +835,11 @@ defmodule SuperPi.Gateway.Router do
       end
 
     # Launch turn asynchronously
+    otel_ctx = SuperPi.Telemetry.current_ctx()
+
     task =
       Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
-        safe_machine_submit(pid, user_prompt, mode: :queue, timeout: 300_000)
+        safe_machine_submit(pid, user_prompt, mode: :queue, timeout: 300_000, otel_ctx: otel_ctx)
       end)
 
     try do

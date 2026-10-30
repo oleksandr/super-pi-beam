@@ -13,6 +13,8 @@ config :super_pi, :mock_llm, true
 config :super_pi, auto_migrate: false
 # Tests that need MCP servers start them explicitly.
 config :super_pi, mcp_clients: false
+# Spans go to a test process (`SuperPi.TelemetryTest`); nothing is exported.
+config :opentelemetry, span_processor: :simple, traces_exporter: :none
 
 config :logger, level: :warning
 

@@ -303,6 +303,22 @@ config :super_pi, :permissions,
 
 A caller may request any mode up to `remote_max_mode`. Gateway callers send the `x-super-pi-mode` header or an `execution_mode` body field. RPC callers set `agent.executionMode`. RPC callers cannot set `dangerouslySkipPermissions`, `settingsOverride` or workspace paths. Without config, a request can only tighten the mode. An unknown harness name is an error. Set `config :super_pi, fallback_harness: "<id>"` for a fallback, and `default_harness` to change the default.
 
+### Observability: Traces, Metrics, Logs
+
+**Traces (OpenTelemetry).** Every conversation turn is a span tree: `super_pi.gateway.request` (when the turn came over HTTP) > `super_pi.turn` > `chat <model>` (one per provider call, with `gen_ai.usage.input_tokens` and `output_tokens`) and `execute_tool <name>`. Failures set the span status to `error`. Prompts, answers and tool arguments are never recorded. Spans are no-ops until you point the app at a collector:
+
+```bash
+# for example Jaeger: docker run -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_SERVICE_NAME=super-pi-beam bin/super-pi gateway 4000
+# then open http://localhost:16686 and pick the service
+```
+
+The exporter is OTLP over HTTP. Other `OTEL_*` variables are read by the OpenTelemetry SDK. A streamed gateway response ends its request span when the headers are sent, so the turn span can outlive it.
+
+**Metrics (Prometheus).** `GET /metrics` on the gateway (same authentication as the API) exposes `super_pi_turn_total`, `super_pi_llm_requests_total`, `super_pi_llm_input_tokens`, `super_pi_llm_output_tokens`, `super_pi_tool_calls_total`, and duration histograms (`*_duration_milliseconds_bucket`), labelled by model, tool and status. The same data is emitted as `:telemetry` events (`[:super_pi, :turn | :llm | :tool, :stop]`), so any `Telemetry.Metrics` reporter can consume it (`SuperPi.Telemetry.metrics/0`).
+
+**Logs.** Log lines from a conversation carry `conversation_id` and `task_id`. In `rpc --stdio` and `mcp` modes logs go to stderr.
+
 ### Authentication and Ownership
 
 The Gateway and the RPC server are open on loopback by default. To require a key, set tokens in config or the environment:

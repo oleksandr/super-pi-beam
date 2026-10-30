@@ -39,4 +39,10 @@ config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
   metadata: [:conversation_id, :task_id]
 
+# OpenTelemetry. No exporter by default; set OTEL_EXPORTER_OTLP_ENDPOINT to export (see runtime.exs).
+config :opentelemetry,
+  resource: [service: [name: "super-pi-beam"]],
+  span_processor: :batch,
+  traces_exporter: :none
+
 import_config "#{config_env()}.exs"

@@ -33,7 +33,9 @@ defmodule SuperPi.Conversation.Machine do
     completed_tool_results: [],
     steer_preempted: false,
     last_assistant_message: nil,
-    reply_from: nil
+    reply_from: nil,
+    turn_span: nil,
+    turn_status: :ok
   ]
 
   @impl :gen_statem
@@ -169,7 +171,18 @@ defmodule SuperPi.Conversation.Machine do
   def handle_event(:enter, _old_state, :idle, %__MODULE__{} = data) do
     publish_live_state(data.conversation_id, "idle")
     Logger.metadata(task_id: nil)
-    {:keep_state, %__MODULE__{data | active_task_id: nil, steer_preempted: false, pending_tool_calls: [], completed_tool_results: []}}
+    SuperPi.Telemetry.turn_stop(data.turn_span, data.turn_status)
+
+    {:keep_state,
+     %__MODULE__{
+       data
+       | active_task_id: nil,
+         steer_preempted: false,
+         pending_tool_calls: [],
+         completed_tool_results: [],
+         turn_span: nil,
+         turn_status: :ok
+     }}
   end
 
   def handle_event({:call, from}, :get_state, state, data) do
@@ -203,6 +216,7 @@ defmodule SuperPi.Conversation.Machine do
      %__MODULE__{
        data
        | reply_from: nil,
+         turn_status: {:error, :cancelled},
          active_task_id: nil,
          active_llm_task: nil,
          pending_tool_calls: [],
@@ -223,7 +237,7 @@ defmodule SuperPi.Conversation.Machine do
     {:keep_state_and_data, [{:reply, from, {:ok, %{mode: :write, entry_id: entry.id}}}]}
   end
 
-  def handle_event({:call, from}, {:submit, mode, raw_text, _opts}, :idle, %__MODULE__{} = data)
+  def handle_event({:call, from}, {:submit, mode, raw_text, submit_opts}, :idle, %__MODULE__{} = data)
       when mode in [:queue, :steer] do
     ctx = hook_ctx(data)
 
@@ -250,9 +264,14 @@ defmodule SuperPi.Conversation.Machine do
         {:ok, running_task} = TaskEngine.start_task(gen_task.id)
         Logger.metadata(task_id: running_task.id)
 
+        # The turn span is current in this process until the conversation is idle again.
+        turn_span = SuperPi.Telemetry.turn_start(data.conversation_id, running_task.id, Keyword.get(submit_opts, :otel_ctx))
+
         next_data = %__MODULE__{
           data
-          | active_task_id: running_task.id,
+          | turn_span: turn_span,
+            turn_status: :ok,
+            active_task_id: running_task.id,
             reply_from: from,
             steer_preempted: false
         }
@@ -387,14 +406,18 @@ defmodule SuperPi.Conversation.Machine do
     ctx = hook_ctx(data)
     responder = data.llm_responder
     log_metadata = Logger.metadata()
+    otel_ctx = SuperPi.Telemetry.current_ctx()
+    model = Map.get(payload, :model, "unknown")
 
     task =
       case Process.whereis(SuperPi.ToolTaskSupervisor) do
         nil ->
           Task.async(fn ->
             Logger.metadata(log_metadata)
+            SuperPi.Telemetry.attach(otel_ctx)
+
             try do
-              responder.(payload, ctx)
+              SuperPi.Telemetry.llm_span(model, fn -> responder.(payload, ctx) end)
             rescue
               e -> {:error, {:raised, e}}
             catch
@@ -405,8 +428,10 @@ defmodule SuperPi.Conversation.Machine do
         _pid ->
           Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
             Logger.metadata(log_metadata)
+            SuperPi.Telemetry.attach(otel_ctx)
+
             try do
-              responder.(payload, ctx)
+              SuperPi.Telemetry.llm_span(model, fn -> responder.(payload, ctx) end)
             rescue
               e -> {:error, {:raised, e}}
             catch
@@ -497,7 +522,7 @@ defmodule SuperPi.Conversation.Machine do
               []
             end
 
-          {:next_state, :idle, %__MODULE__{next_data | reply_from: nil, active_task_id: nil, retry_count: 0}, actions}
+          {:next_state, :idle, %__MODULE__{next_data | reply_from: nil, active_task_id: nil, retry_count: 0, turn_status: {:error, :rate_limit_exceeded}}, actions}
         end
 
       {:error, reason} ->
@@ -519,7 +544,7 @@ defmodule SuperPi.Conversation.Machine do
             []
           end
 
-        {:next_state, :idle, %__MODULE__{next_data | reply_from: nil, active_task_id: nil, retry_count: 0}, actions}
+        {:next_state, :idle, %__MODULE__{next_data | reply_from: nil, active_task_id: nil, retry_count: 0, turn_status: {:error, err_msg}}, actions}
     end
   end
 
@@ -537,7 +562,7 @@ defmodule SuperPi.Conversation.Machine do
         []
       end
 
-    {:next_state, :idle, %__MODULE__{next_data | reply_from: nil, active_task_id: nil, retry_count: 0}, actions}
+    {:next_state, :idle, %__MODULE__{next_data | reply_from: nil, active_task_id: nil, retry_count: 0, turn_status: {:error, reason}}, actions}
   end
 
   # --- State: :sleeping_backoff ---
@@ -661,11 +686,13 @@ defmodule SuperPi.Conversation.Machine do
           })
 
           log_metadata = Logger.metadata()
+          otel_ctx = SuperPi.Telemetry.current_ctx()
 
           core_fn = fn exec_args ->
             case SandboxRunner.run_isolated(fn ->
                    Logger.metadata(log_metadata)
-                   data.tool_executor.(tool_name, exec_args, ctx)
+                   SuperPi.Telemetry.attach(otel_ctx)
+                   SuperPi.Telemetry.tool_span(tool_name, fn -> data.tool_executor.(tool_name, exec_args, ctx) end)
                  end) do
               {:ok, %{} = res} ->
                 Map.merge(
@@ -888,7 +915,7 @@ defmodule SuperPi.Conversation.Machine do
         []
       end
 
-    {:next_state, :idle, %__MODULE__{data | active_task_id: nil, reply_from: nil}, actions}
+    {:next_state, :idle, %__MODULE__{data | active_task_id: nil, reply_from: nil, turn_status: {:error, reason}}, actions}
   end
 
   defp apply_tool_control_directive(_conv_id, nil), do: :ok
