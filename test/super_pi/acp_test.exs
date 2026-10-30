@@ -176,47 +176,10 @@ defmodule SuperPi.ACPTest do
     {:ok, server} =
       Server.start_link(send: fn line -> send(test_pid, {:acp_out, Jason.decode!(line)}) end)
 
-    # A prompt task that outlives its test writes to a database that the next test owns, and SQLite
-    # then answers "Database busy". Let the tasks end first.
-    on_exit(fn ->
-      if Process.alive?(server), do: GenServer.stop(server)
-      await_tasks(100)
-      await_idle(50)
-    end)
+    # DataCase then waits for the prompt tasks and machines to be idle.
+    on_exit(fn -> if Process.alive?(server), do: GenServer.stop(server) end)
 
     {:ok, server: server}
-  end
-
-  # A machine that is killed in the middle of a write leaves the SQLite connection with a stale
-  # snapshot, and the next test's first write fails with "Database busy". Wait until they are idle.
-  defp await_idle(0), do: :ok
-
-  defp await_idle(tries) do
-    busy? =
-      Enum.any?(SuperPi.Conversation.Locator.all(), fn {_id, pid} ->
-        try do
-          {state, _} = :gen_statem.call(pid, :get_state, 500)
-          state != :idle
-        catch
-          :exit, _ -> false
-        end
-      end)
-
-    if busy? do
-      Process.sleep(20)
-      await_idle(tries - 1)
-    end
-  end
-
-  defp await_tasks(0), do: :ok
-
-  defp await_tasks(tries) do
-    if Task.Supervisor.children(SuperPi.ToolTaskSupervisor) == [] do
-      :ok
-    else
-      Process.sleep(20)
-      await_tasks(tries - 1)
-    end
   end
 
   defp rpc(server, id, method, params),

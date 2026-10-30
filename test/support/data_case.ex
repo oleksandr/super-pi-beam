@@ -13,8 +13,53 @@ defmodule SuperPi.DataCase do
 
   setup tags do
     SuperPi.DataCase.setup_sandbox(tags)
-    on_exit(&SuperPi.DataCase.stop_leaked_machines/0)
+
+    on_exit(fn ->
+      SuperPi.DataCase.await_quiet()
+      SuperPi.DataCase.stop_leaked_machines()
+    end)
+
     :ok
+  end
+
+  @doc """
+  Waits, for at most about 3 seconds, until no tool task runs and every machine is idle.
+
+  A machine or task that is killed in the middle of a write leaves the SQLite connection with a
+  stale snapshot, and the next test's first write fails with "Database busy". One that outlives
+  its sandbox owner commits outside the sandbox.
+  """
+  def await_quiet do
+    await_tasks(100)
+    await_idle(50)
+  end
+
+  defp await_tasks(0), do: :ok
+
+  defp await_tasks(tries) do
+    if Task.Supervisor.children(SuperPi.ToolTaskSupervisor) != [] do
+      Process.sleep(20)
+      await_tasks(tries - 1)
+    end
+  end
+
+  defp await_idle(0), do: :ok
+
+  defp await_idle(tries) do
+    busy? =
+      Enum.any?(SuperPi.Conversation.Locator.all(), fn {_id, pid} ->
+        try do
+          {state, _} = :gen_statem.call(pid, :get_state, 500)
+          state != :idle
+        catch
+          :exit, _ -> false
+        end
+      end)
+
+    if busy? do
+      Process.sleep(20)
+      await_idle(tries - 1)
+    end
   end
 
   defp await_no_machines(0), do: :ok
