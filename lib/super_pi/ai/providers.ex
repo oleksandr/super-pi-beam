@@ -7,12 +7,12 @@ defmodule SuperPi.AI.Providers do
   1. In mock mode (`config :super_pi, mock_llm: true`) only `SuperPi.AI.Providers.Mock` is active.
      Mock mode is for tests and demos. It never turns on by itself.
   2. Otherwise the first provider in `config :super_pi, :providers` whose `handles?/1` returns
-     true serves the model. The default list is `[SuperPi.AI.Providers.Gemini]`.
+     true serves the model. The default list is Gemini, Anthropic and OpenAI. A provider with no key is listed in the catalog as not available.
   3. If that provider is not configured, or no provider handles the model, the result is an
      error. There is no silent fallback.
   """
 
-  @default_providers [SuperPi.AI.Providers.Gemini]
+  @default_providers [SuperPi.AI.Providers.Gemini, SuperPi.AI.Providers.Anthropic, SuperPi.AI.Providers.OpenAI]
 
   @type error ::
           {:no_provider, String.t()}

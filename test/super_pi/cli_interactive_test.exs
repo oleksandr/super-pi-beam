@@ -164,9 +164,14 @@ defmodule SuperPi.CLIInteractiveTest do
     end
 
     test "creates a conversation when none exists", %{opts: opts} do
-      assert Storage.latest_conversation() == nil
+      # On PostgreSQL other tests have committed conversations, so compare with what was there.
+      before = Storage.latest_conversation()
       assert {0, "pong"} = CLI.run(["--continue", "-p", "hi"], opts)
-      assert %{id: _} = Storage.latest_conversation()
+      latest = Storage.latest_conversation()
+
+      if before == nil,
+        do: assert(latest != nil, "no conversation was created"),
+        else: assert(latest.id == before.id, "--continue should have used the existing latest conversation")
     end
 
     test "latest_conversation ignores forks" do

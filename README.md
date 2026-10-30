@@ -278,16 +278,24 @@ Super-Pi-BEAM includes a library of **19 modular plugins** migrated from the Pi 
 A provider owns one model API. `SuperPi.AI.Providers` picks the provider for a model:
 
 1. In mock mode (`config :super_pi, mock_llm: true`) only the echo provider is active. Mock mode never turns on by itself.
-2. Otherwise the first provider in `config :super_pi, :providers` whose `handles?/1` returns true serves the model. The default list is `[SuperPi.AI.Providers.Gemini]`.
+2. Otherwise the first provider in `config :super_pi, :providers` whose `handles?/1` returns true serves the model. The default list is Gemini, Anthropic and OpenAI.
 3. A model with no provider, or a provider without credentials, is an error. There is no silent fallback.
+
+| Provider | Models | Key | Notes |
+|---|---|---|---|
+| Gemini | `gemini-*`, `google/*`, harness aliases | `GEMINI_API_KEY` | Live-tested. |
+| Anthropic | `claude-*`, `anthropic/*` | `ANTHROPIC_API_KEY` | Messages API. Extended thinking is **off**; thinking blocks in the history are dropped. `--json-schema` is ignored. Not tested against the live API. |
+| OpenAI | `gpt-*`, `o1*`, `o3*`, `o4*`, `openai/*` | `OPENAI_API_KEY` | Chat Completions. `openai_base_url` points it at any compatible server (Azure OpenAI, vLLM, Ollama, a proxy). Not tested against the live API. |
+
+Anthropic and OpenAI settings are `anthropic_base_url`, `anthropic_models`, `anthropic_max_tokens` (default 8192), `anthropic_version`, `openai_base_url`, `openai_models` and `openai_max_tokens`. A model is listed in `/v1/models` and the CLI only when its provider has a key.
+
+Both providers read the stream with `SuperPi.AI.StreamNormalizer`, map text, tool calls and token usage, turn a 429 or 529 into a backoff (`Retry-After`, capped at 60 s), and report the provider's own error message for other failures. They are tested against a local server that replays the documented stream formats (`test/super_pi/ai/anthropic_openai_test.exs`, `provider_turn_test.exs`). The opt-in live tests (`--include live`) have never run with a real key.
 
 To serve an unsupported or exotic model, implement the `SuperPi.AI.Provider` behaviour and register it first in the list:
 
 ```elixir
 config :super_pi, :providers, [MyApp.MyProvider, SuperPi.AI.Providers.Gemini]
 ```
-
-Only Gemini ships today. Anthropic and OpenAI are planned (Task 44).
 
 ### Permissions and Remote Modes
 
@@ -585,7 +593,8 @@ lib/
 │   │   ├── gemini_client.ex       # Live Google Gemini SSE streaming & tool-calling client
 │   │   ├── provider.ex            # Provider behaviour (escape hatch for custom models)
 │   │   ├── providers.ex           # Provider registry, fail-closed resolution, model catalog
-│   │   ├── providers/             # Gemini and Mock providers
+│   │   ├── providers/             # Gemini, Anthropic, OpenAI and Mock providers, shared SSE client
+│   │   ├── tool_schemas.ex        # JSON Schema for the built-in tools
 │   │   ├── stream_normalizer.ex   # Multi-provider SSE normalizer & partial JSON repair
 │   │   └── virtual_model.ex       # Virtual model router & UUIDv7 session affinity
 │   ├── auth.ex                    # Bearer tokens and conversation ownership

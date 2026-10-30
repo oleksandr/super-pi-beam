@@ -43,10 +43,18 @@ defmodule SuperPi.Gateway.ModelValidationTest do
   defp error_of(conn), do: Jason.decode!(conn.resp_body)["error"]
 
   test "a model that no provider serves is 404 model_not_found" do
-    conn = chat("claude-sonnet-5-5")
+    conn = chat("llama-3-70b")
     assert conn.status == 404
     assert %{"code" => "model_not_found", "message" => message} = error_of(conn)
-    assert message =~ "claude-sonnet-5-5"
+    assert message =~ "llama-3-70b"
+  end
+
+  test "a claude model without a key is 503 provider_not_configured" do
+    System.delete_env("ANTHROPIC_API_KEY")
+    conn = chat("claude-sonnet-5-5")
+    assert conn.status == 503
+    assert %{"code" => "provider_not_configured", "message" => message} = error_of(conn)
+    assert message =~ "anthropic"
   end
 
   test "a typo in a harness id is 404, not a run on the default harness" do

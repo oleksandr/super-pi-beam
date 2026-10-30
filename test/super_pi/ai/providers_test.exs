@@ -33,8 +33,26 @@ defmodule SuperPi.AI.ProvidersTest do
 
   describe "resolve/1 fails closed" do
     test "a model without a provider is an error, not an echo" do
-      assert {:error, {:no_provider, "claude-sonnet-5-5"}} = Providers.resolve("claude-sonnet-5-5")
-      assert {:error, {:no_provider, "gpt-5"}} = Providers.resolve("gpt-5")
+      assert {:error, {:no_provider, "llama-3-70b"}} = Providers.resolve("llama-3-70b")
+      assert {:error, {:no_provider, "mistral-large"}} = Providers.resolve("mistral-large")
+    end
+
+    test "claude and gpt models have a provider, which is not configured without a key" do
+      System.delete_env("ANTHROPIC_API_KEY")
+      System.delete_env("OPENAI_API_KEY")
+      assert {:error, {:not_configured, "anthropic"}} = Providers.resolve("claude-sonnet-5-5")
+      assert {:error, {:not_configured, "openai"}} = Providers.resolve("gpt-5")
+    end
+
+    test "a configured key makes them resolvable" do
+      Application.put_env(:super_pi, :anthropic_api_key, "k")
+      Application.put_env(:super_pi, :openai_api_key, "k")
+      on_exit(fn -> Application.delete_env(:super_pi, :anthropic_api_key) && Application.delete_env(:super_pi, :openai_api_key) end)
+
+      assert {:ok, SuperPi.AI.Providers.Anthropic, "claude-sonnet-5-5"} = Providers.resolve("claude-sonnet-5-5")
+      assert {:ok, SuperPi.AI.Providers.Anthropic, "claude-opus-5-5"} = Providers.resolve("anthropic/claude-opus-5-5")
+      assert {:ok, SuperPi.AI.Providers.OpenAI, "gpt-5"} = Providers.resolve("openai/gpt-5")
+      assert {:ok, SuperPi.AI.Providers.OpenAI, "o3-mini"} = Providers.resolve("o3-mini")
     end
 
     test "a Gemini model without a key is an error" do
@@ -59,7 +77,7 @@ defmodule SuperPi.AI.ProvidersTest do
     end
 
     test "still rejects models that no provider handles" do
-      assert {:error, {:no_provider, "claude-x"}} = Providers.resolve("claude-x")
+      assert {:error, {:no_provider, "llama-x"}} = Providers.resolve("llama-x")
     end
   end
 
@@ -88,7 +106,7 @@ defmodule SuperPi.AI.ProvidersTest do
 
       assert %{"provider" => "custom", "available" => true} = Enum.find(catalog, &(&1["id"] == "acme-1"))
       assert %{"available" => false} = Enum.find(catalog, &(&1["id"] == "gemini-3-flash-preview"))
-      refute Enum.any?(catalog, &String.starts_with?(&1["id"], "claude-"))
+      refute Enum.any?(catalog, &String.starts_with?(&1["id"], "claude-"))  # Anthropic is not in this list
     end
   end
 
