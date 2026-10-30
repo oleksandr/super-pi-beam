@@ -58,6 +58,23 @@ defmodule SuperPi.CLI do
     p: :print
   ]
 
+  @slash_commands [
+    %{"name" => "/plan", "description" => "Switch to read-only architectural planning mode"},
+    %{"name" => "/goal", "description" => "Run autonomous multi-step goal with verification"},
+    %{"name" => "/boost", "description" => "Maximize reasoning effort (effort=max)"},
+    %{"name" => "/compact", "description" => "Compact conversation context"},
+    %{"name" => "/model", "description" => "Switch active LLM model (/model <name>)"},
+    %{"name" => "/mode", "description" => "Switch execution mode (/mode auto|plan|accept-edits)"},
+    %{"name" => "/fork", "description" => "Fork current conversation branch"},
+    %{"name" => "/help", "description" => "Display keyboard shortcuts and slash commands"}
+  ]
+
+  @doc """
+  The slash commands that every interface lists: RPC `workspace.metadata` and ACP
+  `available_commands_update`. Each is `%{"name", "description"}`.
+  """
+  def slash_commands, do: @slash_commands
+
   def default_extensions do
     Harness.Code.extensions()
   end

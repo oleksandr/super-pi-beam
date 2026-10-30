@@ -29,10 +29,10 @@ defmodule SuperPi.LoggingTest do
     assert :task_id in formatter[:metadata]
   end
 
-  test "library code does not print to stdout (the MCP protocol stream is the only exception)" do
+  test "library code does not print to stdout (the MCP and ACP protocol streams are the only exceptions)" do
     offenders =
       Path.wildcard("lib/**/*.ex")
-      |> Enum.reject(&(&1 in ["lib/super_pi/cli.ex", "lib/super_pi/mcp/server.ex"]))
+      |> Enum.reject(&(&1 in ["lib/super_pi/cli.ex", "lib/super_pi/mcp/server.ex", "lib/super_pi/acp/server.ex"]))
       |> Enum.filter(fn file -> File.read!(file) =~ ~r/^\s*(?!#)[^#\n]*\bIO\.(puts|inspect|write)\(/m end)
 
     assert offenders == [], "use Logger instead of IO in: #{inspect(offenders)}"

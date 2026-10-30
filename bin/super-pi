@@ -7,6 +7,7 @@
 #   super-pi chat                     Interactive chat
 #   super-pi gateway [port]           Run the OpenAI-compatible HTTP gateway
 #   super-pi mcp                      Run standard Model Context Protocol server over stdio
+#   super-pi acp                      Run an Agent Client Protocol agent over stdio (Zed, JetBrains, Copilot CLI)
 #   super-pi rpc [--port P|--unix PATH|--stdio]  Run JSON-RPC 2.0 server
 #   super-pi session list             List durable conversations
 #   super-pi session show <ID>        Display conversation details
@@ -80,6 +81,12 @@ case "${CMD}" in
         System.halt(code)
       ' -- "$@"
     fi
+    ;;
+
+  acp)
+    # An editor starts this as a subprocess. stdout carries protocol messages only; logs go to stderr.
+    export SUPER_PI_LOG_STDERR=1
+    exec mise exec -- mix run -e "SuperPi.ACP.Server.run_stdio(); System.halt(0)"
     ;;
 
   rpc)

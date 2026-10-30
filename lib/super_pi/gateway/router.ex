@@ -126,7 +126,8 @@ defmodule SuperPi.Gateway.Router do
           "permission" => [],
           "root" => mod.id(),
           "parent" => nil,
-          "description" => mod.description()
+          "description" => mod.description(),
+          "capabilities" => Harness.capabilities(mod)
         }
       end)
 
@@ -239,6 +240,9 @@ defmodule SuperPi.Gateway.Router do
         })
     end
   end
+
+  # AG-UI streams (`SuperPi.Gateway.AGUI`). They share this router's authentication and drain plugs.
+  forward "/agui/v1", to: SuperPi.Gateway.AGUI
 
   match _ do
     send_json(conn, 404, %{

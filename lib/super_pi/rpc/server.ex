@@ -869,16 +869,7 @@ defmodule SuperPi.RPC.Server do
       jsonrpc_result(id, %{
         "models" => SuperPi.CLI.models_catalog(),
         "agents" => SuperPi.CLI.agents_catalog(),
-        "slash_commands" => [
-          %{"name" => "/plan", "description" => "Switch to read-only architectural planning mode"},
-          %{"name" => "/goal", "description" => "Run autonomous multi-step goal with verification"},
-          %{"name" => "/boost", "description" => "Maximize reasoning effort (effort=max)"},
-          %{"name" => "/compact", "description" => "Compact conversation context"},
-          %{"name" => "/model", "description" => "Switch active LLM model (/model <name>)"},
-          %{"name" => "/mode", "description" => "Switch execution mode (/mode auto|plan|accept-edits)"},
-          %{"name" => "/fork", "description" => "Fork current conversation branch"},
-          %{"name" => "/help", "description" => "Display keyboard shortcuts and slash commands"}
-        ]
+        "slash_commands" => SuperPi.CLI.slash_commands()
       })
 
     {reply, client_state, []}

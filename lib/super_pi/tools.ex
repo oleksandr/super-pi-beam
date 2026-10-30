@@ -287,7 +287,15 @@ defmodule SuperPi.Tools do
             offset = fetch_arg(args, [:offset, "offset", :start_line, "start_line"], 1)
             limit = fetch_arg(args, [:limit, "limit", :end_line, "end_line"])
 
-            case env.read_file(path, offset: offset, limit: limit) do
+            # An ACP client may serve the read, to give the unsaved editor buffer (`Env.ClientFS`).
+            read =
+              case SuperPi.Env.ClientFS.maybe_read(ctx, ws, path, line: offset, limit: limit) do
+                {:ok, content} -> {:ok, content}
+                {:error, reason} -> {:error, reason}
+                :skip -> env.read_file(path, offset: offset, limit: limit)
+              end
+
+            case read do
               {:ok, content} ->
                 line_count = length(String.split(content, "\n"))
 
