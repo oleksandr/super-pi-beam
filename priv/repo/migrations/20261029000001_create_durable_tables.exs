@@ -11,16 +11,13 @@ defmodule SuperPi.Repo.Migrations.CreateDurableTables do
 
     create table(:conversations) do
       add :parent_conversation_id, references(:conversations, on_delete: :nothing)
-      add :parent_entry_id, references(:entries, on_delete: :nothing)
       add :owner_kind, :string, null: false, default: "ownerless"
-      add :owner_task_id, references(:tasks, on_delete: :nothing)
       add :created_seq, :bigint, null: false
 
       timestamps(type: :utc_datetime_usec)
     end
 
     create index(:conversations, [:parent_conversation_id])
-    create index(:conversations, [:owner_task_id])
 
     create table(:entries) do
       add :conversation_id, references(:conversations, on_delete: :delete_all), null: false
@@ -66,6 +63,15 @@ defmodule SuperPi.Repo.Migrations.CreateDurableTables do
     create index(:tasks, [:conversation_id, :status])
     create index(:tasks, [:owner_task_id])
     create index(:tasks, [:kind])
+
+    # conversations, entries and tasks reference each other. PostgreSQL requires the
+    # referenced table to exist, so these two columns are added after all three are created.
+    alter table(:conversations) do
+      add :parent_entry_id, references(:entries, on_delete: :nothing)
+      add :owner_task_id, references(:tasks, on_delete: :nothing)
+    end
+
+    create index(:conversations, [:owner_task_id])
 
     create table(:submissions) do
       add :conversation_id, references(:conversations, on_delete: :delete_all), null: false
@@ -127,6 +133,14 @@ defmodule SuperPi.Repo.Migrations.CreateDurableTables do
     drop table(:document_revisions)
     drop table(:documents)
     drop table(:submissions)
+
+    drop_if_exists index(:conversations, [:owner_task_id])
+
+    alter table(:conversations) do
+      remove :parent_entry_id
+      remove :owner_task_id
+    end
+
     drop table(:tasks)
     drop table(:entries)
     drop table(:conversations)

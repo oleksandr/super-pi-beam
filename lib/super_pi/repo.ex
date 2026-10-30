@@ -13,7 +13,7 @@ end
 defmodule SuperPi.Repo do
   @moduledoc """
   Unified repository facade that dispatches to `SuperPi.Repo.SQLite` (default single-node WAL mode)
-  or `SuperPi.Repo.Postgres` (multi-node cluster mode) based on `:storage_backend` configuration.
+  or `SuperPi.Repo.Postgres` (PostgreSQL, single node) based on `:storage_backend` configuration.
   """
 
   @spec active_repo() :: module()

@@ -52,8 +52,6 @@ defmodule SuperPi.MixProject do
       # TUI, PubSub, Cluster, & Telemetry
       {:owl, "~> 0.12"},
       {:phoenix_pubsub, "~> 2.1"},
-      {:libcluster, "~> 3.4"},
-      {:horde, "~> 0.9"},
       {:telemetry, "~> 1.3"},
 
       # Testing & Property-Based Verification

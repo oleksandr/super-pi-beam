@@ -1,11 +1,12 @@
 defmodule SuperPi.Cluster do
   @moduledoc """
-  Multi-Node Distributed Cluster Topology & `Horde` Conversation Routing (`Step 11`).
+  Runtime topology inspector.
 
-  When running on PostgreSQL (`SUPER_PI_STORAGE_BACKEND=postgres`), multiple BEAM nodes form a cluster
-  via `libcluster` and register conversation state machines in `Horde.Registry` and
-  `Horde.DynamicSupervisor`, providing transparent cross-node conversation handoff and automatic
-  failover with `TaskEngine.reconcile_on_open!/1`.
+  Multi-node operation is not implemented. The application starts a local `Registry` and a local
+  `DynamicSupervisor`, and no `libcluster` or `Horde` process. `status/0` therefore reports
+  `cluster_ready?: false` unless such a process is supervised. PostgreSQL storage
+  (`SUPER_PI_STORAGE_BACKEND=postgres`) works for a single node. Multi-node work is tracked as
+  Task 36 on the project board.
   """
 
   @doc """
