@@ -3,7 +3,7 @@ defmodule SuperPi.Plugins.Skills do
   Progressive Disclosure Skills Plugin (`SuperPi.Extension` behaviour).
 
   Implements progressive disclosure skill loading semantics:
-  - Discovers skills across workspace, global (`~/.gemini/config/skills`), and custom skill locations.
+  - Discovers skills across workspace, global (`<global config>/skills`), and custom skill locations.
   - Uses **progressive disclosure**: injects only `- <name> (<SKILL.md path>): <description>` into a
     dedicated `pi.system` section (`id: "skills_index"`) so the model's context window is not
     flooded with full skill bodies until the model reads `SKILL.md` on demand.

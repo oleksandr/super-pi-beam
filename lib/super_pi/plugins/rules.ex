@@ -4,7 +4,7 @@ defmodule SuperPi.Plugins.Rules do
 
   Implements rule loading and injection semantics:
   - Walks up from workspace directories to the repository root discovering `AGENTS.md`, `GEMINI.md`,
-    and `.agents/rules/*.md`, plus global config rules (`~/.gemini/config/AGENTS.md` or `~/.agents/rules/*.md`).
+    and `.agents/rules/*.md`, plus global config rules (`<global config>/AGENTS.md`).
   - Deduplicates all rules by canonical resolved path so a rule file is never injected twice.
   - Enforces the **Per-File Limit (`24,000` bytes)**, truncating cleanly on line boundaries when a rule
     file exceeds `24,000` bytes.

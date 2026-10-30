@@ -7,19 +7,72 @@ defmodule SuperPi.Discovery do
   and **Hooks** (`hooks.json`) in strict precedence order:
   1. Workspace `.agents/` (or `.agent/`, `_agents/`, `_agent/`) walking up from `cwd` to the `.git` root.
   2. Declared workspace JSON manifests (`skills.json`, `plugins.json` with `entries`, `inherits`, `include_only`, `exclude`).
-  3. Global configuration (`~/.gemini/config/` or `~/.super-pi/config/`).
-  4. Built-in application skills (`~/.gemini/antigravity-cli/builtin/skills/` or `priv/skills/`).
+  3. Global configuration directory (see "Paths").
+  4. Built-in application skills (`<app data dir>/builtin/skills/`).
   5. Global declared JSON manifests (`skills.json`).
+
+  ## Paths
+
+  No path is hardcoded. Each directory resolves in this order:
+
+  | Directory | Option or app env | Environment variable | Default |
+  |---|---|---|---|
+  | Global config | `:global_config_dir` | `SUPER_PI_CONFIG_DIR` | `:filename.basedir(:user_config, "super-pi")` |
+  | App data | `:app_data_dir` | `SUPER_PI_DATA_DIR` | `:filename.basedir(:user_data, "super-pi")` |
+  | Extra global roots | `:discovery_roots` | `SUPER_PI_DISCOVERY_ROOTS` (path-separated) | none |
+
+  The defaults follow each operating system: XDG on Linux, `~/Library/Application Support` on
+  macOS, and `%APPDATA%` on Windows. Extra roots are scanned like the global config directory,
+  after it. Use them to read a directory that another tool owns.
   """
 
   @dot_dirs [".agents", ".agent", "_agents", "_agent"]
 
+  @doc "Global configuration directory. See the module doc for how it resolves."
   def default_global_config_dir do
-    Path.expand("~/.gemini/config")
+    configured_dir(:global_config_dir, "SUPER_PI_CONFIG_DIR") ||
+      :user_config |> :filename.basedir("super-pi") |> to_string()
   end
 
+  @doc "Application data directory (transcripts, built-in skills). See the module doc."
   def default_app_data_dir do
-    Path.expand("~/.gemini/antigravity-cli")
+    configured_dir(:app_data_dir, "SUPER_PI_DATA_DIR") ||
+      :user_data |> :filename.basedir("super-pi") |> to_string()
+  end
+
+  @doc "Extra global roots that are scanned like the global config directory."
+  def extra_roots do
+    case Application.get_env(:super_pi, :discovery_roots) do
+      roots when is_list(roots) ->
+        Enum.map(roots, &Path.expand/1)
+
+      _ ->
+        case System.get_env("SUPER_PI_DISCOVERY_ROOTS") do
+          v when is_binary(v) and v != "" ->
+            v |> String.split(path_separator(), trim: true) |> Enum.map(&Path.expand/1)
+
+          _ ->
+            []
+        end
+    end
+  end
+
+  defp configured_dir(app_key, env_var) do
+    case Application.get_env(:super_pi, app_key) || System.get_env(env_var) do
+      dir when is_binary(dir) and dir != "" -> Path.expand(dir)
+      _ -> nil
+    end
+  end
+
+  defp path_separator, do: if(match?({:win32, _}, :os.type()), do: ";", else: ":")
+
+  # Global dir first, then extra roots. An explicit `:global_config_dir` option has no extras,
+  # so callers that pass one (tests, the CLI) see only that directory.
+  defp global_dirs(opts) do
+    case Keyword.fetch(opts, :global_config_dir) do
+      {:ok, dir} -> [dir]
+      :error -> [default_global_config_dir() | extra_roots()]
+    end
   end
 
   @doc """
@@ -70,7 +123,7 @@ defmodule SuperPi.Discovery do
   injected more than once.
   """
   def discover_rule_files(workspace_dirs, opts \\ []) when is_list(workspace_dirs) do
-    global_dir = Keyword.get(opts, :global_config_dir, default_global_config_dir())
+    global_dirs = global_dirs(opts)
 
     workspace_candidates =
       workspace_dirs
@@ -87,10 +140,10 @@ defmodule SuperPi.Discovery do
         direct ++ dot_rules
       end)
 
-    global_candidates = [
-      Path.join(global_dir, "AGENTS.md"),
-      Path.join(global_dir, "GEMINI.md") | list_markdown_files(Path.join(global_dir, "rules"))
-    ]
+    global_candidates =
+      Enum.flat_map(global_dirs, fn dir ->
+        [Path.join(dir, "AGENTS.md"), Path.join(dir, "GEMINI.md") | list_markdown_files(Path.join(dir, "rules"))]
+      end)
 
     (workspace_candidates ++ global_candidates)
     |> Enum.filter(&valid_rule_file?/1)
@@ -107,7 +160,7 @@ defmodule SuperPi.Discovery do
   Returns `[%{name: String.t(), description: String.t(), path: String.t(), tier: atom()}]`.
   """
   def discover_skills(workspace_dirs, opts \\ []) when is_list(workspace_dirs) do
-    global_dir = Keyword.get(opts, :global_config_dir, default_global_config_dir())
+    global_dirs = global_dirs(opts)
     app_data_dir = Keyword.get(opts, :app_data_dir, default_app_data_dir())
     builtin_dir = Path.join([app_data_dir, "builtin", "skills"])
 
@@ -126,14 +179,15 @@ defmodule SuperPi.Discovery do
       end
       |> List.flatten()
 
-    # Tier 3: Global `~/.gemini/config/skills`
-    tier3_dirs = [Path.join(global_dir, "skills")]
+    # Tier 3: `<global config>/skills`
+    tier3_dirs = Enum.map(global_dirs, &Path.join(&1, "skills"))
 
-    # Tier 4: Built-in `~/.gemini/antigravity-cli/builtin/skills`
+    # Tier 4: `<app data>/builtin/skills`
     tier4_dirs = [builtin_dir]
 
-    # Tier 5: Global `~/.gemini/config/skills.json`
-    tier5_entries = resolve_json_manifest(Path.join(global_dir, "skills.json"), global_dir)
+    # Tier 5: `<global config>/skills.json`
+    tier5_entries =
+      Enum.flat_map(global_dirs, &resolve_json_manifest(Path.join(&1, "skills.json"), &1))
 
     all_skill_Specs =
       scan_skill_dirs(tier1_dirs, :workspace) ++
@@ -311,10 +365,10 @@ defmodule SuperPi.Discovery do
   end
 
   @doc """
-  Discovers all `hooks.json` files across workspace `.agents/hooks.json`, active plugins, and `~/.gemini/config/hooks.json`.
+  Discovers all `hooks.json` files across workspace `.agents/hooks.json`, active plugins, and `<global config>/hooks.json`.
   """
   def discover_hooks_files(workspace_dirs, opts \\ []) do
-    global_dir = Keyword.get(opts, :global_config_dir, default_global_config_dir())
+    global_dirs = global_dirs(opts)
     ancestors = Enum.flat_map(workspace_dirs, &ancestor_chain/1) |> Enum.uniq()
 
     ws_hooks =
@@ -322,7 +376,7 @@ defmodule SuperPi.Discovery do
         Path.join([dir, dot, "hooks.json"])
       end
 
-    global_hooks = [Path.join(global_dir, "hooks.json")]
+    global_hooks = Enum.map(global_dirs, &Path.join(&1, "hooks.json"))
 
     (ws_hooks ++ global_hooks)
     |> Enum.filter(&File.regular?/1)
