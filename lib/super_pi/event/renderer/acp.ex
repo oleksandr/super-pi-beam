@@ -18,6 +18,7 @@ defmodule SuperPi.Event.Renderer.ACP do
   | `ui_resolved` of a permission | `tool_call_update`, status `in_progress` (on approval) |
   | `tool_completed` | `tool_call_update`, status `completed` or `failed` |
   | `tool_blocked` | `tool_call_update`, status `failed` |
+  | `subagent_started`, `subagent_finished` | a `tool_call` of kind `other` and its update |
   | `plan_updated` | `plan` |
   | `mode_changed` | `current_mode_update` |
   | `turn_*` | nothing. The server answers `session/prompt` with a stop reason. |
@@ -109,6 +110,31 @@ defmodule SuperPi.Event.Renderer.ACP do
   def render(%Event{type: "tool_blocked", data: %{"tool_call_id" => id, "name" => name, "reason" => reason}}, st) do
     {[{:update, %{"sessionUpdate" => "tool_call_update", "toolCallId" => id, "status" => "failed", "title" => "#{name} (blocked)", "content" => [%{"type" => "content", "content" => %{"type" => "text", "text" => reason}}]}}],
      %{st | calls: Map.delete(st.calls, id)}}
+  end
+
+  # A child conversation shows as a tool call of its own, so the editor lists it while it runs.
+  def render(%Event{type: "subagent_started", data: data}, st) do
+    call = %{
+      "sessionUpdate" => "tool_call",
+      "toolCallId" => "subagent-#{data["child_conversation_id"]}",
+      "title" => "subagent (#{data["role"]})",
+      "kind" => "other",
+      "status" => "in_progress",
+      "rawInput" => %{"role" => data["role"], "task" => data["task"]}
+    }
+
+    {[{:update, call}], st}
+  end
+
+  def render(%Event{type: "subagent_finished", data: data}, st) do
+    update = %{
+      "sessionUpdate" => "tool_call_update",
+      "toolCallId" => "subagent-#{data["child_conversation_id"]}",
+      "status" => if(data["status"] == "completed", do: "completed", else: "failed"),
+      "content" => [%{"type" => "content", "content" => %{"type" => "text", "text" => to_string(data["summary"] || "")}}]
+    }
+
+    {[{:update, update}], st}
   end
 
   def render(%Event{type: "plan_updated", data: %{"entries" => entries}}, st) do

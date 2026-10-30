@@ -58,6 +58,13 @@ defmodule SuperPi.EventTest do
       assert %Event{type: "custom", conversation_id: 5, turn_id: 9, data: %{"x" => 1}} = ev
     end
 
+    test "a tool call delta carries the provider's id and name only when it has them" do
+      assert %{"id" => "c1", "name" => "read"} = 1 |> Event.toolcall_delta(1, 0, "{", %{}, id: "c1", name: "read") |> Event.to_wire()
+      wire = 1 |> Event.toolcall_delta(1, 0, "{", %{}) |> Event.to_wire()
+      refute Map.has_key?(wire, "id")
+      refute Map.has_key?(wire, "name")
+    end
+
     test "turn_error formats a non-binary reason" do
       assert %{"error" => ":boom"} = 1 |> Event.turn_error(1, :boom, 0) |> Event.to_wire()
     end

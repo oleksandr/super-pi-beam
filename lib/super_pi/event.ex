@@ -28,7 +28,7 @@ defmodule SuperPi.Event do
   | `turn_cancelled` | `seq` |
   | `text_delta` | `index`, `delta` |
   | `thinking_delta` | `index`, `delta` |
-  | `toolcall_delta` | `index`, `delta`, `partial_args` |
+  | `toolcall_delta` | `index`, `delta`, `partial_args`, and `id` and `name` when the provider gave them |
   | `message_completed` | `role`, `content`, `usage` |
   | `tool_started` | `tool_call_id`, `name`, `arguments`, `overwritten_keys` |
   | `tool_blocked` | `tool_call_id`, `name`, `reason` |
@@ -141,9 +141,15 @@ defmodule SuperPi.Event do
   @spec thinking_delta(integer(), integer() | nil, integer(), String.t()) :: t()
   def thinking_delta(conv, turn, index, delta), do: new("thinking_delta", conv, turn, %{"index" => index, "delta" => delta})
 
-  @spec toolcall_delta(integer(), integer() | nil, integer(), String.t() | nil, term()) :: t()
-  def toolcall_delta(conv, turn, index, delta, partial_args),
-    do: new("toolcall_delta", conv, turn, %{"index" => index, "delta" => delta, "partial_args" => partial_args})
+  @spec toolcall_delta(integer(), integer() | nil, integer(), String.t() | nil, term(), keyword()) :: t()
+  def toolcall_delta(conv, turn, index, delta, partial_args, call \\ []) do
+    data =
+      %{"index" => index, "delta" => delta, "partial_args" => partial_args}
+      |> then(&if(call[:id], do: Map.put(&1, "id", call[:id]), else: &1))
+      |> then(&if(call[:name], do: Map.put(&1, "name", call[:name]), else: &1))
+
+    new("toolcall_delta", conv, turn, data)
+  end
 
   @spec message_completed(integer(), integer() | nil, String.t(), [map()], map()) :: t()
   def message_completed(conv, turn, role, content, usage),

@@ -1407,7 +1407,10 @@ defmodule SuperPi.Conversation.Machine do
       {:text_delta, idx, delta} -> Event.publish(Event.text_delta(conv_id, turn_id, idx, delta))
       {:thinking_delta, %{index: idx, delta: delta}} -> Event.publish(Event.thinking_delta(conv_id, turn_id, idx, delta))
       {:thinking_delta, idx, delta} -> Event.publish(Event.thinking_delta(conv_id, turn_id, idx, delta))
-      {:toolcall_delta, %{index: idx, raw_json_delta: delta, partial_args: args}} -> Event.publish(Event.toolcall_delta(conv_id, turn_id, idx, delta, args))
+      {:toolcall_delta, %{index: idx, raw_json_delta: delta, partial_args: args} = d} ->
+        # `id` and `name` let a renderer announce the call before `tool_started`.
+        Event.publish(Event.toolcall_delta(conv_id, turn_id, idx, delta, args, id: Map.get(d, :id), name: Map.get(d, :name)))
+
       {:toolcall_delta, idx, delta, args} -> Event.publish(Event.toolcall_delta(conv_id, turn_id, idx, delta, args))
       _ -> :ok
     end

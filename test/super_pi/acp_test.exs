@@ -60,6 +60,21 @@ defmodule SuperPi.ACPTest do
       assert [{:update, %{"sessionUpdate" => "current_mode_update", "currentModeId" => "plan"}}] = render([Event.mode_changed(1, "plan", "plan")])
     end
 
+    test "a subagent shows as a tool call that runs and then completes or fails" do
+      out =
+        render([
+          Event.subagent_started(1, 1, 7, "scout", "find x"),
+          Event.subagent_finished(1, 1, 7, "completed", "found it")
+        ])
+
+      assert [
+               {:update, %{"sessionUpdate" => "tool_call", "toolCallId" => "subagent-7", "status" => "in_progress", "title" => "subagent (scout)"}},
+               {:update, %{"sessionUpdate" => "tool_call_update", "toolCallId" => "subagent-7", "status" => "completed", "content" => [%{"content" => %{"text" => "found it"}}]}}
+             ] = out
+
+      assert [{:update, %{"status" => "failed"}}] = render([Event.subagent_finished(1, 1, 7, "failed", "boom")])
+    end
+
     test "turn events render nothing: the server answers the prompt" do
       assert [] = render([Event.turn_started(1, 1, 0), Event.turn_completed(1, 1, %{}, 0), Event.state_changed(1, 1, "idle")])
     end
