@@ -44,6 +44,8 @@ defmodule SuperPi.Event do
   | `plan_updated` | `entries` (todo items with `id`, `text`, `completed`) |
   | `notice` | `level`, `message` |
   | `watch_started` | `seq` |
+  | `subagent_started` | `child_conversation_id`, `role`, `task` |
+  | `subagent_finished` | `child_conversation_id`, `status`, `summary` |
 
   `stop_reason` of `turn_completed` is `"end_turn"`. `permission_request` options carry ACP
   `PermissionOptionKind` values in `kind`: `allow_once`, `allow_always`, `reject_once`, `reject_always`.
@@ -62,7 +64,8 @@ defmodule SuperPi.Event do
 
   @types ~w(turn_started turn_completed turn_error turn_cancelled text_delta thinking_delta toolcall_delta
             message_completed tool_started tool_blocked tool_completed permission_request ui_request ui_resolved
-            state_changed mode_changed stream_reset compaction_completed usage_updated plan_updated notice watch_started)
+            state_changed mode_changed stream_reset compaction_completed usage_updated plan_updated notice watch_started
+            subagent_started subagent_finished)
 
   @envelope ["type", "conversation_id", "turn_id", "timestamp_ms", "v"]
 
@@ -210,6 +213,16 @@ defmodule SuperPi.Event do
 
   @spec watch_started(integer(), integer()) :: t()
   def watch_started(conv, seq), do: new("watch_started", conv, nil, %{"seq" => seq})
+
+  # Published on the parent conversation. `turn` is the parent's turn task, `task` the prompt given
+  # to the child, `status` one of "completed", "failed", "aborted".
+  @spec subagent_started(integer(), integer() | nil, integer(), String.t(), String.t()) :: t()
+  def subagent_started(conv, turn, child_conversation_id, role, task),
+    do: new("subagent_started", conv, turn, %{"child_conversation_id" => child_conversation_id, "role" => role, "task" => task})
+
+  @spec subagent_finished(integer(), integer() | nil, integer(), String.t(), String.t() | nil) :: t()
+  def subagent_finished(conv, turn, child_conversation_id, status, summary),
+    do: new("subagent_finished", conv, turn, %{"child_conversation_id" => child_conversation_id, "status" => status, "summary" => summary})
 
   defp new(type, conv, turn, data) when type in @types or is_binary(type) do
     %__MODULE__{type: type, conversation_id: conv, turn_id: turn, timestamp_ms: System.system_time(:millisecond), data: data}

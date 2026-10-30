@@ -18,7 +18,7 @@ defmodule SuperPi.Durable.Schemas.Task do
       "aborted",
       "cancelled"
     ],
-    "waiting" => ["pending", "running", "completing", "completed", "failed", "aborted", "orphaned"],
+    "waiting" => ["pending", "running", "completing", "completed", "failed", "aborted", "cancelled", "orphaned"],
     "sleeping" => ["pending", "running", "failed", "aborted", "cancelled", "orphaned"],
     "completing" => ["completed", "failed", "aborted"]
   }

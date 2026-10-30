@@ -2,40 +2,64 @@ defmodule SuperPi.Plugins.Subagent do
   @moduledoc """
   Subagent Orchestration Plugin (migrated from Pi ecosystem `subagent/`).
 
-  Adds the `delegate_subagent` tool. A call runs a **child conversation** with its own model
-  loop and its own context window, waits for it, and returns the child's final answer to the
-  parent as the tool result. Pass `tasks` to run several children concurrently.
+  Adds the `delegate_subagent` tool. A call starts a **child conversation** with its own model
+  loop and its own context window, and returns at once. Pass `tasks` to start several children.
+
+  ## Flow
+
+  1. The tool creates the children and one `pi.subagent` task per child (owned by the parent's
+     running task), enqueues one `SuperPi.Workers.SubagentWorker` job per child, puts the parent
+     task in `waiting` (`TaskEngine.wait_for_children/4`) and returns an acknowledgement that
+     names the children. Its `control` directive `%{"await" => ...}` tells the machine to park.
+  2. The parent's machine parks in `:awaiting_children`. It still answers `cancel`, `get_state` and
+     `compact`. The children run on any node of the cluster, under the `:subagents` queue limit.
+  3. When every child has ended (`wait_policy: "all"`), or at once when one fails
+     (`wait_policy: "fail_fast"`), the parent wakes. The machine appends one message per child with
+     its summary and the turn goes on. The model sees the summaries as new messages in its next
+     request, not as the result of the tool call.
 
   ## What a child gets
 
-  - Its own durable conversation (`owner_kind: "task"`, owned by a `pi.subagent` task that is
-    a child task of the parent's running task), so the work is recorded and inspectable.
+  - Its own durable conversation (`owner_kind: "task"`, owned by the parent's running task), so
+    the work is recorded and inspectable.
   - The parent's model, workspace and settings, and a system prompt for its role.
   - **Never more permission than the parent.** The roles `scout`, `planner`, `reviewer` and
-    `researcher` run in `plan` mode with read-only tools. A `worker` inherits the parent's
-    execution mode and tools. Permission settings and `dangerouslySkipPermissions` are copied,
-    not raised.
+    `researcher` run the `Planner` harness: `plan` mode with read-only tools. A `worker` runs the
+    `Code` harness in the parent's execution mode. Permission settings and
+    `dangerouslySkipPermissions` are copied, not raised.
   - No `delegate_subagent`, `ask_question` or `handoff` tools: a child cannot spawn children
     beyond `config :super_pi, subagent_max_depth` (default 1) and has no human to ask.
 
   ## Limits
 
   - Children use the same provider and credentials as the parent. There is no separate budget.
-  - The parent conversation process waits in the tool call, so a `steer` message is handled
-    after the children finish. A child ends at the timeout (`timeout_ms`, default
-    `config :super_pi, subagent_timeout_ms` = 120 s) and is then reported as failed.
-  - `session.cancel` on the parent does not yet stop running children; the timeout does.
-  - Only the child's final text returns to the parent, not its intermediate steps.
+  - A child ends at the timeout (`timeout_ms`, default `config :super_pi, subagent_timeout_ms`
+    = 120 s, counted from the start of its job) and is then failed and stopped.
+  - `session.cancel` on the parent aborts the whole subtree: the children's tasks are aborted and
+    their machines stop.
+  - One delegation at a time: a second call while children run is refused. Give all tasks in one
+    call (`tasks`).
+  - Only the child's final text returns to the parent, not its intermediate steps. It is cut at
+    8000 bytes.
 
-  Test hook: plugin config `[machine_opts: [llm_responder: fun]]` is passed to the child machine.
+  ## Events
+
+  `subagent_started` when a child's job begins, `subagent_finished` when its task settles. Both go
+  to the parent conversation.
+
+  ## Tests
+
+  `config :super_pi, :subagent_machine_opts` is merged into every child machine's options (an
+  `llm_responder`). Oban runs in `testing: :manual` there: drain the `:subagents` queue to run the
+  children.
   """
 
   use SuperPi.Extension
   alias SuperPi.Auth
-  alias SuperPi.Conversation.Machine
   alias SuperPi.Durable.{Doc, Storage, TaskEngine}
   alias SuperPi.Harness
   alias SuperPi.Plugins.Permissions
+  alias SuperPi.Workers.SubagentWorker
 
   def id, do: "subagent"
   def name, do: "Subagent Delegation"
@@ -60,7 +84,7 @@ defmodule SuperPi.Plugins.Subagent do
     "researcher" => Harness.Planner,
     "worker" => Harness.Code
   }
-  @max_summary_chars 8_000
+  @policies %{"all" => "all_settled", "fail_fast" => "fail_fast"}
 
   @role_prompts %{
     "scout" => "You are a scout. Explore the codebase quickly and report where things are and how they connect. Read only. Answer concisely with file paths.",
@@ -74,9 +98,13 @@ defmodule SuperPi.Plugins.Subagent do
     "name" => "delegate_subagent",
     "effects" => ["state_write"],
     "description" =>
-      "Delegate a focused task to an isolated subagent that runs its own model loop with a fresh context window and returns its final answer. " <>
+      "Delegate focused tasks to isolated subagents. Each runs its own model loop with a fresh context window. " <>
         "Roles scout, planner, reviewer and researcher are read-only. A worker may edit, within your permissions. " <>
-        "Give either `role` and `prompt`, or `tasks` (a list of role and prompt pairs) to run several at once. The call returns when every subagent has finished.",
+        "Give either `role` and `prompt`, or `tasks` (a list of role and prompt pairs) to run several at once. " <>
+        "This call does not wait. It returns at once with an acknowledgement that names the subagents, and the subagents run in the background. " <>
+        "Their answers are NOT in this tool result: when every subagent has ended, each answer arrives as a separate message at the start of your next turn step. " <>
+        "After you call this tool, end your step. Do not call it again for the same work and do not assume the delegation produced nothing. " <>
+        "Delegate all independent tasks in ONE call. With `wait_policy` \"fail_fast\" you are woken as soon as one subagent fails, and the others are stopped.",
     "parameters" => %{
       "type" => "object",
       "properties" => %{
@@ -93,6 +121,11 @@ defmodule SuperPi.Plugins.Subagent do
             },
             "required" => ["role", "prompt"]
           }
+        },
+        "wait_policy" => %{
+          "type" => "string",
+          "enum" => Map.keys(@policies),
+          "description" => "all (default): wake when every subagent has ended. fail_fast: wake at once when one fails and stop the others."
         },
         "timeout_ms" => %{"type" => "integer", "description" => "Maximum run time per subagent in milliseconds"}
       }
@@ -121,8 +154,12 @@ defmodule SuperPi.Plugins.Subagent do
     depth = Map.get(parent_agent, "subagentDepth", 0)
 
     with :ok <- check_depth(depth),
-         {:ok, tasks, timeout_ms} <- parse_args(args, Map.get(ctx, :config)) do
-      run_all(tasks, timeout_ms, parent_agent, ctx)
+         {:ok, tasks, timeout_ms, policy} <- parse_args(args, Map.get(ctx, :config)),
+         {:ok, parent_task_id} <- require_task(ctx),
+         :ok <- check_idle(parent_task_id),
+         {:ok, children} <- start_children(tasks, timeout_ms, parent_agent, parent_task_id, ctx),
+         :ok <- park_parent(parent_task_id, children, policy) do
+      acknowledge(children, policy)
     else
       {:error, status, message} -> error(message, status)
     end
@@ -132,6 +169,15 @@ defmodule SuperPi.Plugins.Subagent do
 
   @doc "Returns the tool specification map for direct registration."
   def tool_spec, do: @tool_spec
+
+  @doc false
+  # The extensions a child of this role loads (see `SubagentWorker.machine_opts/1`).
+  def child_extensions(role) do
+    Enum.reject(Harness.remote_extensions(Map.fetch!(@role_harness, role)), fn ext ->
+      mod = if is_tuple(ext), do: elem(ext, 0), else: ext
+      mod in @not_in_child
+    end)
+  end
 
   # --- Arguments ---
 
@@ -159,6 +205,8 @@ defmodule SuperPi.Plugins.Subagent do
         _ -> :invalid
       end)
 
+    policy = Map.get(@policies, Map.get(args, "wait_policy", "all"))
+
     cond do
       tasks == [] ->
         {:error, "invalid_arguments", "Give `role` and `prompt`, or a non-empty `tasks` list."}
@@ -169,8 +217,11 @@ defmodule SuperPi.Plugins.Subagent do
       Enum.any?(tasks, fn {role, prompt} -> role not in @roles or prompt == "" end) ->
         {:error, "invalid_arguments", "Role must be one of #{Enum.join(@roles, ", ")}, and the prompt must not be empty."}
 
+      is_nil(policy) ->
+        {:error, "invalid_arguments", "`wait_policy` must be one of #{@policies |> Map.keys() |> Enum.join(", ")}."}
+
       true ->
-        {:ok, tasks, timeout_ms}
+        {:ok, tasks, timeout_ms, policy}
     end
   end
 
@@ -184,128 +235,81 @@ defmodule SuperPi.Plugins.Subagent do
   defp positive_int(n) when is_integer(n) and n > 0, do: n
   defp positive_int(_), do: nil
 
-  # --- Running children ---
+  # The parent waits through its running task: without one there is nothing to wake.
+  defp require_task(%{active_task_id: id}) when is_integer(id), do: {:ok, id}
+  defp require_task(_ctx), do: {:error, "invalid_context", "delegate_subagent needs a running turn."}
 
-  defp run_all(tasks, timeout_ms, parent_agent, ctx) do
-    max_concurrency = Application.get_env(:super_pi, :subagent_max_concurrency, 3)
-    # Each child records what it started here, so a child that is killed can still be cleaned up.
-    started = :ets.new(:subagent_started, [:public, :set])
-    indexed = Enum.with_index(tasks)
+  # One wait per park: a second delegation would need the parent to watch two sets.
+  defp check_idle(parent_task_id) do
+    busy? =
+      match?(%{status: "waiting"}, TaskEngine.get_task(parent_task_id)) or
+        Enum.any?(TaskEngine.live_children(parent_task_id), &(&1.kind == "pi.subagent"))
 
-    results =
-      try do
-        indexed
-        |> Task.async_stream(
-          fn {{role, prompt}, idx} -> run_one(idx, role, prompt, timeout_ms, parent_agent, ctx, started) end,
-          max_concurrency: max_concurrency,
-          # The child's own deadline is `timeout_ms`; this only catches a child that hangs outside it.
-          timeout: timeout_ms + Application.get_env(:super_pi, :subagent_kill_slack_ms, 30_000),
-          on_timeout: :kill_task,
-          ordered: true
-        )
-        |> Enum.zip(indexed)
-        |> Enum.map(fn
-          {{:ok, result}, {{role, _}, _idx}} ->
-            Map.put(result, "role", role)
-
-          {{:exit, reason}, {{role, _}, idx}} ->
-            cleanup_killed(started, idx)
-            %{"role" => role, "status" => "failed", "error" => "subagent crashed: #{inspect(reason)}"}
-        end)
-      after
-        :ets.delete(started)
-      end
-
-    render(results)
+    if busy?,
+      do: {:error, "already_delegating", "Subagents are still running for this turn. Delegate every task in one call, and wait for their answers."},
+      else: :ok
   end
 
-  # A killed child skipped its own cleanup: fail its task row and stop its machine.
-  defp cleanup_killed(started, idx) do
-    case :ets.lookup(started, idx) do
-      [{^idx, child_id, task_id}] ->
-        finish_child_task(task_id, {:error, "subagent was killed"})
+  # --- Starting children ---
 
-        case SuperPi.Conversation.Locator.whereis(child_id) do
-          pid when is_pid(pid) -> stop_machine(pid, child_id)
-          nil -> :ok
+  # Children are created, then queued, then the parent is parked: a child that ends before the
+  # parent waits is seen by `wait_for_children/4` (it does not park), so no wake-up is lost.
+  defp start_children(tasks, timeout_ms, parent_agent, parent_task_id, ctx) do
+    result =
+      Enum.reduce_while(tasks, {:ok, []}, fn {role, prompt}, {:ok, acc} ->
+        case start_child(role, prompt, timeout_ms, parent_agent, parent_task_id, ctx) do
+          {:ok, child} -> {:cont, {:ok, [child | acc]}}
+          {:error, reason} -> {:halt, {:error, Enum.reverse(acc), reason}}
         end
+      end)
 
-      [] ->
-        :ok
+    case result do
+      {:ok, children} ->
+        {:ok, Enum.reverse(children)}
+
+      {:error, started, reason} ->
+        abort_children(started)
+        {:error, "start_failed", "Could not start the subagents: #{inspect(reason)}"}
     end
   end
 
-  defp run_one(idx, role, prompt, timeout_ms, parent_agent, ctx, started) do
-    deadline = System.monotonic_time(:millisecond) + timeout_ms
-    parent_task_id = Map.get(ctx, :active_task_id)
-    child_agent = child_agent(role, parent_agent)
-
+  defp start_child(role, prompt, timeout_ms, parent_agent, parent_task_id, ctx) do
     child =
       Storage.create_conversation!(
-        owner_kind: if(parent_task_id, do: "task", else: "ownerless"),
+        owner_kind: "task",
         owner_task_id: parent_task_id,
-        agent: child_agent,
+        agent: child_agent(role, parent_agent),
         owner: Auth.owner(ctx.conversation_id)
       )
 
-    task_id = start_child_task(ctx.conversation_id, parent_task_id, role, prompt, child.id)
-    :ets.insert(started, {idx, child.id, task_id})
+    input = %{"role" => role, "prompt" => prompt, "child_conversation_id" => child.id}
 
-    # The time already spent on setup counts against the child's deadline.
-    remaining = max(deadline - System.monotonic_time(:millisecond), 1_000)
-    outcome = run_machine(child.id, role, prompt, remaining, ctx)
-    finish_child_task(task_id, outcome)
-
-    base = %{"child_conversation_id" => child.id}
-
-    case outcome do
-      {:ok, text} -> Map.merge(base, %{"status" => "completed", "summary" => truncate(text)})
-      {:error, reason} -> Map.merge(base, %{"status" => "failed", "error" => reason})
+    with {:ok, task} <- TaskEngine.create_task(ctx.conversation_id, "pi.subagent", input, owner_task_id: parent_task_id),
+         # The child's machine finds its task here, to settle it when a resumed turn ends.
+         _ <- Storage.configure_agent!(child.id, %{"subagentTaskId" => task.id}),
+         job = SubagentWorker.new(%{"task_id" => task.id, "child_conversation_id" => child.id, "role" => role, "prompt" => prompt, "timeout_ms" => timeout_ms}),
+         {:ok, _job} <- Oban.insert(job) do
+      {:ok, %{"task_id" => task.id, "child_conversation_id" => child.id, "role" => role}}
+    else
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp run_machine(child_id, role, prompt, timeout_ms, ctx) do
-    machine_opts = [extensions: child_extensions(role)] ++ config_machine_opts(Map.get(ctx, :config))
+  defp park_parent(parent_task_id, children, policy) do
+    ids = Enum.map(children, & &1["task_id"])
 
-    # A child runs on the node of its parent (it uses the parent's workspace) and is never restarted.
-    case SuperPi.Conversation.Locator.ensure_started(child_id, machine_opts, restart: :temporary, supervision: :local) do
-      {:ok, pid} ->
-        try do
-          case Machine.submit(pid, prompt, timeout: timeout_ms) do
-            {:ok, msg} -> {:ok, final_text(msg)}
-            {:error, reason} -> {:error, format_reason(reason)}
-          end
-        catch
-          :exit, {:timeout, _} ->
-            Machine.cancel(pid)
-            {:error, "timed out after #{timeout_ms} ms"}
-
-          :exit, reason ->
-            {:error, "subagent exited: #{inspect(reason)}"}
-        after
-          stop_machine(pid, child_id)
-        end
+    case TaskEngine.wait_for_children(parent_task_id, ids, policy, phase: "awaiting_children", state: %{"children" => children}) do
+      {:ok, _task} ->
+        :ok
 
       {:error, reason} ->
-        {:error, "could not start the subagent: #{inspect(reason)}"}
+        abort_children(children)
+        {:error, "start_failed", "Could not wait for the subagents: #{inspect(reason)}"}
     end
   end
 
-  # Plugin config is a keyword list or a map.
-  defp config_machine_opts(config) when is_list(config), do: Keyword.get(config, :machine_opts, [])
-  defp config_machine_opts(%{machine_opts: opts}), do: opts
-  defp config_machine_opts(_), do: []
-
-  defp stop_machine(pid, child_id) do
-    try do
-      :gen_statem.stop(pid)
-    catch
-      :exit, _ -> :ok
-    end
-
-    SuperPi.Conversation.Locator.await_gone(child_id)
-    :ok
-  end
+  # A job that finds its task aborted does nothing.
+  defp abort_children(children), do: Enum.each(children, &TaskEngine.abort_task!(&1["task_id"]))
 
   # --- Child configuration ---
 
@@ -331,66 +335,26 @@ defmodule SuperPi.Plugins.Subagent do
 
   defp lower_of(a, b), do: if(Permissions.rank_of(a) <= Permissions.rank_of(b), do: a, else: b)
 
-  defp child_extensions(role) do
-    Enum.reject(Harness.remote_extensions(Map.fetch!(@role_harness, role)), fn ext ->
-      mod = if is_tuple(ext), do: elem(ext, 0), else: ext
-      mod in @not_in_child
-    end)
-  end
-
   defp max_depth, do: Application.get_env(:super_pi, :subagent_max_depth, 1)
-
-  # --- Task records ---
-
-  defp start_child_task(conversation_id, parent_task_id, role, prompt, child_id) do
-    with {:ok, task} <-
-           TaskEngine.create_task(
-             conversation_id,
-             "pi.subagent",
-             %{"role" => role, "prompt" => prompt, "child_conversation_id" => child_id},
-             owner_task_id: parent_task_id
-           ),
-         {:ok, running} <- TaskEngine.start_task(task.id) do
-      running.id
-    else
-      _ -> nil
-    end
-  end
-
-  defp finish_child_task(nil, _outcome), do: :ok
-  defp finish_child_task(task_id, {:ok, text}), do: TaskEngine.complete_task(task_id, %{"summary" => truncate(text)}) && :ok
-  defp finish_child_task(task_id, {:error, reason}), do: TaskEngine.fail_task(task_id, to_string(reason)) && :ok
 
   # --- Results ---
 
-  defp final_text(%{"content" => blocks}) when is_list(blocks) do
-    blocks |> Enum.map(&Map.get(&1, "text")) |> Enum.reject(&is_nil/1) |> Enum.join("\n") |> String.trim()
-  end
+  defp acknowledge(children, policy) do
+    ids = Enum.map(children, & &1["child_conversation_id"])
 
-  defp final_text(_), do: ""
-
-  defp format_reason(reason) when is_binary(reason), do: reason
-  defp format_reason(reason), do: inspect(reason)
-
-  defp truncate(text) when byte_size(text) > @max_summary_chars, do: binary_part(text, 0, @max_summary_chars) <> "\n[truncated]"
-  defp truncate(text), do: text
-
-  defp render(results) do
-    failed? = Enum.any?(results, &(&1["status"] != "completed"))
+    list =
+      Enum.map_join(children, "\n", fn c -> "- #{c["role"]}: child conversation #{c["child_conversation_id"]}" end)
 
     output =
-      Enum.map_join(results, "\n\n", fn r ->
-        case r["status"] do
-          "completed" -> "Subagent (#{r["role"]}) finished:\n#{r["summary"]}"
-          _ -> "Subagent (#{r["role"]}) failed: #{r["error"]}"
-        end
-      end)
+      "Started #{length(children)} subagent(s) in the background. This is an acknowledgement, not their answer.\n#{list}\n" <>
+        "Their answers will arrive as separate messages when #{if policy == "fail_fast", do: "one fails or all have", else: "all have"} ended. End your step now."
 
     %{
       "output" => output,
-      "structured_output" => %{"subagents" => results},
-      "details" => %{"count" => length(results), "failed" => Enum.count(results, &(&1["status"] != "completed"))},
-      "is_error" => failed? and Enum.all?(results, &(&1["status"] != "completed"))
+      "structured_output" => %{"subagents" => Enum.map(children, &Map.put(&1, "status", "started"))},
+      "details" => %{"count" => length(children), "status" => "started", "child_conversation_ids" => ids},
+      "is_error" => false,
+      "control" => %{"await" => %{"task_ids" => Enum.map(children, & &1["task_id"]), "policy" => policy, "children" => children}}
     }
   end
 

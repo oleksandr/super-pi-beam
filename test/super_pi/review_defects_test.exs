@@ -162,9 +162,8 @@ defmodule SuperPi.ReviewDefectsTest do
     end
   end
 
-  describe "killed subagent (high 5)" do
+  describe "stuck subagent (high 5)" do
     test "a child stuck outside its deadline is failed, and the parent turn is not left waiting" do
-      put_env(:subagent_kill_slack_ms, 100)
       dir = Path.join(System.tmp_dir!(), "rd_sub_#{System.unique_integer([:positive])}")
       File.mkdir_p!(dir)
       on_exit(fn -> File.rm_rf(dir) end)
@@ -189,10 +188,16 @@ defmodule SuperPi.ReviewDefectsTest do
           %{conversation_id: parent.id, active_task_id: running.id}
         )
 
-      assert [%{"status" => "failed"}] = res["structured_output"]["subagents"]
-      assert [%{status: "failed"}] = Repo.all(from t in TaskSchema, where: t.kind == "pi.subagent")
+      assert [%{"status" => "started"}] = res["structured_output"]["subagents"]
+      assert TaskEngine.get_task(running.id).status == "waiting"
 
-      # The parent can now complete: no live child holds it in `completing`.
+      # The child's machine hangs while it starts its MCP servers, so it never answers.
+      Oban.drain_queue(queue: :subagents)
+
+      assert [%{status: "failed"}] = Repo.all(from t in TaskSchema, where: t.kind == "pi.subagent")
+      # The failure woke the parent, and no live child holds it in `completing`.
+      assert TaskEngine.get_task(running.id).status == "pending"
+      {:ok, _} = TaskEngine.start_task(running.id)
       assert {:ok, %{status: "completed"}} = TaskEngine.complete_task(running.id, %{})
     end
   end
@@ -200,19 +205,23 @@ defmodule SuperPi.ReviewDefectsTest do
   describe "subagent timeout cap (medium)" do
     test "the model cannot raise the timeout above the configured limit" do
       put_env(:subagent_timeout_ms, 300)
+      put_env(:subagent_machine_opts, llm_responder: fn _p, _c -> Process.sleep(3_000) && {:ok, Faults.text_msg("late")} end)
       parent = Storage.create_conversation!(agent: %{"model" => "m"})
-      slow = fn _p, _c -> Process.sleep(3_000) && {:ok, Faults.text_msg("late")} end
+      {:ok, task} = TaskEngine.create_task(parent.id, "pi.generation")
+      {:ok, running} = TaskEngine.start_task(task.id)
 
-      {micros, res} =
-        :timer.tc(fn ->
-          Subagent.wrap_tool("delegate_subagent", %{"role" => "scout", "prompt" => "x", "timeout_ms" => 1_000_000}, fn _ -> %{} end, %{
-            conversation_id: parent.id,
-            config: [machine_opts: [llm_responder: slow]]
-          })
-        end)
+      res =
+        Subagent.wrap_tool("delegate_subagent", %{"role" => "scout", "prompt" => "x", "timeout_ms" => 1_000_000}, fn _ -> %{} end, %{
+          conversation_id: parent.id,
+          active_task_id: running.id
+        })
 
-      assert [%{"status" => "failed", "error" => error}] = res["structured_output"]["subagents"]
-      assert error =~ "timed out"
+      assert [%{"task_id" => task_id}] = res["structured_output"]["subagents"]
+      {micros, _} = :timer.tc(fn -> Oban.drain_queue(queue: :subagents) end)
+
+      child = TaskEngine.get_task(task_id)
+      assert child.status == "failed"
+      assert child.result["error"] =~ "timed out"
       assert div(micros, 1000) < 2_500
     end
   end

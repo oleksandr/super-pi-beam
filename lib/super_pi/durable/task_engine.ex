@@ -10,6 +10,9 @@ defmodule SuperPi.Durable.TaskEngine do
     exceed `restart_limit` (default `5`).
   - Bottom-up subtree abort (`abort_task!/1`): marks the target task and its foreground-owned
     children `abort_requested: true`, settling children before completing the parent's abort.
+  - A parent in `waiting` that a settled child wakes (`pending`) is announced to its conversation's
+    machine, on any node, once the transaction has committed (`{:task_woken, task_id}`). A machine
+    that is gone finds the woken task when it next opens.
   """
 
   import Ecto.Query
@@ -98,6 +101,29 @@ defmodule SuperPi.Durable.TaskEngine do
   end
 
   @doc """
+  The oldest `pi.generation` task of the conversation that waits on its children (`waiting`), or
+  `nil`. A machine that starts while a turn is parked resumes the park (see `Machine`, `:reconcile`).
+  """
+  def next_waiting_generation(conversation_id) do
+    Repo.one(
+      from t in TaskSchema,
+        where: t.conversation_id == ^conversation_id and t.kind == "pi.generation" and t.status == "waiting" and is_nil(t.owner_task_id),
+        order_by: [asc: t.id],
+        limit: 1
+    )
+  end
+
+  @doc "The task as stored, or `nil`."
+  def get_task(task_id), do: Repo.get(TaskSchema, task_id)
+
+  @doc "The tasks with these ids, in id order."
+  def get_tasks([]), do: []
+  def get_tasks(task_ids), do: Repo.all(from t in TaskSchema, where: t.id in ^task_ids, order_by: [asc: t.id])
+
+  @doc "The foreground tasks that `task_id` owns and that have not settled."
+  def live_children(task_id), do: list_live_owned_children(task_id)
+
+  @doc """
   Checkpoints a running task to a new phase (`{phase: next_phase, ...}`).
   """
   def checkpoint_task(task_id, next_phase, new_state) when is_binary(next_phase) and is_map(new_state) do
@@ -122,8 +148,11 @@ defmodule SuperPi.Durable.TaskEngine do
   written. A child that settles concurrently takes the same lock in
   `reconcile_parent_after_child_settled!/2`, so it either sees `"waiting"` and
   wakes the parent, or commits first and this call sees it settled. No lost wakeup.
+
+  Options: `:phase` and `:state` are checkpointed together with the move to `"waiting"`. The
+  task is no longer `running` afterwards, so a later `checkpoint_task/3` would be refused.
   """
-  def wait_for_children(task_id, child_task_ids, wait_policy \\ "all_settled")
+  def wait_for_children(task_id, child_task_ids, wait_policy \\ "all_settled", opts \\ [])
       when is_list(child_task_ids) and wait_policy in ["all_settled", "fail_fast"] do
     locked(task_id, fn parent, seq ->
       existing_children =
@@ -143,14 +172,16 @@ defmodule SuperPi.Durable.TaskEngine do
           parent
 
         true ->
-          transition!(
-            parent,
-            "waiting",
-            %{wait_policy: wait_policy, waiting_on_task_ids: %{"ids" => child_task_ids}},
-            seq
-          )
+          transition!(parent, "waiting", Map.merge(wait_checkpoint(parent, opts), %{wait_policy: wait_policy, waiting_on_task_ids: %{"ids" => child_task_ids}}), seq)
       end
     end)
+  end
+
+  defp wait_checkpoint(parent, opts) do
+    case Keyword.get(opts, :phase) do
+      phase when is_binary(phase) -> %{phase: phase, state: opts |> Keyword.get(:state, parent.state) |> Map.put("phase", phase)}
+      _ -> %{}
+    end
   end
 
   @doc """
@@ -265,6 +296,9 @@ defmodule SuperPi.Durable.TaskEngine do
           abort_task!(child.id)
         end)
 
+        # The last aborted child may have woken a waiting task: transition from the row as it is now.
+        task = Repo.get!(TaskSchema, task.id)
+
         case Fsmx.transition_changeset(task, target_status, %{result: result, updated_seq: seq}, state_field: :status)
              |> Repo.update() do
           {:ok, updated} ->
@@ -368,8 +402,11 @@ defmodule SuperPi.Durable.TaskEngine do
           child_ids = Map.get(parent.waiting_on_task_ids || %{}, "ids", [])
           children = if child_ids == [], do: [], else: Repo.all(from t in TaskSchema, where: t.id in ^child_ids)
 
-          if child_ids == [] or Enum.all?(children, &TaskSchema.terminal?/1) do
-            Fsmx.transition_changeset(parent, "running", %{updated_seq: seq}, state_field: :status)
+          failed_fast? = parent.wait_policy == "fail_fast" and Enum.any?(children, &(&1.status in ["failed", "aborted", "cancelled"]))
+
+          # Pending, not running: the machine that opens next resumes it and reads the children's results.
+          if child_ids == [] or failed_fast? or Enum.all?(children, &TaskSchema.terminal?/1) do
+            Fsmx.transition_changeset(parent, "pending", %{updated_seq: seq}, state_field: :status)
             |> Repo.update!()
           end
         end)
@@ -418,7 +455,35 @@ defmodule SuperPi.Durable.TaskEngine do
   # Every transaction takes the global seq row first, then task rows. `next_seq!/0`
   # holds that row until commit, so a fixed order (seq, then tasks) is what keeps
   # two transactions from deadlocking on PostgreSQL. `fun` receives the seq.
-  defp tx(fun), do: Repo.transaction(fn -> fun.(Storage.next_seq!()) end, Storage.tx_opts())
+  @notices :task_engine_notices
+
+  # Only the outermost transaction flushes: `abort_task!/1` runs inside `settle_task/3`.
+  defp tx(fun) do
+    outer? = not Repo.active_repo().in_transaction?()
+    if outer?, do: Process.delete(@notices)
+    result = Repo.transaction(fn -> fun.(Storage.next_seq!()) end, Storage.tx_opts())
+    if outer?, do: flush_notices(result)
+    result
+  end
+
+  # A woken parent is announced after the commit: a machine that reacts earlier would read the
+  # old row. Collected in the process dictionary because reconciliation runs deep in the
+  # transaction (and recurses up the task tree).
+  defp notice_woken(%TaskSchema{} = woken), do: Process.put(@notices, [{:woken, woken.conversation_id, woken.id} | Process.get(@notices, [])])
+
+  defp flush_notices({:ok, _}) do
+    @notices |> Process.delete() |> List.wrap() |> Enum.reverse() |> Enum.each(fn {:woken, conv_id, task_id} -> announce_woken(conv_id, task_id) end)
+  end
+
+  defp flush_notices(_error), do: Process.delete(@notices)
+
+  # The machine of a conversation is unique in the cluster. `send/2` reaches it on any node.
+  defp announce_woken(conv_id, task_id) do
+    case SuperPi.Conversation.Locator.whereis(conv_id) do
+      pid when is_pid(pid) -> send(pid, {:task_woken, task_id})
+      nil -> :ok
+    end
+  end
 
   # Runs `fun` with the locked task and the transaction's seq. `fun` returns the
   # result or rolls back with a reason; a missing task is `{:error, :not_found}`.
@@ -530,6 +595,7 @@ defmodule SuperPi.Durable.TaskEngine do
               }, state_field: :status)
               |> Repo.update()
 
+            notice_woken(woken)
             woken
 
           all_tasks_terminal?(watched_ids) ->
@@ -537,6 +603,7 @@ defmodule SuperPi.Durable.TaskEngine do
               Fsmx.transition_changeset(parent, "pending", %{updated_seq: seq}, state_field: :status)
               |> Repo.update()
 
+            notice_woken(woken)
             woken
 
           true ->

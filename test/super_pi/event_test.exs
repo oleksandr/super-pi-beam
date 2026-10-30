@@ -45,7 +45,9 @@ defmodule SuperPi.EventTest do
         Event.usage_updated(1, 1, %{"input_tokens" => 1}),
         Event.plan_updated(1, []),
         Event.notice(1, 1, "info", "m"),
-        Event.watch_started(1, 0)
+        Event.watch_started(1, 0),
+        Event.subagent_started(1, 1, 2, "scout", "find it"),
+        Event.subagent_finished(1, 1, 2, "completed", "found")
       ]
 
       assert Enum.map(events, & &1.type) |> Enum.sort() == Enum.sort(Event.types())

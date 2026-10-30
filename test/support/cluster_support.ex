@@ -180,6 +180,22 @@ defmodule SuperPi.ClusterSupport do
     running
   end
 
+  @doc "Creates a parent conversation with a running turn task. Returns `{conversation_id, task_id}`."
+  def create_parent_turn do
+    conv = SuperPi.Durable.Storage.create_conversation!(agent: %{"model" => "m", "executionMode" => "accept-edits", "workspacePaths" => [File.cwd!()]})
+    {:ok, task} = SuperPi.Durable.TaskEngine.create_task(conv.id, "pi.generation")
+    {:ok, running} = SuperPi.Durable.TaskEngine.start_task(task.id)
+    {conv.id, running.id}
+  end
+
+  @doc "Calls `delegate_subagent` as a parent's turn does."
+  def delegate(conversation_id, task_id, args) do
+    SuperPi.Plugins.Subagent.wrap_tool("delegate_subagent", args, fn _ -> %{} end, %{conversation_id: conversation_id, active_task_id: task_id})
+  end
+
+  @doc "Runs the queued subagent jobs in this process (Oban is in manual mode on the peers)."
+  def run_subagent_jobs, do: Oban.drain_queue(queue: :subagents)
+
   @doc """
   Stops the conversation's machine for good (no restart). The supervisor call has to run on the
   node that hosts the machine: `Horde.DynamicSupervisor.terminate_child/2` from another node
@@ -207,6 +223,9 @@ defmodule SuperPi.ClusterSupport do
   @doc "Deletes test data of the conversations."
   def cleanup(conversation_ids) do
     import Ecto.Query
+    # A subagent's conversation points at its parent's task.
+    SuperPi.Repo.update_all(from(c in SuperPi.Durable.Schemas.Conversation, where: c.id in ^conversation_ids), set: [owner_task_id: nil])
+    SuperPi.Repo.delete_all(from j in Oban.Job, where: j.worker == "SuperPi.Workers.SubagentWorker" and fragment("(?->>'child_conversation_id')::bigint", j.args) in ^conversation_ids)
     SuperPi.Repo.delete_all(from t in SuperPi.Durable.Schemas.Task, where: t.conversation_id in ^conversation_ids)
     SuperPi.Repo.delete_all(from c in SuperPi.Durable.Schemas.Conversation, where: c.id in ^conversation_ids)
     :ok

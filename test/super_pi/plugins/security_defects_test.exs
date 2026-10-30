@@ -274,17 +274,25 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
 
   describe "Subagent (subagent.ex)" do
     test "a child that fails is reported as failed, never as a success" do
+      Application.put_env(:super_pi, :subagent_machine_opts, llm_responder: fn _p, _c -> {:error, "provider down"} end)
+      on_exit(fn -> Application.delete_env(:super_pi, :subagent_machine_opts) end)
+
       conv = SuperPi.Durable.Storage.create_conversation!()
+      {:ok, task} = SuperPi.Durable.TaskEngine.create_task(conv.id, "pi.generation")
+      {:ok, running} = SuperPi.Durable.TaskEngine.start_task(task.id)
 
       res =
         Subagent.wrap_tool("delegate_subagent", %{"role" => "reviewer", "prompt" => "audit the repo"}, fn _ -> %{} end, %{
           conversation_id: conv.id,
-          config: [machine_opts: [llm_responder: fn _p, _c -> {:error, "provider down"} end]]
+          active_task_id: running.id
         })
 
-      assert res["is_error"] == true
-      assert [%{"status" => "failed", "error" => error}] = res["structured_output"]["subagents"]
-      assert error =~ "provider down"
+      assert [%{"task_id" => task_id}] = res["structured_output"]["subagents"]
+      Oban.drain_queue(queue: :subagents)
+
+      child = SuperPi.Durable.TaskEngine.get_task(task_id)
+      assert child.status == "failed"
+      assert child.result["error"] =~ "provider down"
     end
   end
 

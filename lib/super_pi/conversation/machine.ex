@@ -11,6 +11,14 @@ defmodule SuperPi.Conversation.Machine do
   - `:streaming_llm` — Streams or invokes the configured `llm_responder` and normalizes events; handles mid-stream `:steer` preemption.
   - `:executing_tools` — Runs tool calls one at a time: `before_tool` in the machine, then `wrap_tool` -> `SandboxRunner` -> `after_tool` in a task, so the machine still answers `cancel`, `steer` and `get_state` while a tool runs. Then `after_tools`. A `:steer` lets the running tool finish and skips the rest of the batch.
   - `:sleeping_backoff` — Pauses turn execution when provider rate-limits/retries occur (`TaskEngine.sleep_until/3`).
+  - `:awaiting_children` — A tool result carried the `control` directive `%{"await" => ...}`
+    (`delegate_subagent`). The durable task is `waiting` on its child tasks and the machine parks, like
+    `:sleeping_backoff`, still answering `cancel`, `get_state` and `compact`. A child that settles wakes
+    the task and tells the machine (`{:task_woken, task_id}`, from `TaskEngine`, on any node). A poll
+    (`config :super_pi, :await_poll_ms`, default 5 s) covers a lost message. On wake the machine stores
+    one user message per child with its summary and goes on at `:preparing_request`. Not a tool result:
+    the tool call already has one (the acknowledgement), and a second result for one call id is refused
+    by the providers.
   - `:compacting` — Runs `before_compact` or default compaction and records `pi.compaction` with `head_entry_id`.
   - `:settling_run` — Runs `after_run` verification gate; either loops back to `:preparing_request` (`{:continue, prompt}`) or completes the durable `pi.generation` task and returns to `:idle`.
   """
@@ -46,7 +54,11 @@ defmodule SuperPi.Conversation.Machine do
     reply_from: nil,
     turn_span: nil,
     turn_task_id: nil,
-    turn_status: :ok
+    turn_status: :ok,
+    # The `await` directive of the tool batch: %{"task_ids", "policy", "children"}.
+    await: nil,
+    # A resumed turn of a subagent child has no caller, so the machine stops when the turn ends.
+    stop_when_done: false
   ]
 
   @impl :gen_statem
@@ -106,6 +118,10 @@ defmodule SuperPi.Conversation.Machine do
   Cancels the running turn: stops the LLM request or the running tool (with its OS processes),
   records a "cancelled" result for every tool call without a result, marks the durable task
   `cancelled`, replies `{:error, :cancelled}` to the waiting submit caller and returns to `:idle`.
+
+  The subtree goes with it: the task's live children (subagents, also while the turn is parked in
+  `:awaiting_children`) are aborted bottom-up by `TaskEngine.cancel_task/2`, which calls
+  `abort_task!/1` on each, and the machines of those children are cancelled.
   """
   def cancel(pid_or_via) do
     :gen_statem.cast(pid_or_via, :cancel)
@@ -186,23 +202,44 @@ defmodule SuperPi.Conversation.Machine do
   # A task that was running when the machine's node stopped is pending again after the reconcile.
   # Resume it from the durable state: the user message is already stored, and nobody waits for a
   # reply. `config :super_pi, resume_pending_turns: false` leaves such tasks alone.
+  #
+  # A turn parked on its children (`waiting`) is parked again. One that the children woke while no
+  # machine ran (`pending`, phase `awaiting_children`) goes on with their results.
   defp resume_or_idle(%__MODULE__{} = data) do
-    pending =
-      if Application.get_env(:super_pi, :resume_pending_turns, true),
-        do: TaskEngine.next_pending_generation(data.conversation_id)
+    resume? = Application.get_env(:super_pi, :resume_pending_turns, true)
+    parked = if resume?, do: TaskEngine.next_waiting_generation(data.conversation_id)
+    pending = if resume? and is_nil(parked), do: TaskEngine.next_pending_generation(data.conversation_id)
 
-    with %{id: task_id} <- pending,
-         {:ok, running} <- TaskEngine.start_task(task_id) do
-      Logger.info("[Machine] resuming pending turn, task #{running.id}, attempt #{running.attempt}")
-      Logger.metadata(task_id: running.id)
-      turn_span = SuperPi.Telemetry.turn_start(data.conversation_id, running.id)
+    with %{id: _} = task <- parked || pending,
+         {:ok, task} <- if(parked, do: {:ok, task}, else: TaskEngine.start_task(task.id)) do
+      Logger.info("[Machine] resuming turn, task #{task.id}, attempt #{task.attempt}, status #{task.status}")
+      Logger.metadata(task_id: task.id)
+      turn_span = SuperPi.Telemetry.turn_start(data.conversation_id, task.id)
 
-      next_data = %__MODULE__{data | active_task_id: running.id, turn_task_id: running.id, turn_span: turn_span, turn_status: :ok}
-      Event.publish(Event.turn_started(data.conversation_id, running.id, Storage.current_seq()))
-      {:next_state, :preparing_request, next_data, [{:next_event, :internal, :prepare}]}
+      next_data = %__MODULE__{
+        data
+        | active_task_id: task.id,
+          turn_task_id: task.id,
+          turn_span: turn_span,
+          turn_status: :ok,
+          stop_when_done: subagent_child?(data.conversation_id)
+      }
+
+      Event.publish(Event.turn_started(data.conversation_id, task.id, Storage.current_seq()))
+      if task.status == "waiting", do: revive_subagents(task)
+
+      if task.status == "waiting" or task.phase == "awaiting_children" do
+        {:next_state, :awaiting_children, next_data, [{:next_event, :internal, :await_check}]}
+      else
+        {:next_state, :preparing_request, next_data, [{:next_event, :internal, :prepare}]}
+      end
     else
       _ -> {:next_state, :idle, data}
     end
+  end
+
+  defp subagent_child?(conversation_id) do
+    match?(%{"subagentTaskId" => id} when is_integer(id), Doc.snapshot("conversation", conversation_id, "pi.agent"))
   end
 
   # Starts the configured MCP servers (once per server) so their tools are in the catalog
@@ -274,20 +311,25 @@ defmodule SuperPi.Conversation.Machine do
     SuperPi.Telemetry.turn_stop(data.turn_span, data.turn_status)
     # The task ended, so its scratch workspace is no longer needed.
     SuperPi.Env.Workspace.cleanup_scratch(data.conversation_id, data.turn_task_id)
+    settle_subagent_task(data)
 
-    {:keep_state,
-     %__MODULE__{
-       data
-       | active_task_id: nil,
-         steer_preempted: false,
-         steer_messages: [],
-         active_tool: nil,
-         pending_tool_calls: [],
-         completed_tool_results: [],
-         turn_span: nil,
-         turn_task_id: nil,
-         turn_status: :ok
-     }}
+    reset = %__MODULE__{
+      data
+      | active_task_id: nil,
+        steer_preempted: false,
+        steer_messages: [],
+        active_tool: nil,
+        pending_tool_calls: [],
+        completed_tool_results: [],
+        await: nil,
+        turn_span: nil,
+        turn_task_id: nil,
+        turn_status: :ok
+    }
+
+    if data.stop_when_done and not is_nil(data.turn_task_id),
+      do: {:stop, :normal, reset},
+      else: {:keep_state, reset}
   end
 
   def handle_event({:call, from}, :get_state, state, data) do
@@ -331,7 +373,11 @@ defmodule SuperPi.Conversation.Machine do
     data = flush_steer_messages(data)
 
     if data.active_task_id do
+      # The children of a parked turn: `cancel_task/2` aborts their tasks (the subtree), then their
+      # machines stop. A child machine that kept running would go on spending tokens for nobody.
+      children = data.active_task_id |> TaskEngine.live_children() |> Enum.filter(&(&1.kind == "pi.subagent"))
       data.active_task_id |> TaskEngine.cancel_task(%{"reason" => "cancelled"}) |> check_task(data.active_task_id, "cancel")
+      stop_subagents(children)
     end
 
     replies = if data.reply_from, do: [{:reply, data.reply_from, {:error, :cancelled}}], else: []
@@ -346,6 +392,7 @@ defmodule SuperPi.Conversation.Machine do
          active_tool: nil,
          pending_tool_calls: [],
          completed_tool_results: [],
+         await: nil,
          retry_count: 0
      }, replies}
   end
@@ -408,6 +455,11 @@ defmodule SuperPi.Conversation.Machine do
 
   def handle_event({:call, from}, {:compact, opts}, :idle, %__MODULE__{} = data) do
     {:next_state, :compacting, %__MODULE__{data | reply_from: from}, [{:next_event, :internal, {:run_compaction, opts}}]}
+  end
+
+  # A parked turn has no tool call without a result, so compaction is safe and the caller need not wait.
+  def handle_event({:call, from}, {:compact, opts}, :awaiting_children, %__MODULE__{} = data) do
+    {:keep_state_and_data, [{:reply, from, compact_history(data, opts)}]}
   end
 
   # Compaction during a turn could cut between a tool call and its result: wait for `:idle`.
@@ -699,6 +751,20 @@ defmodule SuperPi.Conversation.Machine do
     end
   end
 
+  # --- State: :awaiting_children ---
+
+  def handle_event(:enter, _old_state, :awaiting_children, %__MODULE__{} = data) do
+    publish_live_state(data, "awaiting_children")
+    :keep_state_and_data
+  end
+
+  def handle_event(:internal, :await_check, :awaiting_children, %__MODULE__{} = data), do: await_check(data)
+  def handle_event(:state_timeout, :await_check, :awaiting_children, %__MODULE__{} = data), do: await_check(data)
+
+  # From `TaskEngine`, after the commit that woke the task. A message for an older task is ignored.
+  def handle_event(:info, {:task_woken, task_id}, :awaiting_children, %__MODULE__{active_task_id: task_id}),
+    do: {:keep_state_and_data, [{:next_event, :internal, :await_check}]}
+
   # --- State: :executing_tools ---
 
   def handle_event(:enter, _old_state, :executing_tools, %__MODULE__{} = data) do
@@ -712,7 +778,7 @@ defmodule SuperPi.Conversation.Machine do
     # text goes in and the next request starts.
     record_skipped_results(data.conversation_id, data.pending_tool_calls, @steer_skip_text)
     data = flush_steer_messages(%__MODULE__{data | pending_tool_calls: []})
-    {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
+    next_after_tools(data)
   end
 
   def handle_event(event_type, :next_tool, :executing_tools, %__MODULE__{pending_tool_calls: []} = data)
@@ -742,17 +808,17 @@ defmodule SuperPi.Conversation.Machine do
             "content" => [%{"type" => "text", "text" => steer_msg}]
           })
 
-          {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
+          next_after_tools(data)
 
         {:handoff, handoff_cfg} ->
           Storage.configure_agent!(data.conversation_id, handoff_cfg)
-          {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
+          next_after_tools(data)
 
         :terminate ->
           {:next_state, :settling_run, data, [{:next_event, :internal, :settle}]}
 
         _other ->
-          {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
+          next_after_tools(data)
       end
     end
   end
@@ -837,45 +903,7 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   def handle_event(:internal, {:run_compaction, opts}, :compacting, %__MODULE__{} = data) do
-    ctx = hook_ctx(data)
-    {visible, _graph} = Context.visible_entries_with_graph(data.conversation_id)
-
-    compaction_reply =
-      case Extension.run_before_compact(data.extensions, %{entries: visible, opts: opts}, ctx) do
-        :cancel ->
-          {:ok, :cancelled}
-
-        {:compacted, summary_text, custom_data} ->
-          head_id = find_compaction_cutoff_id(visible)
-
-          entry =
-            Storage.append_entry!(
-              data.conversation_id,
-              "pi.compaction",
-              Map.merge(%{"summary" => summary_text}, custom_data),
-              head_entry_id: head_id
-            )
-
-          {:ok, %{entry_id: entry.id, summary: summary_text, head_entry_id: head_id}}
-
-        :default ->
-          case SuperPi.Compaction.compact!(data.conversation_id, :manual, opts) do
-            {:ok, %{entry: entry, summary: summary_text, head_entry_id: head_id} = res} ->
-              {:ok,
-               %{
-                 entry_id: entry.id,
-                 summary: summary_text,
-                 head_entry_id: head_id,
-                 compacted_count: Map.get(res, :compacted_count),
-                 kept_count: Map.get(res, :kept_count)
-               }}
-
-            {:ok, :noop} ->
-              {:ok, :noop}
-          end
-      end
-
-    publish_compaction(data.conversation_id, compaction_reply)
+    compaction_reply = compact_history(data, opts)
 
     actions =
       if data.reply_from do
@@ -945,6 +973,51 @@ defmodule SuperPi.Conversation.Machine do
     actions = if data.reply_from, do: [{:reply, data.reply_from, {:ok, data.last_assistant_message}}], else: []
 
     {:next_state, :idle, %__MODULE__{data | active_task_id: nil, reply_from: nil, pending_tool_calls: [], completed_tool_results: []}, actions}
+  end
+
+  # Compacts and announces it. Runs in `:compacting`, and in `:awaiting_children`, where the history
+  # is whole: every tool call has its result.
+  defp compact_history(%__MODULE__{} = data, opts) do
+    ctx = hook_ctx(data)
+    {visible, _graph} = Context.visible_entries_with_graph(data.conversation_id)
+
+    compaction_reply =
+      case Extension.run_before_compact(data.extensions, %{entries: visible, opts: opts}, ctx) do
+        :cancel ->
+          {:ok, :cancelled}
+
+        {:compacted, summary_text, custom_data} ->
+          head_id = find_compaction_cutoff_id(visible)
+
+          entry =
+            Storage.append_entry!(
+              data.conversation_id,
+              "pi.compaction",
+              Map.merge(%{"summary" => summary_text}, custom_data),
+              head_entry_id: head_id
+            )
+
+          {:ok, %{entry_id: entry.id, summary: summary_text, head_entry_id: head_id}}
+
+        :default ->
+          case SuperPi.Compaction.compact!(data.conversation_id, :manual, opts) do
+            {:ok, %{entry: entry, summary: summary_text, head_entry_id: head_id} = res} ->
+              {:ok,
+               %{
+                 entry_id: entry.id,
+                 summary: summary_text,
+                 head_entry_id: head_id,
+                 compacted_count: Map.get(res, :compacted_count),
+                 kept_count: Map.get(res, :kept_count)
+               }}
+
+            {:ok, :noop} ->
+              {:ok, :noop}
+          end
+      end
+
+    publish_compaction(data.conversation_id, compaction_reply)
+    compaction_reply
   end
 
   defp publish_compaction(conv_id, {:ok, %{head_entry_id: head, summary: summary}}),
@@ -1034,9 +1107,154 @@ defmodule SuperPi.Conversation.Machine do
   # Stores the result, applies its control directive and moves to the next call of the batch.
   defp finish_tool(%__MODULE__{} = data, tool_result) do
     append_tool_result!(data.conversation_id, tool_result)
-    apply_tool_control_directive(data.conversation_id, Map.get(tool_result, "control"))
+    control = Map.get(tool_result, "control")
+    apply_tool_control_directive(data.conversation_id, control)
     send(self(), :next_tool)
-    {:keep_state, %__MODULE__{data | completed_tool_results: [tool_result | data.completed_tool_results]}}
+    {:keep_state, %__MODULE__{capture_await(data, control) | completed_tool_results: [tool_result | data.completed_tool_results]}}
+  end
+
+  # The `await` directive takes effect when the batch ends (`next_after_tools/1`): the other calls of
+  # the batch still run. Directives of one batch add up, the last policy wins.
+  defp capture_await(%__MODULE__{} = data, %{"await" => %{"task_ids" => ids} = await}) when is_list(ids) do
+    prev = data.await || %{"task_ids" => [], "children" => []}
+
+    %__MODULE__{
+      data
+      | await: %{
+          "task_ids" => Enum.uniq(prev["task_ids"] ++ ids),
+          "children" => prev["children"] ++ List.wrap(await["children"]),
+          "policy" => await["policy"] || prev["policy"]
+        }
+    }
+  end
+
+  defp capture_await(%__MODULE__{} = data, _control), do: data
+
+  defp next_after_tools(%__MODULE__{await: nil} = data), do: {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
+  defp next_after_tools(%__MODULE__{} = data), do: {:next_state, :awaiting_children, data, [{:next_event, :internal, :await_check}]}
+
+  # --- Subagents ---
+
+  # The turn of a subagent child ended. The worker that runs the child settles its task too; this
+  # covers a turn that a restarted machine resumed after the worker's node was lost.
+  defp settle_subagent_task(%__MODULE__{turn_task_id: nil}), do: :ok
+
+  defp settle_subagent_task(%__MODULE__{} = data) do
+    case Doc.snapshot("conversation", data.conversation_id, "pi.agent") do
+      %{"subagentTaskId" => task_id} when is_integer(task_id) ->
+        outcome =
+          case data.turn_status do
+            {:error, reason} -> {:error, reason}
+            _ok -> {:ok, SuperPi.Workers.SubagentWorker.final_text(data.last_assistant_message)}
+          end
+
+        SuperPi.Workers.SubagentWorker.settle(task_id, outcome)
+
+      _ ->
+        :ok
+    end
+  rescue
+    e -> Logger.error("[Machine] could not settle the subagent task: #{Exception.message(e)}")
+  end
+
+  # A parent that parks again after a node loss: a child that was running (or was reset by the
+  # reconcile of this conversation) and has no machine lost it with its node, and Horde may not have
+  # restarted it. Start it; its recovery resumes the turn and settles the task.
+  defp revive_subagents(%TaskSchema{state: %{"children" => children}}) do
+    children
+    |> Enum.map(& &1["task_id"])
+    |> TaskEngine.get_tasks()
+    |> Enum.reject(&TaskSchema.terminal?/1)
+    |> Enum.filter(&(&1.status == "running" or &1.attempt > 0))
+    |> Enum.each(fn task ->
+      child_id = task.input["child_conversation_id"]
+
+      if is_integer(child_id) and is_nil(SuperPi.Conversation.Locator.whereis(child_id)) do
+        SuperPi.Conversation.Locator.ensure_started(child_id, SuperPi.Workers.SubagentWorker.machine_opts(task.input["role"]))
+      end
+    end)
+  end
+
+  defp revive_subagents(_task), do: :ok
+
+  # Cancels the machines of children whose tasks were aborted.
+  defp stop_subagents(tasks) do
+    Enum.each(tasks, fn task ->
+      with child_id when is_integer(child_id) <- task.input["child_conversation_id"],
+           pid when is_pid(pid) <- SuperPi.Conversation.Locator.whereis(child_id) do
+        cancel(pid)
+      end
+    end)
+  end
+
+  defp await_poll_ms, do: Application.get_env(:super_pi, :await_poll_ms, 5_000)
+
+  # Decides from the durable task, not from a message: the wake-up may have come before the machine
+  # parked (the children were quick), or while no machine ran.
+  defp await_check(%__MODULE__{} = data) do
+    case TaskEngine.get_task(data.active_task_id) do
+      %TaskSchema{status: "waiting"} ->
+        {:keep_state_and_data, [{:state_timeout, await_poll_ms(), :await_check}]}
+
+      %TaskSchema{status: status} = task when status in ["pending", "running"] ->
+        resume_after_children(data, task)
+
+      _gone_or_ended ->
+        finish_run_with_error(data, :task_ended_while_waiting)
+    end
+  end
+
+  defp resume_after_children(%__MODULE__{} = data, %TaskSchema{} = task) do
+    started =
+      case task.status do
+        "pending" -> task.id |> TaskEngine.start_task() |> check_task(task.id, "wake")
+        _running -> :ok
+      end
+
+    case started do
+      :ok ->
+        state = task.state || %{}
+        children = if data.await, do: data.await["children"], else: state["children"] || []
+        results = children |> Enum.map(& &1["task_id"]) |> TaskEngine.get_tasks()
+
+        # `fail_fast`: the parent stopped waiting, so the children still running are stopped.
+        if state["failedChildId"], do: stop_subagents(abort_live(results))
+
+        Enum.each(TaskEngine.get_tasks(Enum.map(results, & &1.id)), &append_subagent_result!(data.conversation_id, &1))
+        task.id |> TaskEngine.checkpoint_task("resumed_from_children", %{}) |> check_task(task.id, "resume after children")
+        {:next_state, :preparing_request, %__MODULE__{data | await: nil}, [{:next_event, :internal, :prepare}]}
+
+      {:error, reason} ->
+        finish_run_with_error(data, {:task_transition_failed, reason})
+    end
+  end
+
+  defp abort_live(tasks) do
+    live = Enum.reject(tasks, &TaskSchema.terminal?/1)
+    Enum.each(live, &TaskEngine.abort_task!(&1.id))
+    live
+  end
+
+  # A user message, not a tool result: the call has its result (the acknowledgement) and a provider
+  # refuses a second result for one call id.
+  defp append_subagent_result!(conv_id, %TaskSchema{} = task) do
+    role = task.input["role"] || "subagent"
+    child = task.input["child_conversation_id"]
+    result = task.result || %{}
+
+    text =
+      case task.status do
+        "completed" -> "Subagent #{role} (conversation #{child}) finished:\n#{result["summary"]}"
+        "failed" -> "Subagent #{role} (conversation #{child}) failed: #{result["error"]}"
+        status -> "Subagent #{role} (conversation #{child}) did not finish (#{status})."
+      end
+
+    Storage.append_entry!(conv_id, "pi.message", %{
+      "role" => "user",
+      "content" => [%{"type" => "text", "text" => text}],
+      "kind" => "subagent_result",
+      "child_conversation_id" => child
+    })
   end
 
   # A `pi.message` with role `tool` and the 3 result channels.

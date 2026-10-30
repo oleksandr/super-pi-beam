@@ -346,6 +346,63 @@ defmodule SuperPi.ClusterTest do
     end
   end
 
+
+  describe "subagents" do
+    # A child turn that outlives a node. `kill: :machine` kills the node that hosts the child's
+    # machine while the job's node lives (the job starts the machine again and waits). `kill: :job`
+    # kills the node that runs the job, which hosts the machine too (Horde restarts the machine, and
+    # the machine settles the task itself).
+    for kill <- [:machine, :job] do
+      @kill kill
+      test "a child survives its node being killed (#{kill})", %{created: created} do
+        peers = Support.start_peers(3, mock_llm: true, mock_llm_delay_ms: 4_000)
+        on_exit(fn -> Support.stop_peers(peers) end)
+        wait_until(fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 3)) end, 30_000, "Horde members to join")
+
+        [a | _] = peers
+        {parent_id, parent_task_id} = call(a, Support, :create_parent_turn, [])
+        :ets.insert(created, {:conv, parent_id})
+
+        res = call(a, Support, :delegate, [parent_id, parent_task_id, %{"role" => "scout", "prompt" => "survive this", "timeout_ms" => 100_000}])
+        assert [%{"task_id" => sub_task_id, "child_conversation_id" => child_id}] = res["structured_output"]["subagents"]
+        :ets.insert(created, {:conv, child_id})
+        assert call(a, Support, :get_task, [parent_task_id]).status == "waiting"
+
+        # Horde places the machine; the job runs on that node (`:job`) or on another one (`:machine`).
+        {:ok, probe} = ensure(a, child_id)
+        host = Enum.find(peers, &(&1.node == node(probe)))
+        runner = if @kill == :job, do: host, else: Enum.find(peers, &(&1.node != host.node))
+        :erpc.cast(runner.node, Support, :run_subagent_jobs, [])
+
+        wait_until(fn -> call(a, Support, :generation_status, [child_id]) == "running" end, 20_000, "the child's turn to start")
+        pid = owner_of(a, child_id)
+        survivors = peers -- [host]
+        wait_until(fn -> supervised_on?(hd(survivors), pid) end, 20_000, "a survivor to learn the machine")
+        :erpc.cast(host.node, :erlang, :halt, [1])
+
+        # Horde may not restart the machine (see the node failure test). The next request does.
+        restarted? =
+          try do
+            wait_until(fn -> match?(new when is_pid(new) and node(new) != host.node, owner_of(hd(survivors), child_id)) end, 20_000, "the machine to restart")
+            true
+          rescue
+            ExUnit.AssertionError -> false
+          end
+
+        # In the `:machine` case the job's node is alive and starts the machine itself.
+        unless restarted? or @kill == :machine do
+          {:ok, _} = call(hd(survivors), SuperPi.Conversation.Locator, :ensure_started, [child_id, SuperPi.Workers.SubagentWorker.machine_opts("scout")])
+        end
+
+        wait_until(fn -> call(hd(survivors), Support, :get_task, [sub_task_id]).status == "completed" end, 60_000, "the child to complete")
+        assert call(hd(survivors), Support, :get_task, [sub_task_id]).result["summary"] =~ "survive this"
+
+        # The child's end woke the parent.
+        assert call(hd(survivors), Support, :get_task, [parent_task_id]).status == "pending"
+      end
+    end
+  end
+
   defp wait_for_owner(peer, id) do
     wait_until(fn -> is_pid(owner_of(peer, id)) end, 20_000, "a machine for the conversation")
     owner_of(peer, id)
