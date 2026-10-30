@@ -44,6 +44,14 @@ defmodule SuperPi.Durable.Doc do
       history_policy: "latest",
       fork_policy: "initial",
       checkpoint_every: 8
+    },
+    # Digest of the Memory plugin's index, one document per memory scope (the `key`). It is not
+    # conversation-scoped, so a fork never copies it. Notes live in the `memories` table.
+    "pi.memory_index" => %{
+      scope_kind: "memory",
+      history_policy: "latest",
+      fork_policy: "current",
+      checkpoint_every: 1
     }
   }
 
