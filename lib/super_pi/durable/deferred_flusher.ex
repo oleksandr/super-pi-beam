@@ -58,7 +58,9 @@ defmodule SuperPi.Durable.DeferredFlusher do
     Process.flag(:trap_exit, true)
     ensure_pending_ets!()
     Doc.ensure_ets!()
-    interval = Keyword.get(opts, :flush_interval_ms, @default_flush_interval_ms)
+    interval =
+      Keyword.get(opts, :flush_interval_ms) ||
+        Application.get_env(:super_pi, :deferred_flush_interval_ms, @default_flush_interval_ms)
     schedule_tick(interval)
     {:ok, %{interval: interval}}
   end

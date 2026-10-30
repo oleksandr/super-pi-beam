@@ -45,3 +45,30 @@ jobs:
       - run: mise exec -- mix test --only postgres
         env:
           SUPER_PI_MIGRATION_TEST_URL: ecto://postgres:postgres@localhost:5432/super_pi_migration
+
+  test-postgres-tls:
+    # Real TLS to PostgreSQL: require, verify-full with the right CA, and refusal with a wrong CA or host name.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - name: Create a CA and a server certificate
+        run: |
+          mkdir tls && cd tls
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -days 2 -subj "/CN=ci-ca"
+          openssl req -newkey rsa:2048 -nodes -keyout server.key -out server.csr -subj "/CN=localhost"
+          printf "subjectAltName=DNS:localhost,IP:127.0.0.1\n" > san.cnf
+          openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out server.pem -days 2 -extfile san.cnf
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout other.key -out other-ca.pem -days 2 -subj "/CN=other-ca"
+      - name: Start PostgreSQL with TLS
+        run: |
+          docker run -d --name pgtls -p 5432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=sp_tls \
+            -v "$PWD/tls:/tls:ro" --entrypoint sh postgres:18 -c \
+            'cp /tls/server.pem /tls/server.key /var/lib/postgresql/ && chown postgres:postgres /var/lib/postgresql/server.* && chmod 600 /var/lib/postgresql/server.key && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/server.pem -c ssl_key_file=/var/lib/postgresql/server.key'
+          for i in $(seq 1 30); do docker exec pgtls pg_isready -U postgres && break; sleep 1; done
+      - run: mise exec -- mix deps.get
+      - run: mise exec -- mix test --only postgres test/super_pi/postgres_tls_test.exs
+        env:
+          SUPER_PI_TLS_TEST_URL: ecto://postgres:postgres@127.0.0.1:5432/sp_tls
+          SUPER_PI_TLS_TEST_CA: ${{ github.workspace }}/tls/ca.pem
+          SUPER_PI_TLS_TEST_WRONG_CA: ${{ github.workspace }}/tls/other-ca.pem

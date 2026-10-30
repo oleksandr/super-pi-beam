@@ -319,6 +319,42 @@ The exporter is OTLP over HTTP. Other `OTEL_*` variables are read by the OpenTel
 
 **Logs.** Log lines from a conversation carry `conversation_id` and `task_id`. In `rpc --stdio` and `mcp` modes logs go to stderr.
 
+### Production PostgreSQL
+
+"PostgreSQL" here means a separate instance reached over the network: your own server or a managed service (RDS, Cloud SQL, Azure Database, Neon). SQLite stays the default for a single local node.
+
+```bash
+export SUPER_PI_STORAGE_BACKEND=postgres
+export DATABASE_URL=ecto://app:secret@db.example.com:5432/super_pi
+export SUPER_PI_DB_SSL=verify-full           # disable (default) | require | verify-full
+export SUPER_PI_DB_SSL_CA=/etc/ssl/rds-ca.pem  # optional; default is the system CA store
+export POOL_SIZE=10                          # connections per node
+```
+
+| Variable | Meaning |
+|---|---|
+| `SUPER_PI_DB_SSL` | `require` encrypts but does not check the certificate. `verify-full` checks the chain and the host name. `sslmode=` in `DATABASE_URL` is read when this is unset. |
+| `SUPER_PI_DB_SSL_CA`, `SUPER_PI_DB_SSL_SNI` | CA bundle, and the name to verify (default: the host of the URL). |
+| `SUPER_PI_DB_SSL_CERT`, `SUPER_PI_DB_SSL_KEY` | Client certificate, for servers that require one. |
+| `POOL_SIZE`, `SUPER_PI_DB_QUEUE_TARGET`, `SUPER_PI_DB_QUEUE_INTERVAL` | Pool size per node, and the checkout wait (ms) before the pool sheds load. Total connections are about nodes x pool size, plus Oban's listener. |
+| `SUPER_PI_DB_IPV6` | `true` to connect over IPv6. |
+| `SUPER_PI_SQLITE_PATH` | SQLite file. A release defaults to the per-user data directory. |
+
+**Migrations.** The development default applies pending migrations at start. A production release does not (`auto_migrate: false`), so a rolling deploy cannot race on the schema. Run the migration as a separate step before the new version takes traffic:
+
+```bash
+bin/super_pi eval "SuperPi.Release.migrate()"
+bin/super_pi eval "SuperPi.Release.rollback(20261030000001)"   # back to a version
+```
+
+`SUPER_PI_AUTO_MIGRATE=true` migrates at boot instead.
+
+**Poolers.** Connect directly, or through a pooler in *session* mode. Transaction-mode pooling (pgbouncer `pool_mode=transaction`) is not supported: Oban waits for jobs with `LISTEN/NOTIFY`, which needs one session, and the driver prepares statements per connection.
+
+**Gateway sessions** (`x-session-id` to conversation) are stored in the `gateway_sessions` table, so they survive a restart and are shared by every node. Idle sessions expire after `gateway_session_ttl_days` (90), and the table keeps at most `gateway_session_limit` rows (100,000).
+
+TLS is tested against a real server: `mix test --only postgres test/super_pi/postgres_tls_test.exs` (see the file for the variables), and in the `test-postgres-tls` CI job.
+
 ### Authentication and Ownership
 
 The Gateway and the RPC server are open on loopback by default. To require a key, set tokens in config or the environment:
@@ -366,7 +402,7 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 ```
 
 - `model`: a harness id (a virtual model that picks an agent persona with its own plugins and tools) or a model that a registered provider serves, which is passed through to that provider. Anything else returns `404 model_not_found`. A model whose provider has no key returns `503 provider_not_configured`. `GET /v1/models` lists exactly the accepted values.
-- **Sessions.** Conversations are durable and live on the server. Send `x-session-id` (or `session_id` in the body) to continue one, or `x-conversation-id` to attach by id. The conversations are stored, but the session-id-to-conversation map is held in memory: after a gateway restart the same `x-session-id` starts a new conversation (Task 47 stores the map in the database). `x-conversation-id` keeps working across restarts. The first request of a session seeds the prior `messages`. Later requests use only the **last user message**, because the server already holds the history. Without a session id, every request starts a new conversation.
+- **Sessions.** Conversations are durable and live on the server. Send `x-session-id` (or `session_id` in the body) to continue one, or `x-conversation-id` to attach by id. The session-id-to-conversation map is stored in the database, so it survives a restart. The first request of a session seeds the prior `messages`. Later requests use only the **last user message**, because the server already holds the history. Without a session id, every request starts a new conversation.
 - **Streaming.** Answer text arrives as `delta.content`. Reasoning and tool progress arrive as `delta.reasoning_content`, so a client can show them without mixing them into the answer. `usage` is reported once. A failed turn ends with `finish_reason: "error"`.
 - **Errors** use the OpenAI shape `{"error": {"message", "type", "code"}}`: `400 invalid_params`, `401 invalid_api_key`, `404 model_not_found`, `503 provider_not_configured`.
 - **Authentication, ownership and modes**: see *Authentication and Ownership* and *Permissions and Remote Modes*.

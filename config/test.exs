@@ -13,6 +13,9 @@ config :super_pi, :mock_llm, true
 config :super_pi, auto_migrate: false
 # Tests that need MCP servers start them explicitly.
 config :super_pi, mcp_clients: false
+# The periodic flusher runs outside the Ecto sandbox, so in tests it would only log
+# ownership errors. Tests that need a flush call `DeferredFlusher.flush_now!/0`.
+config :super_pi, deferred_flush_interval_ms: 3_600_000
 # Spans go to a test process (`SuperPi.TelemetryTest`); nothing is exported.
 config :opentelemetry, span_processor: :simple, traces_exporter: :none
 

@@ -115,9 +115,9 @@ defmodule SuperPi.AuthTest do
 
     test "a bad key never reaches the agent" do
       tokens(alice: "tok-a")
-      before = :ets.info(:super_pi_gateway_sessions, :size)
+      before = SuperPi.Gateway.Sessions.count()
       assert chat("wrong", [{"x-session-id", "s-denied"}]).status == 401
-      assert :ets.info(:super_pi_gateway_sessions, :size) == before
+      assert SuperPi.Gateway.Sessions.count() == before
     end
 
     test "principals do not share a session id" do
@@ -125,8 +125,8 @@ defmodule SuperPi.AuthTest do
       assert chat("tok-a", [{"x-session-id", "shared"}]).status == 200
       assert chat("tok-b", [{"x-session-id", "shared"}]).status == 200
 
-      assert [{_, a}] = :ets.lookup(:super_pi_gateway_sessions, {"alice", "shared"})
-      assert [{_, b}] = :ets.lookup(:super_pi_gateway_sessions, {"bob", "shared"})
+      assert a = SuperPi.Gateway.Sessions.lookup("alice", "shared")
+      assert b = SuperPi.Gateway.Sessions.lookup("bob", "shared")
       assert a != b
       assert Auth.owner(a) == "alice"
       assert Auth.owner(b) == "bob"
@@ -135,7 +135,7 @@ defmodule SuperPi.AuthTest do
     test "a principal cannot attach to another principal's conversation by id" do
       tokens(alice: "tok-a", bob: "tok-b")
       assert chat("tok-a", [{"x-session-id", "alice-chat"}]).status == 200
-      [{_, alice_conv}] = :ets.lookup(:super_pi_gateway_sessions, {"alice", "alice-chat"})
+      alice_conv = SuperPi.Gateway.Sessions.lookup("alice", "alice-chat")
 
       conn = chat("tok-b", [{"x-conversation-id", Integer.to_string(alice_conv)}])
       assert conn.status == 200
@@ -150,7 +150,7 @@ defmodule SuperPi.AuthTest do
     test "the owner can attach by id" do
       tokens(alice: "tok-a")
       assert chat("tok-a", [{"x-session-id", "mine"}]).status == 200
-      [{_, conv}] = :ets.lookup(:super_pi_gateway_sessions, {"alice", "mine"})
+      conv = SuperPi.Gateway.Sessions.lookup("alice", "mine")
       assert Auth.authorized?(conv, "alice")
       refute Auth.authorized?(conv, "bob")
     end

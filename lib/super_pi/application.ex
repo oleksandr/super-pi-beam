@@ -7,7 +7,6 @@ defmodule SuperPi.Application do
   def start(_type, _args) do
     SuperPi.Durable.Doc.ensure_ets!()
     SuperPi.Durable.DeferredFlusher.ensure_pending_ets!()
-    SuperPi.Gateway.Router.ensure_session_cache!()
     SuperPi.MCP.Manager.create_tables()
     SuperPi.UI.Broker.create_tables()
 

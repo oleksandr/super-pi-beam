@@ -143,8 +143,7 @@ defmodule SuperPi.GatewayTest do
     assert is_binary(hd(body["choices"])["message"]["content"])
 
     # Ensure this title generation did NOT map test-session-123 in ETS to a corrupted conversation
-    sessions = :ets.tab2list(:super_pi_gateway_sessions)
-    assert Enum.find(sessions, fn {{_principal, sid}, _cid} -> sid == "test-session-123" end) == nil
+    assert SuperPi.Gateway.Sessions.lookup(SuperPi.Auth.anonymous(), "test-session-123") == nil
   end
 
   test "POST /v1/chat/completions preserves multi-turn conversational context" do

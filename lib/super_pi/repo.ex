@@ -39,6 +39,7 @@ defmodule SuperPi.Repo do
   def update(changeset, opts \\ []), do: active_repo().update(changeset, opts)
   def update!(changeset, opts \\ []), do: active_repo().update!(changeset, opts)
   def delete(struct_or_changeset, opts \\ []), do: active_repo().delete(struct_or_changeset, opts)
+  def insert_all(schema_or_source, entries, opts \\ []), do: active_repo().insert_all(schema_or_source, entries, opts)
   def delete_all(queryable, opts \\ []), do: active_repo().delete_all(queryable, opts)
   def update_all(queryable, updates, opts \\ []), do: active_repo().update_all(queryable, updates, opts)
   def query!(sql, params \\ [], opts \\ []), do: active_repo().query!(sql, params, opts)

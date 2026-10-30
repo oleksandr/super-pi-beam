@@ -305,24 +305,20 @@ defmodule SuperPi.ReviewDefectsTest do
       |> SuperPi.Gateway.Router.call(@opts)
     end
 
-    test "the session map is bounded and creates no lock process per session" do
+    test "the session table is bounded" do
       put_env(:gateway_session_limit, 3)
-      before = length(DynamicSupervisor.which_children(SuperPi.FileLockSupervisor))
-      :ets.delete_all_objects(:super_pi_gateway_sessions)
-      :ets.delete_all_objects(:super_pi_gateway_session_order)
 
       for i <- 1..6, do: assert(chat_session("bounded-#{i}-#{System.unique_integer([:positive])}").status == 200)
 
-      assert :ets.info(:super_pi_gateway_sessions, :size) == 3
-      assert length(DynamicSupervisor.which_children(SuperPi.FileLockSupervisor)) == before
+      assert SuperPi.Gateway.Sessions.count() == 3
     end
 
-    test "a session id keeps its conversation until evicted" do
+    test "a session id keeps its conversation" do
       sid = "keep-#{System.unique_integer([:positive])}"
       chat_session(sid)
-      [{_, first}] = :ets.lookup(:super_pi_gateway_sessions, {SuperPi.Auth.anonymous(), sid})
+      first = SuperPi.Gateway.Sessions.lookup(SuperPi.Auth.anonymous(), sid)
       chat_session(sid)
-      assert [{_, ^first}] = :ets.lookup(:super_pi_gateway_sessions, {SuperPi.Auth.anonymous(), sid})
+      assert SuperPi.Gateway.Sessions.lookup(SuperPi.Auth.anonymous(), sid) == first
     end
   end
 

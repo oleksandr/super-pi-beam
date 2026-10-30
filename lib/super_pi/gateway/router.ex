@@ -13,6 +13,7 @@ defmodule SuperPi.Gateway.Router do
   alias SuperPi.Conversation.Machine
   alias SuperPi.Auth
   alias SuperPi.Durable.Storage
+  alias SuperPi.Gateway.Sessions
   alias SuperPi.Durable.Schemas.Conversation
   alias SuperPi.Harness
   alias SuperPi.Repo
@@ -257,21 +258,8 @@ defmodule SuperPi.Gateway.Router do
     |> send_resp(status, Jason.encode!(data))
   end
 
-  def ensure_session_cache! do
-    for {name, opts} <- [
-          {:super_pi_gateway_sessions, [:set, read_concurrency: true]},
-          {:super_pi_gateway_session_order, [:ordered_set]}
-        ],
-        :ets.whereis(name) == :undefined do
-      try do
-        :ets.new(name, [:named_table, :public | opts])
-      rescue
-        _ -> :ok
-      end
-    end
-
-    :ok
-  end
+  @doc false
+  def ensure_session_cache!, do: :ok
 
   defp title_request?(messages) when is_list(messages) do
     system_title? =
@@ -493,37 +481,11 @@ defmodule SuperPi.Gateway.Router do
     end
   end
 
-  # The map holds at most `:gateway_session_limit` sessions (default 10_000). The oldest are
-  # dropped first; a dropped session id starts a new conversation, as after a restart.
-  defp remember_session(key, conv_id) do
-    ensure_session_cache!()
-    :ets.insert(:super_pi_gateway_sessions, {key, conv_id})
-    :ets.insert(:super_pi_gateway_session_order, {System.unique_integer([:monotonic]), key})
-    limit = Application.get_env(:super_pi, :gateway_session_limit, 10_000)
-    evict_sessions(limit)
-  end
-
-  defp evict_sessions(limit) do
-    if :ets.info(:super_pi_gateway_sessions, :size) > limit do
-      case :ets.first(:super_pi_gateway_session_order) do
-        :"$end_of_table" ->
-          :ok
-
-        oldest ->
-          [{_, key}] = :ets.lookup(:super_pi_gateway_session_order, oldest)
-          :ets.delete(:super_pi_gateway_session_order, oldest)
-          :ets.delete(:super_pi_gateway_sessions, key)
-          evict_sessions(limit)
-      end
-    end
-  end
-
   defp new_conversation(principal) do
     Storage.create_conversation!(agent: %{}, owner: principal)
   end
 
   defp resolve_conversation(conn, params) do
-    ensure_session_cache!()
     principal = conn.assigns[:principal] || Auth.anonymous()
 
     session_id =
@@ -545,22 +507,19 @@ defmodule SuperPi.Gateway.Router do
     cond do
       session_id != nil ->
         # Sessions are per principal: two clients that pick the same id do not share a conversation.
-        session_key = {principal, session_id}
+        # Stored in the database (`SuperPi.Gateway.Sessions`): survives a restart and is shared by
+        # every node. The local lock only avoids creating a conversation twice on this node.
+        :global.trans({{:gateway_session, {principal, session_id}}, self()}, fn ->
+          {conv_id, new?} =
+            Sessions.fetch_or_create(principal, session_id, fn -> new_conversation(principal) end)
 
-        # One request per session at a time, so two requests cannot both create the conversation.
-        # `:global.trans` frees its lock when done; the old FileLock left a process per session id.
-        :global.trans({{:gateway_session, session_key}, self()}, fn ->
-          case :ets.lookup(:super_pi_gateway_sessions, session_key) do
-            [{^session_key, conv_id}] ->
-              Logger.info("[Gateway] 🔗 Mapped session '#{session_id}' to existing conversation ##{conv_id}")
-              {conv_id, false}
-
-            [] ->
-              conv = new_conversation(principal)
-              remember_session(session_key, conv.id)
-              Logger.info("[Gateway] 🆕 Mapped new session '#{session_id}' to conversation ##{conv.id}")
-              {conv.id, true}
+          if new? do
+            Logger.info("[Gateway] 🆕 Mapped new session '#{session_id}' to conversation ##{conv_id}")
+          else
+            Logger.info("[Gateway] 🔗 Mapped session '#{session_id}' to existing conversation ##{conv_id}")
           end
+
+          {conv_id, new?}
         end, [node()], :infinity)
 
       header_conv_id != nil ->
