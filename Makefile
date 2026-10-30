@@ -44,11 +44,11 @@ test-postgres: pg-up
 	  mise exec -- mix test --only postgres; \
 	  status=$$?; $(MAKE) pg-down; exit $$status
 
-# Multi-node tests: three Erlang nodes against PostgreSQL. Needs DATABASE_URL (`make pg-up` gives
-# ecto://postgres:postgres@127.0.0.1:55433/super_pi_test). Starts epmd.
+# Multi-node tests: three Erlang nodes against PostgreSQL. Run `make pg-up` first, or set
+# DATABASE_URL. Starts epmd.
 test-cluster:
 	mise exec -- epmd -daemon
-	SUPER_PI_STORAGE_BACKEND=postgres mise exec -- elixir --erl "-hidden" --name sp_ctl@127.0.0.1 --cookie super_pi_cluster_test -S mix test --only cluster test/super_pi/cluster_test.exs
+	SUPER_PI_STORAGE_BACKEND=postgres DATABASE_URL=$${DATABASE_URL:-$(PG_URL)/super_pi_test} mise exec -- elixir --erl "-hidden" --name sp_ctl@127.0.0.1 --cookie super_pi_cluster_test -S mix test --only cluster test/super_pi/cluster_test.exs
 
 TLS_DIR := $(CURDIR)/tmp/tls
 TLS_PORT ?= 55432
