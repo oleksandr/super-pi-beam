@@ -6,7 +6,12 @@ defmodule SuperPi.Durable.StorageTest do
 
   describe "root conversation and 5 built-in documents" do
     test "lazily creates root conversation (id=1) with built-in documents" do
-      root = Storage.ensure_root_conversation!(%{"model" => "claude-sonnet-4", "thinkingLevel" => "medium"})
+      root =
+        Storage.ensure_root_conversation!(%{
+          "model" => "claude-sonnet-4",
+          "thinkingLevel" => "medium"
+        })
+
       assert root.id == 1
       assert root.owner_kind == "ownerless"
 
@@ -77,7 +82,8 @@ defmodule SuperPi.Durable.StorageTest do
                   fixed_map(%{
                     model: member_of(["sonnet", "opus", "haiku", "gemini-pro"]),
                     thinking: member_of(["low", "medium", "high"]),
-                    tools: list_of(member_of(["read", "write", "edit", "bash", "grep"]), max_length: 4)
+                    tools:
+                      list_of(member_of(["read", "write", "edit", "bash", "grep"]), max_length: 4)
                   }),
                   min_length: 2,
                   max_length: 10
@@ -124,7 +130,11 @@ defmodule SuperPi.Durable.StorageTest do
 
     property "DeferredFlusher coalesces rapid 100ms ETS bursts and persists latest state on next durable commit" do
       check all(
-              partials <- list_of(string(:alphanumeric, min_length: 1, max_length: 30), min_length: 2, max_length: 15),
+              partials <-
+                list_of(string(:alphanumeric, min_length: 1, max_length: 30),
+                  min_length: 2,
+                  max_length: 15
+                ),
               max_runs: 25
             ) do
         conv = Storage.create_conversation!()

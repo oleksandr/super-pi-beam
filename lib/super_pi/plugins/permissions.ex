@@ -61,7 +61,10 @@ defmodule SuperPi.Plugins.Permissions do
 
   def id, do: "permissions"
   def name, do: "Execution Permissions & Workspace Boundary Shield"
-  def description, do: "Enforces execution modes (plan, auto, accept-edits), command allowlists, and workspace boundary confinement"
+
+  def description,
+    do:
+      "Enforces execution modes (plan, auto, accept-edits), command allowlists, and workspace boundary confinement"
 
   alias SuperPi.Discovery
   alias SuperPi.Durable.Doc
@@ -69,11 +72,28 @@ defmodule SuperPi.Plugins.Permissions do
 
   @read_only_tools ["read", "grep", "find", "ls", "tool_search"]
   @edit_tools ["write", "edit"]
-  @path_tools ["read", "write", "edit", "grep", "find", "ls", "read_file", "write_file", "edit_file", "search_files"]
+  @path_tools [
+    "read",
+    "write",
+    "edit",
+    "grep",
+    "find",
+    "ls",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "search_files"
+  ]
   @list_tools ["grep", "find", "ls", "search_files"]
   @max_symlink_hops 40
   @mode_rank %{"plan" => 0, "accept-edits" => 1, "auto" => 2}
-  @remote_forbidden_keys ["dangerouslySkipPermissions", "settingsOverride", "workspacePaths", "appDataDir", "globalConfigDir"]
+  @remote_forbidden_keys [
+    "dangerouslySkipPermissions",
+    "settingsOverride",
+    "workspacePaths",
+    "appDataDir",
+    "globalConfigDir"
+  ]
 
   @doc """
   Returns the mode that a remote caller gets for a request.
@@ -142,7 +162,8 @@ defmodule SuperPi.Plugins.Permissions do
   """
   @spec clamp_mode(map()) :: map()
   def clamp_mode(agent_cfg) when is_map(agent_cfg) do
-    with ceiling when not is_nil(ceiling) <- normalize_mode(Map.get(agent_cfg, "maxExecutionMode")),
+    with ceiling when not is_nil(ceiling) <-
+           normalize_mode(Map.get(agent_cfg, "maxExecutionMode")),
          mode when not is_nil(mode) <- normalize_mode(Map.get(agent_cfg, "executionMode")),
          true <- rank(mode) > rank(ceiling) do
       Map.put(agent_cfg, "executionMode", ceiling)
@@ -172,7 +193,9 @@ defmodule SuperPi.Plugins.Permissions do
       # A human can decide. The call goes on to `wrap_tool`, which runs in the tool task and asks.
       # Without a client to ask, the block stands, with the message it always had.
       {:prompt, reason, _risk} ->
-        if PermissionPrompt.available?(Map.get(ctx, :conversation_id), settings), do: :allow, else: {:block, reason}
+        if PermissionPrompt.available?(Map.get(ctx, :conversation_id), settings),
+          do: :allow,
+          else: {:block, reason}
     end
   end
 
@@ -187,7 +210,9 @@ defmodule SuperPi.Plugins.Permissions do
   end
 
   defp load_state(ctx) do
-    agent_cfg = (Doc.snapshot("conversation", ctx.conversation_id, "pi.agent") || %{}) |> clamp_mode()
+    agent_cfg =
+      (Doc.snapshot("conversation", ctx.conversation_id, "pi.agent") || %{}) |> clamp_mode()
+
     {agent_cfg, load_effective_settings(agent_cfg)}
   end
 
@@ -239,7 +264,11 @@ defmodule SuperPi.Plugins.Permissions do
       end
 
     perms = Map.update(perms, key, [entry], &Enum.uniq(List.wrap(&1) ++ [entry]))
-    SuperPi.Durable.Storage.configure_agent!(conversation_id, %{"settingsOverride" => Map.put(override, "permissions", perms)})
+
+    SuperPi.Durable.Storage.configure_agent!(conversation_id, %{
+      "settingsOverride" => Map.put(override, "permissions", perms)
+    })
+
     :ok
   end
 
@@ -264,7 +293,8 @@ defmodule SuperPi.Plugins.Permissions do
   that `accept-edits` does not allow by default (every MCP tool among them). A `permissions.deny`
   match, a mode block, a workspace boundary and a network policy block are never promptable.
   """
-  @spec evaluate(String.t(), map(), map(), map()) :: :allow | {:block, String.t()} | {:prompt, String.t(), String.t()}
+  @spec evaluate(String.t(), map(), map(), map()) ::
+          :allow | {:block, String.t()} | {:prompt, String.t(), String.t()}
   def evaluate(tool_name, args, agent_cfg, settings) do
     skip_perms? = Map.get(agent_cfg, "dangerouslySkipPermissions", false) == true
     raw_mode = Map.get(agent_cfg, "executionMode", "auto")
@@ -288,10 +318,12 @@ defmodule SuperPi.Plugins.Permissions do
         {:block, "Tool `#{tool_name}` is blocked in `--mode plan` (read-only planning mode)."}
 
       not allowed_by_workspace_boundary?(tool_name, args, agent_cfg, settings) ->
-        {:block, "Path access outside trusted workspaces is disabled (`allowNonWorkspaceAccess: false`)."}
+        {:block,
+         "Path access outside trusted workspaces is disabled (`allowNonWorkspaceAccess: false`)."}
 
       network_denied?(effects, args, settings) ->
-        {:block, "Network access is blocked by the `network` policy (`#{network_policy(settings)}`)."}
+        {:block,
+         "Network access is blocked by the `network` policy (`#{network_policy(settings)}`)."}
 
       tool_name in @read_only_tools ->
         :allow
@@ -306,7 +338,8 @@ defmodule SuperPi.Plugins.Permissions do
         if mode == "auto" or command_allowed?(cmd_str, allow_list) do
           :allow
         else
-          {:prompt, "Command `#{cmd_str}` is not in `permissions.allow` under mode `#{mode}`.", "high"}
+          {:prompt, "Command `#{cmd_str}` is not in `permissions.allow` under mode `#{mode}`.",
+           "high"}
         end
 
       safe_effects?(effects) ->
@@ -316,7 +349,8 @@ defmodule SuperPi.Plugins.Permissions do
         if tool_name in permission_list(settings, "allowTools") do
           :allow
         else
-          {:prompt, "Tool `#{tool_name}` is not allowed by default in mode `accept-edits`.", risk(effects)}
+          {:prompt, "Tool `#{tool_name}` is not allowed by default in mode `accept-edits`.",
+           risk(effects)}
         end
 
       true ->
@@ -325,18 +359,29 @@ defmodule SuperPi.Plugins.Permissions do
   end
 
   defp risk(nil), do: "high"
-  defp risk(effects), do: if(Enum.any?(effects, &(&1 in ["exec", "net_write"])), do: "high", else: "medium")
+
+  defp risk(effects),
+    do: if(Enum.any?(effects, &(&1 in ["exec", "net_write"])), do: "high", else: "medium")
 
   # What a tool with these effects may do in plan mode. Reading is always allowed. Reading the
   # network is allowed unless `network_in_plan_mode` is false, because a GET changes nothing.
   # A tool with no declared effects is never allowed, except the read-only names.
   defp plan_allowed?(tool_name, effects, settings, _args) do
     cond do
-      tool_name in @read_only_tools -> true
-      effects == nil -> false
-      Enum.all?(effects, &(&1 == "read")) -> true
-      Enum.all?(effects, &(&1 in ["read", "net_read"])) -> Map.get(settings, "network_in_plan_mode", true) != false
-      true -> false
+      tool_name in @read_only_tools ->
+        true
+
+      effects == nil ->
+        false
+
+      Enum.all?(effects, &(&1 == "read")) ->
+        true
+
+      Enum.all?(effects, &(&1 in ["read", "net_read"])) ->
+        Map.get(settings, "network_in_plan_mode", true) != false
+
+      true ->
+        false
     end
   end
 
@@ -344,7 +389,9 @@ defmodule SuperPi.Plugins.Permissions do
   # read the network. A write to the filesystem, a command, a network write and a tool with no
   # declared effects are not here.
   defp safe_effects?(nil), do: false
-  defp safe_effects?(effects), do: Enum.all?(effects, &(&1 in ["read", "state_write", "net_read"]))
+
+  defp safe_effects?(effects),
+    do: Enum.all?(effects, &(&1 in ["read", "state_write", "net_read"]))
 
   @doc "The effective `network` policy: `\"allow\"` (default), `\"allowlist\"` or `\"deny\"`."
   @spec network_policy(map()) :: String.t()
@@ -377,7 +424,11 @@ defmodule SuperPi.Plugins.Permissions do
     with true <- is_binary(url),
          %URI{host: host} when is_binary(host) <- URI.parse(url) do
       host = String.downcase(host)
-      Enum.any?(hosts, fn h -> h = String.downcase(to_string(h)); host == h or String.ends_with?(host, "." <> h) end)
+
+      Enum.any?(hosts, fn h ->
+        h = String.downcase(to_string(h))
+        host == h or String.ends_with?(host, "." <> h)
+      end)
     else
       _ -> false
     end
@@ -517,8 +568,11 @@ defmodule SuperPi.Plugins.Permissions do
         key = if tool_name == "artifact_put", do: "path", else: "to_path"
 
         case Map.get(args, key) do
-          path when is_binary(path) and path != "" -> path_in_workspace?(path, agent_cfg, settings)
-          _ -> true
+          path when is_binary(path) and path != "" ->
+            path_in_workspace?(path, agent_cfg, settings)
+
+          _ ->
+            true
         end
 
       tool_name not in @path_tools ->
@@ -547,7 +601,9 @@ defmodule SuperPi.Plugins.Permissions do
         Map.get(args, :dir) || Map.get(args, :directory)
 
     raw_path =
-      if (not is_binary(raw_path) or raw_path == "") and tool_name in @list_tools, do: ".", else: raw_path
+      if (not is_binary(raw_path) or raw_path == "") and tool_name in @list_tools,
+        do: ".",
+        else: raw_path
 
     if not is_binary(raw_path) or raw_path == "" do
       false
@@ -567,7 +623,9 @@ defmodule SuperPi.Plugins.Permissions do
   def within?(path, root) when is_binary(path) and is_binary(root) do
     real_target = real_path(path)
     real_root = real_path(root)
-    real_root == "/" or real_target == real_root or String.starts_with?(real_target, real_root <> "/")
+
+    real_root == "/" or real_target == real_root or
+      String.starts_with?(real_target, real_root <> "/")
   end
 
   defp real_path(path) when is_binary(path) do

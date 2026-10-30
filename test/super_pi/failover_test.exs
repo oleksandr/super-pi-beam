@@ -15,7 +15,12 @@ defmodule SuperPi.FailoverTest do
   # A conversation with a user message and a generation task that was running on `owner_node`.
   defp interrupted(owner_node) do
     conv = Storage.create_conversation!(agent: %{"model" => "m"})
-    Storage.append_entry!(conv.id, "pi.message", %{"role" => "user", "content" => [%{"type" => "text", "text" => "finish this"}]})
+
+    Storage.append_entry!(conv.id, "pi.message", %{
+      "role" => "user",
+      "content" => [%{"type" => "text", "text" => "finish this"}]
+    })
+
     {:ok, task} = TaskEngine.create_task(conv.id, "pi.generation", %{"prompt" => "finish this"})
     {:ok, _} = TaskEngine.start_task(task.id)
     Repo.update_all(from(t in Task, where: t.id == ^task.id), set: [owner_node: owner_node])
@@ -46,7 +51,12 @@ defmodule SuperPi.FailoverTest do
   end
 
   defp assistant_texts(conv) do
-    Repo.all(from e in Entry, where: e.conversation_id == ^conv.id and e.kind == "pi.message", order_by: [asc: e.seq])
+    Repo.all(
+      from(e in Entry,
+        where: e.conversation_id == ^conv.id and e.kind == "pi.message",
+        order_by: [asc: e.seq]
+      )
+    )
     |> Enum.map(& &1.data)
     |> Enum.filter(&(&1["role"] == "assistant"))
     |> Enum.flat_map(& &1["content"])
@@ -86,7 +96,12 @@ defmodule SuperPi.FailoverTest do
 
   test "a task that was already pending is resumed" do
     conv = Storage.create_conversation!()
-    Storage.append_entry!(conv.id, "pi.message", %{"role" => "user", "content" => [%{"type" => "text", "text" => "q"}]})
+
+    Storage.append_entry!(conv.id, "pi.message", %{
+      "role" => "user",
+      "content" => [%{"type" => "text", "text" => "q"}]
+    })
+
     {:ok, task} = TaskEngine.create_task(conv.id, "pi.generation", %{"prompt" => "q"})
     start(conv)
     await_status(task.id, "completed")
@@ -120,7 +135,8 @@ defmodule SuperPi.FailoverTest do
     {:ok, _} = TaskEngine.start_task(parent.id)
     {:ok, child} = TaskEngine.create_task(conv.id, "pi.generation", %{}, owner_task_id: parent.id)
 
-    refute TaskEngine.next_pending_generation(conv.id) && TaskEngine.next_pending_generation(conv.id).id == child.id
+    refute TaskEngine.next_pending_generation(conv.id) &&
+             TaskEngine.next_pending_generation(conv.id).id == child.id
   end
 
   test "after the resumed turn the conversation takes new input" do

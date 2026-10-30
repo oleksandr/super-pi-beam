@@ -99,8 +99,12 @@ defmodule SuperPi.Harness.Defaults do
   @doc "Resolves a tool loadout against the tool catalog."
   @spec resolve_tools(:all | {:only, [String.t()]} | {:except, [String.t()]}) :: [map()]
   def resolve_tools(:all), do: Tools.active_llm_tools()
-  def resolve_tools({:only, names}), do: Enum.filter(Tools.active_llm_tools(), &(&1["name"] in names))
-  def resolve_tools({:except, names}), do: Enum.reject(Tools.active_llm_tools(), &(&1["name"] in names))
+
+  def resolve_tools({:only, names}),
+    do: Enum.filter(Tools.active_llm_tools(), &(&1["name"] in names))
+
+  def resolve_tools({:except, names}),
+    do: Enum.reject(Tools.active_llm_tools(), &(&1["name"] in names))
 
   defp sections([_ | _] = custom, _prompt, _module), do: custom
   defp sections(_, prompt, module), do: [%{"id" => "core", "content" => prompt || module.name()}]

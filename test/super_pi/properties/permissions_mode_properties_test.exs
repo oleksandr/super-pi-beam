@@ -10,7 +10,13 @@ defmodule SuperPi.Properties.PermissionsModeTest do
 
   @modes ["plan", "accept-edits", "auto"]
   @rank %{"plan" => 0, "accept-edits" => 1, "auto" => 2}
-  @forbidden ["dangerouslySkipPermissions", "settingsOverride", "workspacePaths", "appDataDir", "globalConfigDir"]
+  @forbidden [
+    "dangerouslySkipPermissions",
+    "settingsOverride",
+    "workspacePaths",
+    "appDataDir",
+    "globalConfigDir"
+  ]
 
   setup do
     saved = Application.fetch_env(:super_pi, :permissions)
@@ -45,7 +51,10 @@ defmodule SuperPi.Properties.PermissionsModeTest do
   defp limits, do: {member_of(@modes), member_of(@modes)}
 
   defp configure({default, ceiling}) do
-    Application.put_env(:super_pi, :permissions, remote_default_mode: default, remote_max_mode: ceiling)
+    Application.put_env(:super_pi, :permissions,
+      remote_default_mode: default,
+      remote_max_mode: ceiling
+    )
   end
 
   property "the result is a valid mode at or below the ceiling" do
@@ -88,10 +97,18 @@ defmodule SuperPi.Properties.PermissionsModeTest do
           ) do
       {low, high} = if @rank[low] <= @rank[high], do: {low, high}, else: {high, low}
 
-      Application.put_env(:super_pi, :permissions, remote_default_mode: default, remote_max_mode: low)
+      Application.put_env(:super_pi, :permissions,
+        remote_default_mode: default,
+        remote_max_mode: low
+      )
+
       at_low = Permissions.remote_mode(req)
 
-      Application.put_env(:super_pi, :permissions, remote_default_mode: default, remote_max_mode: high)
+      Application.put_env(:super_pi, :permissions,
+        remote_default_mode: default,
+        remote_max_mode: high
+      )
+
       at_high = Permissions.remote_mode(req)
 
       assert @rank[at_high] >= @rank[at_low]
@@ -100,8 +117,17 @@ defmodule SuperPi.Properties.PermissionsModeTest do
 
   property "sanitize removes forbidden keys, limits the mode, and keeps every other key" do
     check all(
-            others <- map_of(string(:alphanumeric, min_length: 1), one_of([integer(), string(:printable), boolean()]), max_length: 6),
-            forbidden <- list_of({member_of(@forbidden), one_of([boolean(), string(:printable), constant(%{"x" => 1}), constant(["/"])])}),
+            others <-
+              map_of(
+                string(:alphanumeric, min_length: 1),
+                one_of([integer(), string(:printable), boolean()]),
+                max_length: 6
+              ),
+            forbidden <-
+              list_of(
+                {member_of(@forbidden),
+                 one_of([boolean(), string(:printable), constant(%{"x" => 1}), constant(["/"])])}
+              ),
             mode <- one_of([constant(:absent), requested()]),
             limits <- limits(),
             max_runs: 200

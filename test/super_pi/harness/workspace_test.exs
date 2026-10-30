@@ -19,7 +19,9 @@ defmodule SuperPi.Harness.WorkspaceTest do
               max_runs: 30
             ) do
         line = String.duplicate("a", line_len)
-        raw_content = Enum.map(1..line_count, fn i -> "RULE_LINE_#{i}_#{line}" end) |> Enum.join("\n")
+
+        raw_content =
+          Enum.map(1..line_count, fn i -> "RULE_LINE_#{i}_#{line}" end) |> Enum.join("\n")
 
         truncated = Rules.truncate_rule_to_limit(raw_content, 24_000)
 
@@ -32,7 +34,9 @@ defmodule SuperPi.Harness.WorkspaceTest do
           assert byte_size(prefix) <= 24_000
         end
 
-        tmp_rule = Path.join(System.tmp_dir!(), "ws_rule_#{System.unique_integer([:positive])}.md")
+        tmp_rule =
+          Path.join(System.tmp_dir!(), "ws_rule_#{System.unique_integer([:positive])}.md")
+
         File.write!(tmp_rule, raw_content)
 
         rendered = Rules.build_rules_section([tmp_rule], token_budget)
@@ -65,12 +69,23 @@ defmodule SuperPi.Harness.WorkspaceTest do
 
     property "HooksJson matcher_matches? accurately matches wildcard, exact tool name, and alternation regexes" do
       check all(
-              tool_name <- member_of(["run_command", "view_file", "browser_navigate", "browser_click", "edit"]),
+              tool_name <-
+                member_of([
+                  "run_command",
+                  "view_file",
+                  "browser_navigate",
+                  "browser_click",
+                  "edit"
+                ]),
               max_runs: 30
             ) do
         assert HooksJson.matcher_matches?("*", tool_name)
         assert HooksJson.matcher_matches?("", tool_name)
-        assert HooksJson.matcher_matches?(tool_name, "CORTEX_STEP_TYPE_" <> String.upcase(tool_name))
+
+        assert HooksJson.matcher_matches?(
+                 tool_name,
+                 "CORTEX_STEP_TYPE_" <> String.upcase(tool_name)
+               )
 
         assert HooksJson.matcher_matches?("run_command|view_file", "run_command")
         assert HooksJson.matcher_matches?("run_command|view_file", "view_file")
@@ -85,8 +100,11 @@ defmodule SuperPi.Harness.WorkspaceTest do
     end
 
     test "discovers skills and rules from workspace directories" do
-      tmp_ws = Path.join(System.tmp_dir!(), "ws_ws_discovery_#{System.unique_integer([:positive])}")
+      tmp_ws =
+        Path.join(System.tmp_dir!(), "ws_ws_discovery_#{System.unique_integer([:positive])}")
+
       File.mkdir_p!(Path.join(tmp_ws, ".agents/skills/custom-skill"))
+
       File.write!(Path.join(tmp_ws, ".agents/skills/custom-skill/SKILL.md"), """
       ---
       name: custom-skill
@@ -94,6 +112,7 @@ defmodule SuperPi.Harness.WorkspaceTest do
       ---
       # Custom Skill
       """)
+
       File.write!(Path.join(tmp_ws, "AGENTS.md"), "# Project Agent Rules\n")
 
       skills = Discovery.discover_skills([tmp_ws])
@@ -115,7 +134,8 @@ defmodule SuperPi.Harness.WorkspaceTest do
           "SessionStart" => [
             %{
               "type" => "command",
-              "command" => ~s(echo '{"injectSteps":[{"systemMessage":{"systemMessage":"CUSTOM_HOOK_STARTUP_ACTIVE"}}]}')
+              "command" =>
+                ~s(echo '{"injectSteps":[{"systemMessage":{"systemMessage":"CUSTOM_HOOK_STARTUP_ACTIVE"}}]}')
             }
           ]
         },
@@ -126,7 +146,8 @@ defmodule SuperPi.Harness.WorkspaceTest do
               "hooks" => [
                 %{
                   "type" => "command",
-                  "command" => ~s(echo '{"decision":"allow","overwrite":{"rewritten_by_hook":"yes"}}')
+                  "command" =>
+                    ~s(echo '{"decision":"allow","overwrite":{"rewritten_by_hook":"yes"}}')
                 }
               ]
             }
@@ -188,11 +209,25 @@ defmodule SuperPi.Harness.WorkspaceTest do
       assert Enum.any?(derived.system_sections, &(&1["content"] == "CUSTOM_HOOK_STARTUP_ACTIVE"))
 
       tool_msg = Enum.find(derived.messages, &(&1["role"] == "tool"))
-      assert String.contains?(tool_msg["content"], "[Hook Notice: PreToolUse rewrote tool arguments for keys: rewritten_by_hook]")
+
+      assert String.contains?(
+               tool_msg["content"],
+               "[Hook Notice: PreToolUse rewrote tool arguments for keys: rewritten_by_hook]"
+             )
+
       assert String.contains?(tool_msg["content"], "saw_rewritten=yes")
 
       # Verify dual-write transcript.jsonl and transcript_full.jsonl were created
-      transcript_file = Path.join([tmp_ws, "brain", to_string(conv_id), ".system_generated", "logs", "transcript.jsonl"])
+      transcript_file =
+        Path.join([
+          tmp_ws,
+          "brain",
+          to_string(conv_id),
+          ".system_generated",
+          "logs",
+          "transcript.jsonl"
+        ])
+
       assert File.regular?(transcript_file)
 
       File.rm_rf!(tmp_ws)
@@ -209,7 +244,11 @@ defmodule SuperPi.Harness.WorkspaceTest do
       {0, agents_out} = CLI.run(["agents"])
       assert String.contains?(agents_out, "super-pi-planner")
 
-      {0, _} = CLI.run(["mcp", "add", "sqlite-helper", "sqlite-mcp", "/tmp/test.db"], global_config_dir: tmp_cfg)
+      {0, _} =
+        CLI.run(["mcp", "add", "sqlite-helper", "sqlite-mcp", "/tmp/test.db"],
+          global_config_dir: tmp_cfg
+        )
+
       {0, mcp_list_out} = CLI.run(["mcp", "list"], global_config_dir: tmp_cfg)
       assert String.contains?(mcp_list_out, "sqlite-helper")
       assert String.contains?(mcp_list_out, "enabled")
@@ -221,7 +260,14 @@ defmodule SuperPi.Harness.WorkspaceTest do
       # Test stream-json input/output format
       {0, stream_out} =
         CLI.run(
-          ["--input-format", "stream-json", "--output-format", "stream-json", "--model", "test-echo"],
+          [
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--model",
+            "test-echo"
+          ],
           stdin_lines: [~s({"prompt":"turn one"}), ~s({"prompt":"turn two"})],
           app_data_dir: tmp_cfg
         )

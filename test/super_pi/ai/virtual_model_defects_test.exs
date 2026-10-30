@@ -13,7 +13,6 @@ defmodule SuperPi.AI.VirtualModelDefectsTest do
   alias SuperPi.Durable.Doc
   alias SuperPi.Durable.Storage
 
-
   defp attempt(fun) do
     {:ok, fun.()}
   rescue
@@ -39,7 +38,9 @@ defmodule SuperPi.AI.VirtualModelDefectsTest do
 
       ids =
         1..12
-        |> Enum.map(fn _ -> Task.async(fn -> VirtualModel.ensure_provider_session!(conv.id, :anthropic, "m") end) end)
+        |> Enum.map(fn _ ->
+          Task.async(fn -> VirtualModel.ensure_provider_session!(conv.id, :anthropic, "m") end)
+        end)
         |> Enum.map(&Task.await(&1, 10_000))
         |> Enum.map(& &1["sessionId"])
         |> Enum.uniq()
@@ -62,12 +63,16 @@ defmodule SuperPi.AI.VirtualModelDefectsTest do
   describe "resolve/2 (virtual_model.ex:58-75,108-111)" do
     test "an unknown provider prefix is not silently mapped to anthropic" do
       result = attempt(fn -> VirtualModel.resolve("mistral/large") end)
-      refute match?({:ok, %{provider: :anthropic}}, result), "unknown provider fell back to :anthropic"
+
+      refute match?({:ok, %{provider: :anthropic}}, result),
+             "unknown provider fell back to :anthropic"
     end
 
     test "a bare non-Claude model name is not silently routed to anthropic" do
       result = attempt(fn -> VirtualModel.resolve("gpt-5") end)
-      refute match?({:ok, %{provider: :anthropic}}, result), "gpt-5 resolved to the anthropic provider"
+
+      refute match?({:ok, %{provider: :anthropic}}, result),
+             "gpt-5 resolved to the anthropic provider"
     end
 
     test "an empty model spec is rejected instead of producing model \"\"" do

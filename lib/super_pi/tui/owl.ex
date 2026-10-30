@@ -121,6 +121,7 @@ defmodule SuperPi.TUI.Owl do
 
       trimmed == "/context" ->
         derived = Context.derive(conversation_id)
+
         "Derived context: #{length(derived.messages)} messages, #{length(derived.tools)} active tools."
 
       true ->

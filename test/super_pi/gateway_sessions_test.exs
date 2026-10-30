@@ -8,7 +8,7 @@ defmodule SuperPi.GatewaySessionsTest do
   alias SuperPi.Durable.Storage
   alias SuperPi.Gateway.Sessions
 
-  defp conversations, do: Repo.one(from c in Conversation, select: count(c.id))
+  defp conversations, do: Repo.one(from(c in Conversation, select: count(c.id)))
   defp make, do: fn -> Storage.create_conversation!() end
 
   test "a session id maps to the same conversation, per principal" do
@@ -22,7 +22,9 @@ defmodule SuperPi.GatewaySessionsTest do
   test "the mapping is in the table, so it does not depend on any process or cache" do
     {conv, true} = Sessions.fetch_or_create("alice", "durable", make())
     # Drop everything node-local that the old implementation used.
-    for table <- [:super_pi_gateway_sessions, :super_pi_doc_cache], :ets.whereis(table) != :undefined, do: :ets.delete_all_objects(table)
+    for table <- [:super_pi_gateway_sessions, :super_pi_doc_cache],
+        :ets.whereis(table) != :undefined,
+        do: :ets.delete_all_objects(table)
 
     assert Sessions.lookup("alice", "durable") == conv
     assert {^conv, false} = Sessions.fetch_or_create("alice", "durable", make())
@@ -31,7 +33,13 @@ defmodule SuperPi.GatewaySessionsTest do
   test "a race for a new session leaves one mapping and one conversation" do
     before = conversations()
 
-    results = 1..6 |> Task.async_stream(fn _ -> Sessions.fetch_or_create("alice", "race", make()) end, max_concurrency: 6, timeout: 10_000) |> Enum.map(fn {:ok, r} -> r end)
+    results =
+      1..6
+      |> Task.async_stream(fn _ -> Sessions.fetch_or_create("alice", "race", make()) end,
+        max_concurrency: 6,
+        timeout: 10_000
+      )
+      |> Enum.map(fn {:ok, r} -> r end)
 
     assert results |> Enum.map(&elem(&1, 0)) |> Enum.uniq() |> length() == 1
     assert Enum.count(results, &match?({_, true}, &1)) == 1
@@ -45,7 +53,11 @@ defmodule SuperPi.GatewaySessionsTest do
 
     {_, true} = Sessions.fetch_or_create("alice", "old", make())
     old = DateTime.add(DateTime.utc_now(), -3 * 86_400, :second)
-    Repo.update_all(from(s in Sessions.Row, where: s.session_id == "old"), set: [last_used_at: old])
+
+    Repo.update_all(from(s in Sessions.Row, where: s.session_id == "old"),
+      set: [last_used_at: old]
+    )
+
     {_, true} = Sessions.fetch_or_create("alice", "new", make())
 
     assert Sessions.lookup("alice", "old") == nil
@@ -54,7 +66,7 @@ defmodule SuperPi.GatewaySessionsTest do
 
   test "deleting a conversation deletes its session" do
     {conv, true} = Sessions.fetch_or_create("alice", "gone", make())
-    Repo.delete_all(from c in Conversation, where: c.id == ^conv)
+    Repo.delete_all(from(c in Conversation, where: c.id == ^conv))
     assert Sessions.lookup("alice", "gone") == nil
   end
 end

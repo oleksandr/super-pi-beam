@@ -55,7 +55,9 @@ defmodule SuperPi.Conversation.MachineTest do
               max_runs: 25
             ) do
         conv = Storage.create_conversation!()
-        {:ok, pid} = Machine.start_link(conversation_id: conv.id, extensions: [TestAuditExtension])
+
+        {:ok, pid} =
+          Machine.start_link(conversation_id: conv.id, extensions: [TestAuditExtension])
 
         Enum.each(ops, fn {mode, text} ->
           res = Machine.submit(pid, text, mode: mode)
@@ -118,7 +120,9 @@ defmodule SuperPi.Conversation.MachineTest do
           "output" => "ok:#{args["target"]}",
           "structured_output" => %{"status" => "ok"},
           "details" => %{"ran" => true},
-          "control" => %{"add_tools" => [%{"name" => "newly_activated_tool", "description" => "dynamic"}]}
+          "control" => %{
+            "add_tools" => [%{"name" => "newly_activated_tool", "description" => "dynamic"}]
+          }
         }
       end
 

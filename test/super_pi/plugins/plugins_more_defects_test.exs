@@ -19,7 +19,6 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
   alias SuperPi.Plugins.{ConfirmDestructive, CustomCompaction, Handoff, JevRouter, Todo}
   alias SuperPi.TUI.Owl, as: OwlTUI
 
-
   setup do
     SuperPi.Tools.ensure_catalog_ets!()
     :ok
@@ -54,18 +53,25 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
   describe "code_mode/journal.ex (:29-52)" do
     test "same call index with different args does not return the cached result" do
       task_id = 4_001
-      {:executed, _} = Journal.execute_journaled_tool(task_id, 0, "read", %{"path" => "a"}, fn _, _ -> "A" end)
 
-      result = Journal.execute_journaled_tool(task_id, 0, "read", %{"path" => "b"}, fn _, _ -> "B" end)
+      {:executed, _} =
+        Journal.execute_journaled_tool(task_id, 0, "read", %{"path" => "a"}, fn _, _ -> "A" end)
 
-      assert result == {:executed, "B"}, "got stale cached result for different args: #{inspect(result)}"
+      result =
+        Journal.execute_journaled_tool(task_id, 0, "read", %{"path" => "b"}, fn _, _ -> "B" end)
+
+      assert result == {:executed, "B"},
+             "got stale cached result for different args: #{inspect(result)}"
     end
 
     test "a tool-name mismatch at a recorded index is not silently overwritten" do
       task_id = 4_002
       {:executed, _} = Journal.execute_journaled_tool(task_id, 0, "read", %{}, fn _, _ -> "R" end)
 
-      result = attempt(fn -> Journal.execute_journaled_tool(task_id, 0, "write", %{}, fn _, _ -> "W" end) end)
+      result =
+        attempt(fn ->
+          Journal.execute_journaled_tool(task_id, 0, "write", %{}, fn _, _ -> "W" end)
+        end)
 
       refute match?({:ok, {:executed, _}}, result),
              "journal diverged from the recorded script but silently re-executed and overwrote the step"
@@ -75,13 +81,17 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
       task_id = 4_003
       fresh_value = %{status: :ok, items: [1, 2]}
 
-      {:executed, fresh} = Journal.execute_journaled_tool(task_id, 0, "t", %{}, fn _, _ -> fresh_value end)
+      {:executed, fresh} =
+        Journal.execute_journaled_tool(task_id, 0, "t", %{}, fn _, _ -> fresh_value end)
 
       # Simulate a node restart: the ETS cache is gone, the DB copy is JSON.
       :ets.delete_all_objects(:super_pi_doc_cache)
-      {:replayed, replayed} = Journal.execute_journaled_tool(task_id, 0, "t", %{}, fn _, _ -> flunk("re-executed") end)
 
-      assert fresh == replayed, "fresh #{inspect(fresh)} differs from replayed #{inspect(replayed)}"
+      {:replayed, replayed} =
+        Journal.execute_journaled_tool(task_id, 0, "t", %{}, fn _, _ -> flunk("re-executed") end)
+
+      assert fresh == replayed,
+             "fresh #{inspect(fresh)} differs from replayed #{inspect(replayed)}"
     end
 
     test "a non-JSON result does not crash after the side effect already ran" do
@@ -89,7 +99,9 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
 
       result =
         attempt(fn ->
-          Journal.execute_journaled_tool(task_id, 0, "t", %{}, fn _, _ -> {:ok, "tuple result"} end)
+          Journal.execute_journaled_tool(task_id, 0, "t", %{}, fn _, _ ->
+            {:ok, "tuple result"}
+          end)
         end)
 
       assert match?({:ok, {:executed, _}}, result),
@@ -117,7 +129,11 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
     end
 
     test "assistant message with string content renders" do
-      assert {:ok, out} = attempt(fn -> OwlTUI.render_assistant_message(%{"role" => "assistant", "content" => "hi"}) end)
+      assert {:ok, out} =
+               attempt(fn ->
+                 OwlTUI.render_assistant_message(%{"role" => "assistant", "content" => "hi"})
+               end)
+
       assert out =~ "hi"
     end
 
@@ -156,7 +172,12 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
           data: %{
             "role" => "assistant",
             "content" => [
-              %{"type" => "tool_call", "id" => "c1", "name" => "write", "arguments" => %{"path" => "lib/changed.ex"}}
+              %{
+                "type" => "tool_call",
+                "id" => "c1",
+                "name" => "write",
+                "arguments" => %{"path" => "lib/changed.ex"}
+              }
             ]
           }
         },
@@ -180,7 +201,10 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
 
     test "a caller-supplied opts[:summary] is honoured" do
       assert {:compacted, "my summary", _} =
-               CustomCompaction.before_compact(%{entries: entries(), opts: [summary: "my summary"]}, %{})
+               CustomCompaction.before_compact(
+                 %{entries: entries(), opts: [summary: "my summary"]},
+                 %{}
+               )
     end
   end
 
@@ -188,11 +212,17 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
     test "child session inherits the parent's model" do
       parent = Storage.create_conversation!(agent: %{"model" => "parent-model"})
 
-      res = Handoff.wrap_tool("handoff", %{"goal" => "g", "summary" => "s"}, fn _ -> %{} end, %{conversation_id: parent.id})
+      res =
+        Handoff.wrap_tool("handoff", %{"goal" => "g", "summary" => "s"}, fn _ -> %{} end, %{
+          conversation_id: parent.id
+        })
+
       child_id = res["structured_output"]["child_conversation_id"]
 
       agent = Doc.snapshot("conversation", child_id, "pi.agent")
-      assert agent["model"] == "parent-model", "child pi.agent has no parent model: #{inspect(Map.keys(agent))}"
+
+      assert agent["model"] == "parent-model",
+             "child pi.agent has no parent model: #{inspect(Map.keys(agent))}"
     end
   end
 
@@ -208,14 +238,19 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
 
     for plugin <- plugins do
       test "#{inspect(plugin)} tolerates a nil tools list" do
-        assert {:ok, {:ok, _cfg}} = attempt(fn -> unquote(plugin).before_agent_start(%{"tools" => nil}, %{}) end)
+        assert {:ok, {:ok, _cfg}} =
+                 attempt(fn -> unquote(plugin).before_agent_start(%{"tools" => nil}, %{}) end)
       end
     end
   end
 
   describe "plugins/confirm_destructive.ex (:30)" do
     test "block message does not promise a confirmation step that does not exist" do
-      assert {:block, msg} = ConfirmDestructive.before_tool("bash", %{"command" => "rm -rf /tmp/x"}, %{config: []})
+      assert {:block, msg} =
+               ConfirmDestructive.before_tool("bash", %{"command" => "rm -rf /tmp/x"}, %{
+                 config: []
+               })
+
       refute msg =~ ~r/confirmation required/i
     end
   end
@@ -242,7 +277,10 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
       conv = Storage.create_conversation!()
 
       # Invalid UTF-8 cannot be JSON-encoded, so persisting the todo list fails.
-      res = Todo.wrap_tool("todo", %{"action" => "add", "text" => <<255, 254>>}, fn _ -> %{} end, %{conversation_id: conv.id})
+      res =
+        Todo.wrap_tool("todo", %{"action" => "add", "text" => <<255, 254>>}, fn _ -> %{} end, %{
+          conversation_id: conv.id
+        })
 
       assert res["is_error"] == true, "tool reported success although nothing was persisted"
     end

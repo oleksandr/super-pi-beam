@@ -12,7 +12,11 @@ defmodule SuperPi.AI.Providers do
      error. There is no silent fallback.
   """
 
-  @default_providers [SuperPi.AI.Providers.Gemini, SuperPi.AI.Providers.Anthropic, SuperPi.AI.Providers.OpenAI]
+  @default_providers [
+    SuperPi.AI.Providers.Gemini,
+    SuperPi.AI.Providers.Anthropic,
+    SuperPi.AI.Providers.OpenAI
+  ]
 
   @type error ::
           {:no_provider, String.t()}
@@ -59,7 +63,8 @@ defmodule SuperPi.AI.Providers do
   @doc "Human-readable message for a resolution error."
   @spec format_error(error()) :: String.t()
   def format_error({:no_provider, model}),
-    do: "No provider is registered for model #{model}. Register one in config :super_pi, :providers."
+    do:
+      "No provider is registered for model #{model}. Register one in config :super_pi, :providers."
 
   def format_error({:not_configured, id}),
     do: "Provider #{id} is not configured (missing API key or settings)."

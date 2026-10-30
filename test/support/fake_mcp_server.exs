@@ -9,9 +9,15 @@ defmodule FakeMCP do
 
   defp loop do
     case IO.gets("") do
-      :eof -> :ok
-      {:error, _} -> :ok
-      line -> line |> String.trim() |> handle(); loop()
+      :eof ->
+        :ok
+
+      {:error, _} ->
+        :ok
+
+      line ->
+        line |> String.trim() |> handle()
+        loop()
     end
   end
 
@@ -37,8 +43,14 @@ defmodule FakeMCP do
 
       %{"method" => "tools/list", "id" => id} = msg ->
         case get_in(msg, ["params", "cursor"]) do
-          nil -> reply(id, %{"tools" => [tool("echo", "Echo the text"), tool("fail", "Always fails")], "nextCursor" => "p2"})
-          "p2" -> reply(id, %{"tools" => [tool("slow", "Sleeps"), tool("crash", "Exits")]})
+          nil ->
+            reply(id, %{
+              "tools" => [tool("echo", "Echo the text"), tool("fail", "Always fails")],
+              "nextCursor" => "p2"
+            })
+
+          "p2" ->
+            reply(id, %{"tools" => [tool("slow", "Sleeps"), tool("crash", "Exits")]})
         end
 
       %{"method" => "tools/call", "id" => id, "params" => %{"name" => name} = params} ->
@@ -48,24 +60,49 @@ defmodule FakeMCP do
         reply(id, %{})
 
       %{"id" => id} ->
-        send_json(%{"jsonrpc" => "2.0", "id" => id, "error" => %{"code" => -32601, "message" => "unknown method"}})
+        send_json(%{
+          "jsonrpc" => "2.0",
+          "id" => id,
+          "error" => %{"code" => -32601, "message" => "unknown method"}
+        })
 
       _ ->
         :ok
     end
   end
 
-  defp call(id, "echo", args), do: reply(id, %{"content" => [%{"type" => "text", "text" => "echo: " <> to_string(args["text"])}]})
-  defp call(id, "fail", _), do: reply(id, %{"content" => [%{"type" => "text", "text" => "boom"}], "isError" => true})
-  defp call(id, "slow", _), do: (Process.sleep(2_000); reply(id, %{"content" => [%{"type" => "text", "text" => "late"}]}))
+  defp call(id, "echo", args),
+    do:
+      reply(id, %{
+        "content" => [%{"type" => "text", "text" => "echo: " <> to_string(args["text"])}]
+      })
+
+  defp call(id, "fail", _),
+    do: reply(id, %{"content" => [%{"type" => "text", "text" => "boom"}], "isError" => true})
+
+  defp call(id, "slow", _),
+    do:
+      (
+        Process.sleep(2_000)
+        reply(id, %{"content" => [%{"type" => "text", "text" => "late"}]})
+      )
+
   defp call(_id, "crash", _), do: System.halt(3)
 
   defp call(id, name, _) do
-    send_json(%{"jsonrpc" => "2.0", "id" => id, "error" => %{"code" => -32602, "message" => "unknown tool: " <> name}})
+    send_json(%{
+      "jsonrpc" => "2.0",
+      "id" => id,
+      "error" => %{"code" => -32602, "message" => "unknown tool: " <> name}
+    })
   end
 
   defp tool(name, description) do
-    %{"name" => name, "description" => description, "inputSchema" => %{"type" => "object", "properties" => %{"text" => %{"type" => "string"}}}}
+    %{
+      "name" => name,
+      "description" => description,
+      "inputSchema" => %{"type" => "object", "properties" => %{"text" => %{"type" => "string"}}}
+    }
   end
 
   defp reply(id, result), do: send_json(%{"jsonrpc" => "2.0", "id" => id, "result" => result})

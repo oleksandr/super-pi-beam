@@ -20,17 +20,20 @@ defmodule SuperPi.Gateway.Router do
   alias SuperPi.Harness
   alias SuperPi.Repo
 
-  plug Plug.Logger, log: :debug
-  plug :match
-  plug :trace_request
-  plug :authenticate
-  plug :reject_when_draining
-  plug :webhook_trigger
-  plug Plug.Parsers,
+  plug(Plug.Logger, log: :debug)
+  plug(:match)
+  plug(:trace_request)
+  plug(:authenticate)
+  plug(:reject_when_draining)
+  plug(:webhook_trigger)
+
+  plug(Plug.Parsers,
     parsers: [:json],
     pass: ["application/json"],
     json_decoder: Jason
-  plug :dispatch
+  )
+
+  plug(:dispatch)
 
   def call(conn, opts) do
     try do
@@ -94,7 +97,8 @@ defmodule SuperPi.Gateway.Router do
       "connected_nodes" => names.(status.connected_nodes),
       "registry_members" => names.(status.registry_members),
       "supervisor_members" => names.(status.supervisor_members),
-      "machines_per_node" => Map.new(status.machines_per_node, fn {n, c} -> {Atom.to_string(n), c} end),
+      "machines_per_node" =>
+        Map.new(status.machines_per_node, fn {n, c} -> {Atom.to_string(n), c} end),
       "machine_count" => status.machine_count,
       "machine_supervision" => Atom.to_string(status.machine_supervision),
       "accepting" => status.accepting?,
@@ -114,7 +118,7 @@ defmodule SuperPi.Gateway.Router do
   end
 
   # MCP over Streamable HTTP. Authentication, tracing and error handling above apply to it.
-  forward "/mcp", to: SuperPi.MCP.HTTPPlug
+  forward("/mcp", to: SuperPi.MCP.HTTPPlug)
 
   get "/v1/models" do
     now = System.system_time(:second)
@@ -172,7 +176,9 @@ defmodule SuperPi.Gateway.Router do
         harness = if Harness.harness?(model), do: Harness.resolve(model), else: Harness.default()
         requested_mode = requested_mode(conn, params)
 
-        Logger.debug("[Gateway] 📥 Received POST /v1/chat/completions | model: #{model} (harness: #{harness.id()}) | stream: #{stream?} | messages: #{length(messages)}")
+        Logger.debug(
+          "[Gateway] 📥 Received POST /v1/chat/completions | model: #{model} (harness: #{harness.id()}) | stream: #{stream?} | messages: #{length(messages)}"
+        )
 
         # 1. Resolve or create durable conversation
         {conv_id, new_session?} = resolve_conversation(conn, params)
@@ -207,7 +213,9 @@ defmodule SuperPi.Gateway.Router do
 
           # A request that names a mode changes it for this session, within the ceiling.
           if requested_mode do
-            Storage.configure_agent!(conv_id, %{"executionMode" => Map.fetch!(agent_cfg, "executionMode")})
+            Storage.configure_agent!(conv_id, %{
+              "executionMode" => Map.fetch!(agent_cfg, "executionMode")
+            })
           end
         end
 
@@ -219,7 +227,8 @@ defmodule SuperPi.Gateway.Router do
         # 4. Start or update conversation machine with harness extensions
         extensions = Harness.remote_extensions(harness)
 
-        pid = SuperPi.Conversation.Locator.ensure_started!(conv_id, extensions, set_extensions: true)
+        pid =
+          SuperPi.Conversation.Locator.ensure_started!(conv_id, extensions, set_extensions: true)
 
         # 5. Handle Streaming vs Non-Streaming
         if stream? do
@@ -246,7 +255,7 @@ defmodule SuperPi.Gateway.Router do
   end
 
   # AG-UI streams (`SuperPi.Gateway.AGUI`). They share this router's authentication and drain plugs.
-  forward "/agui/v1", to: SuperPi.Gateway.AGUI
+  forward("/agui/v1", to: SuperPi.Gateway.AGUI)
 
   match _ do
     send_json(conn, 404, %{
@@ -299,7 +308,10 @@ defmodule SuperPi.Gateway.Router do
       %{"role" => "assistant", "tool_calls" => calls} when is_list(calls) ->
         Enum.find_value(calls, fn tc ->
           args = get_in(tc, ["function", "arguments"])
-          if match?({:ok, _}, decode_tool_arguments(args)), do: nil, else: Map.get(tc, "id") || "unknown"
+
+          if match?({:ok, _}, decode_tool_arguments(args)),
+            do: nil,
+            else: Map.get(tc, "id") || "unknown"
         end)
 
       _ ->
@@ -383,7 +395,9 @@ defmodule SuperPi.Gateway.Router do
               _ -> nil
             end)
             |> case do
-              nil -> "Chat Session"
+              nil ->
+                "Chat Session"
+
               text ->
                 text
                 |> String.trim()
@@ -418,7 +432,13 @@ defmodule SuperPi.Gateway.Router do
         "object" => "chat.completion.chunk",
         "created" => now,
         "model" => model,
-        "choices" => [%{"index" => 0, "delta" => %{"role" => "assistant", "content" => ""}, "finish_reason" => nil}]
+        "choices" => [
+          %{
+            "index" => 0,
+            "delta" => %{"role" => "assistant", "content" => ""},
+            "finish_reason" => nil
+          }
+        ]
       }
 
       delta_chunk = %{
@@ -426,7 +446,9 @@ defmodule SuperPi.Gateway.Router do
         "object" => "chat.completion.chunk",
         "created" => now,
         "model" => model,
-        "choices" => [%{"index" => 0, "delta" => %{"content" => title_text}, "finish_reason" => nil}]
+        "choices" => [
+          %{"index" => 0, "delta" => %{"content" => title_text}, "finish_reason" => nil}
+        ]
       }
 
       stop_chunk = %{
@@ -476,8 +498,18 @@ defmodule SuperPi.Gateway.Router do
   end
 
   # A draining node takes no new turns. The client retries and reaches another node.
-  defp reject_when_draining(%Plug.Conn{method: "POST", request_path: "/v1/chat/completions"} = conn, _opts), do: drain_gate(conn)
-  defp reject_when_draining(%Plug.Conn{method: "POST", path_info: ["v1", "triggers", _]} = conn, _opts), do: drain_gate(conn)
+  defp reject_when_draining(
+         %Plug.Conn{method: "POST", request_path: "/v1/chat/completions"} = conn,
+         _opts
+       ),
+       do: drain_gate(conn)
+
+  defp reject_when_draining(
+         %Plug.Conn{method: "POST", path_info: ["v1", "triggers", _]} = conn,
+         _opts
+       ),
+       do: drain_gate(conn)
+
   defp reject_when_draining(conn, _opts), do: conn
 
   defp drain_gate(conn) do
@@ -499,7 +531,10 @@ defmodule SuperPi.Gateway.Router do
 
   # `POST /v1/triggers/:token` (`SuperPi.Triggers`). It runs before the JSON parser: it reads a
   # capped body of its own, and the token it checks is not the gateway bearer token.
-  defp webhook_trigger(%Plug.Conn{method: "POST", path_info: ["v1", "triggers", token]} = conn, _opts) do
+  defp webhook_trigger(
+         %Plug.Conn{method: "POST", path_info: ["v1", "triggers", token]} = conn,
+         _opts
+       ) do
     conn |> SuperPi.Triggers.handle(token) |> halt()
   end
 
@@ -525,7 +560,8 @@ defmodule SuperPi.Gateway.Router do
   # a registered provider serves (passed through to that provider). Anything else is a
   # client error, as in other OpenAI-compatible gateways, so a typo never silently runs
   # some other model. Auxiliary title requests are not checked.
-  defp validate_model(%{"model" => model, "messages" => messages}) when is_binary(model) and is_list(messages) do
+  defp validate_model(%{"model" => model, "messages" => messages})
+       when is_binary(model) and is_list(messages) do
     cond do
       title_request?(messages) ->
         :ok
@@ -554,7 +590,8 @@ defmodule SuperPi.Gateway.Router do
   # `/` and `/health` stay open so probes work. Everything else needs a configured token
   # (`SuperPi.Auth`). With no tokens configured the gateway is open, which is safe only on
   # loopback; `SuperPi.Gateway.Server` refuses a non-loopback bind without a token.
-  defp authenticate(%Plug.Conn{request_path: path} = conn, _opts) when path in ["/", "/health", "/ready"] do
+  defp authenticate(%Plug.Conn{request_path: path} = conn, _opts)
+       when path in ["/", "/health", "/ready"] do
     assign(conn, :principal, Auth.anonymous())
   end
 
@@ -597,7 +634,9 @@ defmodule SuperPi.Gateway.Router do
 
     session_id =
       case get_req_header(conn, "x-session-id") do
-        [id | _] when id != "" -> id
+        [id | _] when id != "" ->
+          id
+
         _ ->
           case get_req_header(conn, "session-id") do
             [id | _] when id != "" -> id
@@ -616,18 +655,29 @@ defmodule SuperPi.Gateway.Router do
         # Sessions are per principal: two clients that pick the same id do not share a conversation.
         # Stored in the database (`SuperPi.Gateway.Sessions`): survives a restart and is shared by
         # every node. The local lock only avoids creating a conversation twice on this node.
-        :global.trans({{:gateway_session, {principal, session_id}}, self()}, fn ->
-          {conv_id, new?} =
-            Sessions.fetch_or_create(principal, session_id, fn -> new_conversation(principal) end)
+        :global.trans(
+          {{:gateway_session, {principal, session_id}}, self()},
+          fn ->
+            {conv_id, new?} =
+              Sessions.fetch_or_create(principal, session_id, fn ->
+                new_conversation(principal)
+              end)
 
-          if new? do
-            Logger.info("[Gateway] 🆕 Mapped new session '#{session_id}' to conversation ##{conv_id}")
-          else
-            Logger.info("[Gateway] 🔗 Mapped session '#{session_id}' to existing conversation ##{conv_id}")
-          end
+            if new? do
+              Logger.info(
+                "[Gateway] 🆕 Mapped new session '#{session_id}' to conversation ##{conv_id}"
+              )
+            else
+              Logger.info(
+                "[Gateway] 🔗 Mapped session '#{session_id}' to existing conversation ##{conv_id}"
+              )
+            end
 
-          {conv_id, new?}
-        end, [node()], :infinity)
+            {conv_id, new?}
+          end,
+          [node()],
+          :infinity
+        )
 
       header_conv_id != nil ->
         case Integer.parse(to_string(header_conv_id)) do
@@ -640,13 +690,21 @@ defmodule SuperPi.Gateway.Router do
                   {int_id, false}
                 else
                   conv = new_conversation(principal)
-                  Logger.info("[Gateway] 🆕 Created conversation ##{conv.id} (requested ##{int_id} not available)")
+
+                  Logger.info(
+                    "[Gateway] 🆕 Created conversation ##{conv.id} (requested ##{int_id} not available)"
+                  )
+
                   {conv.id, true}
                 end
 
               nil ->
                 conv = new_conversation(principal)
-                Logger.info("[Gateway] 🆕 Created conversation ##{conv.id} (requested ##{int_id} not found)")
+
+                Logger.info(
+                  "[Gateway] 🆕 Created conversation ##{conv.id} (requested ##{int_id} not found)"
+                )
+
                 {conv.id, true}
             end
 
@@ -696,6 +754,7 @@ defmodule SuperPi.Gateway.Router do
           case role do
             "user" ->
               content = extract_content_text(Map.get(m, "content", ""))
+
               if content != "" do
                 Storage.append_entry!(conv_id, "pi.message", %{
                   "role" => "user",
@@ -709,9 +768,14 @@ defmodule SuperPi.Gateway.Router do
 
               content_blocks =
                 cond do
-                  is_list(content_raw) -> content_raw
-                  is_binary(content_raw) and content_raw != "" -> [%{"type" => "text", "text" => content_raw}]
-                  true -> []
+                  is_list(content_raw) ->
+                    content_raw
+
+                  is_binary(content_raw) and content_raw != "" ->
+                    [%{"type" => "text", "text" => content_raw}]
+
+                  true ->
+                    []
                 end
 
               content_blocks =
@@ -721,20 +785,24 @@ defmodule SuperPi.Gateway.Router do
                     # Checked in `validate_chat_params/1`.
                     {:ok, args} = decode_tool_arguments(Map.get(func, "arguments"))
 
-                    acc ++ [
-                      %{
-                        "type" => "tool_call",
-                        "id" => Map.get(tc, "id"),
-                        "name" => Map.get(func, "name"),
-                        "arguments" => args
-                      }
-                    ]
+                    acc ++
+                      [
+                        %{
+                          "type" => "tool_call",
+                          "id" => Map.get(tc, "id"),
+                          "name" => Map.get(func, "name"),
+                          "arguments" => args
+                        }
+                      ]
                   end)
                 else
                   content_blocks
                 end
 
-              Storage.append_entry!(conv_id, "pi.message", %{"role" => "assistant", "content" => content_blocks})
+              Storage.append_entry!(conv_id, "pi.message", %{
+                "role" => "assistant",
+                "content" => content_blocks
+              })
 
             "tool" ->
               Storage.append_entry!(conv_id, "pi.message", %{
@@ -784,7 +852,11 @@ defmodule SuperPi.Gateway.Router do
   # --- Non-Streaming Execution ---
 
   defp handle_sync_completion(conn, conv_id, pid, user_prompt, model) do
-    case Machine.safe_submit(pid, user_prompt, mode: :queue, timeout: 120_000, otel_ctx: SuperPi.Telemetry.current_ctx()) do
+    case Machine.safe_submit(pid, user_prompt,
+           mode: :queue,
+           timeout: 120_000,
+           otel_ctx: SuperPi.Telemetry.current_ctx()
+         ) do
       {:ok, assistant_msg} ->
         reply_text =
           case assistant_msg do
@@ -925,7 +997,10 @@ defmodule SuperPi.Gateway.Router do
         Logger.warning("[Gateway] ⚠️ Turn ##{conv_id} error: #{inspect(reason)}")
 
         err_chunk =
-          Map.put(Renderer.OpenAI.finish_chunk(rstate, "error"), "error", %{"message" => "Turn error: #{inspect(reason)}", "type" => "turn_error"})
+          Map.put(Renderer.OpenAI.finish_chunk(rstate, "error"), "error", %{
+            "message" => "Turn error: #{inspect(reason)}",
+            "type" => "turn_error"
+          })
 
         with {:ok, conn} <- chunk(conn, "data: " <> Jason.encode!(err_chunk) <> "\n\n"),
              {:ok, conn} <- chunk(conn, "data: [DONE]\n\n") do
@@ -938,7 +1013,10 @@ defmodule SuperPi.Gateway.Router do
         Logger.warning("[Gateway] ⚠️ Turn ##{conv_id} worker task terminated: #{inspect(reason)}")
 
         err_chunk =
-          Map.put(Renderer.OpenAI.finish_chunk(rstate, "error"), "error", %{"message" => "Worker crashed: #{inspect(reason)}", "type" => "turn_error"})
+          Map.put(Renderer.OpenAI.finish_chunk(rstate, "error"), "error", %{
+            "message" => "Worker crashed: #{inspect(reason)}",
+            "type" => "turn_error"
+          })
 
         with {:ok, conn} <- chunk(conn, "data: " <> Jason.encode!(err_chunk) <> "\n\n"),
              {:ok, conn} <- chunk(conn, "data: [DONE]\n\n") do
@@ -970,8 +1048,16 @@ defmodule SuperPi.Gateway.Router do
       "total_tokens" => prompt_tok + comp_tok
     }
 
-    with {:ok, conn} <- chunk(conn, "data: " <> Jason.encode!(Renderer.OpenAI.finish_chunk(rstate, "stop")) <> "\n\n"),
-         {:ok, conn} <- chunk(conn, "data: " <> Jason.encode!(Renderer.OpenAI.usage_chunk(rstate, usage_map)) <> "\n\n"),
+    with {:ok, conn} <-
+           chunk(
+             conn,
+             "data: " <> Jason.encode!(Renderer.OpenAI.finish_chunk(rstate, "stop")) <> "\n\n"
+           ),
+         {:ok, conn} <-
+           chunk(
+             conn,
+             "data: " <> Jason.encode!(Renderer.OpenAI.usage_chunk(rstate, usage_map)) <> "\n\n"
+           ),
          {:ok, conn} <- chunk(conn, "data: [DONE]\n\n") do
       conn
     else

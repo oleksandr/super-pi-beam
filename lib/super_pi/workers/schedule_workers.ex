@@ -48,8 +48,13 @@ defmodule SuperPi.Workers.ScheduleRunWorker do
   end
 
   defp fail(%Oban.Job{attempt: attempt, max_attempts: max, args: %{"schedule_id" => id}}, reason) do
-    Logger.warning("[Schedule] run job of schedule #{id} failed (attempt #{attempt}/#{max}): #{inspect(reason)}")
-    if attempt >= max, do: SuperPi.Schedule.record_failure(id, "could not start the run: #{inspect(reason)}")
+    Logger.warning(
+      "[Schedule] run job of schedule #{id} failed (attempt #{attempt}/#{max}): #{inspect(reason)}"
+    )
+
+    if attempt >= max,
+      do: SuperPi.Schedule.record_failure(id, "could not start the run: #{inspect(reason)}")
+
     {:error, reason}
   end
 end

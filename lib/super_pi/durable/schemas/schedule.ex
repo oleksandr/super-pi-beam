@@ -23,26 +23,26 @@ defmodule SuperPi.Durable.Schemas.Schedule do
   @type t :: %__MODULE__{}
 
   schema "schedules" do
-    field :conversation_id, :integer
-    field :kind, :string, default: "cron"
-    field :name, :string
-    field :cron, :string
-    field :timezone, :string, default: "Etc/UTC"
-    field :prompt, :string
-    field :mode, :string, default: "fork"
-    field :harness, :string
-    field :agent, :map, default: %{}
-    field :principal, :string, default: "anonymous"
-    field :status, :string, default: "active"
-    field :catch_up, :boolean, default: false
-    field :token_hash, :string
-    field :next_fire_at, :utc_datetime
-    field :last_fire_at, :utc_datetime
-    field :claimed_at, :naive_datetime
-    field :consecutive_failures, :integer, default: 0
-    field :last_task_id, :integer
-    field :last_conversation_id, :integer
-    field :last_error, :string
+    field(:conversation_id, :integer)
+    field(:kind, :string, default: "cron")
+    field(:name, :string)
+    field(:cron, :string)
+    field(:timezone, :string, default: "Etc/UTC")
+    field(:prompt, :string)
+    field(:mode, :string, default: "fork")
+    field(:harness, :string)
+    field(:agent, :map, default: %{})
+    field(:principal, :string, default: "anonymous")
+    field(:status, :string, default: "active")
+    field(:catch_up, :boolean, default: false)
+    field(:token_hash, :string)
+    field(:next_fire_at, :utc_datetime)
+    field(:last_fire_at, :utc_datetime)
+    field(:claimed_at, :naive_datetime)
+    field(:consecutive_failures, :integer, default: 0)
+    field(:last_task_id, :integer)
+    field(:last_conversation_id, :integer)
+    field(:last_error, :string)
 
     timestamps(type: :utc_datetime_usec)
   end

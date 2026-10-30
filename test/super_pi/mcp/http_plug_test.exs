@@ -16,7 +16,15 @@ defmodule SuperPi.MCP.HTTPPlugTest do
     SuperPi.Tools.ensure_catalog_ets!()
     Sessions.clear()
 
-    keys = [:gateway_tokens, :gateway_token, :permissions, :mcp_allowed_origins, :mcp_session_ttl_ms, :mcp_max_sessions]
+    keys = [
+      :gateway_tokens,
+      :gateway_token,
+      :permissions,
+      :mcp_allowed_origins,
+      :mcp_session_ttl_ms,
+      :mcp_max_sessions
+    ]
+
     saved = for key <- keys, do: {key, Application.fetch_env(:super_pi, key)}
     Application.put_env(:super_pi, :permissions, allowNonWorkspaceAccess: true)
     Enum.each([:gateway_tokens, :gateway_token], &Application.delete_env(:super_pi, &1))
@@ -36,12 +44,16 @@ defmodule SuperPi.MCP.HTTPPlugTest do
     :ok
   end
 
-  defp rpc(id, method, params \\ %{}), do: %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}
+  defp rpc(id, method, params \\ %{}),
+    do: %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}
 
   defp post(body, headers \\ [], path \\ "/mcp") do
     conn = conn(:post, path, if(is_binary(body), do: body, else: Jason.encode!(body)))
 
-    headers = [{"content-type", "application/json"}, {"accept", "application/json, text/event-stream"}] ++ headers
+    headers =
+      [{"content-type", "application/json"}, {"accept", "application/json, text/event-stream"}] ++
+        headers
+
     conn = Enum.reduce(headers, conn, fn {k, v}, c -> put_req_header(c, k, v) end)
     Router.call(conn, @router)
   end
@@ -54,7 +66,13 @@ defmodule SuperPi.MCP.HTTPPlugTest do
   defp json(conn), do: Jason.decode!(conn.resp_body)
 
   defp initialize(headers \\ [], path \\ "/mcp", version \\ "2025-06-18") do
-    conn = post(rpc(1, "initialize", %{"protocolVersion" => version, "clientInfo" => %{"name" => "test"}}), headers, path)
+    conn =
+      post(
+        rpc(1, "initialize", %{"protocolVersion" => version, "clientInfo" => %{"name" => "test"}}),
+        headers,
+        path
+      )
+
     [session] = get_resp_header(conn, "mcp-session-id")
     {conn, session}
   end
@@ -67,7 +85,15 @@ defmodule SuperPi.MCP.HTTPPlugTest do
 
       assert conn.status == 200
       assert ["application/json" <> _] = get_resp_header(conn, "content-type")
-      assert %{"id" => 1, "result" => %{"protocolVersion" => "2025-06-18", "serverInfo" => %{"name" => "super-pi-beam"}}} = json(conn)
+
+      assert %{
+               "id" => 1,
+               "result" => %{
+                 "protocolVersion" => "2025-06-18",
+                 "serverInfo" => %{"name" => "super-pi-beam"}
+               }
+             } = json(conn)
+
       assert byte_size(session) >= 20
       assert Sessions.count() == 1
     end
@@ -116,13 +142,21 @@ defmodule SuperPi.MCP.HTTPPlugTest do
       assert length(tools) == 8
       assert Enum.all?(tools, &is_map(&1["annotations"]))
 
-      conn = post(rpc(3, "tools/call", %{"name" => "ls", "arguments" => %{"path" => System.tmp_dir!()}}), with_session(session))
-      assert %{"id" => 3, "result" => %{"isError" => false, "structuredContent" => _}} = json(conn)
+      conn =
+        post(
+          rpc(3, "tools/call", %{"name" => "ls", "arguments" => %{"path" => System.tmp_dir!()}}),
+          with_session(session)
+        )
+
+      assert %{"id" => 3, "result" => %{"isError" => false, "structuredContent" => _}} =
+               json(conn)
     end
 
     test "state carries across requests of one session: the tool session is reused" do
       {_, session} = initialize()
-      call = rpc(2, "tools/call", %{"name" => "ls", "arguments" => %{"path" => System.tmp_dir!()}})
+
+      call =
+        rpc(2, "tools/call", %{"name" => "ls", "arguments" => %{"path" => System.tmp_dir!()}})
 
       post(call, with_session(session))
       {:ok, %{tool_session: first}} = Sessions.fetch(session)
@@ -134,7 +168,13 @@ defmodule SuperPi.MCP.HTTPPlugTest do
 
     test "a notification is 202 with no body" do
       {_, session} = initialize()
-      conn = post(%{"jsonrpc" => "2.0", "method" => "notifications/initialized"}, with_session(session))
+
+      conn =
+        post(
+          %{"jsonrpc" => "2.0", "method" => "notifications/initialized"},
+          with_session(session)
+        )
+
       assert conn.status == 202
       assert conn.resp_body == ""
     end
@@ -148,10 +188,24 @@ defmodule SuperPi.MCP.HTTPPlugTest do
     test "a batch is answered with an array, in order, without the notification" do
       {_, session} = initialize()
 
-      conn = post([rpc(2, "ping"), %{"jsonrpc" => "2.0", "method" => "notifications/initialized"}, rpc(3, "tools/list")], with_session(session))
+      conn =
+        post(
+          [
+            rpc(2, "ping"),
+            %{"jsonrpc" => "2.0", "method" => "notifications/initialized"},
+            rpc(3, "tools/list")
+          ],
+          with_session(session)
+        )
+
       assert [%{"id" => 2}, %{"id" => 3}] = json(conn)
 
-      conn = post([%{"jsonrpc" => "2.0", "method" => "notifications/initialized"}], with_session(session))
+      conn =
+        post(
+          [%{"jsonrpc" => "2.0", "method" => "notifications/initialized"}],
+          with_session(session)
+        )
+
       assert conn.status == 202
     end
 
@@ -248,7 +302,12 @@ defmodule SuperPi.MCP.HTTPPlugTest do
     end
 
     test "a path below /mcp is 404" do
-      conn = Router.call(conn(:post, "/mcp/other", "{}") |> put_req_header("content-type", "application/json"), @router)
+      conn =
+        Router.call(
+          conn(:post, "/mcp/other", "{}") |> put_req_header("content-type", "application/json"),
+          @router
+        )
+
       assert conn.status == 404
     end
   end
@@ -256,8 +315,12 @@ defmodule SuperPi.MCP.HTTPPlugTest do
   describe "checks" do
     test "an unsupported MCP-Protocol-Version is 400, a supported one passes" do
       {_, session} = initialize()
-      assert post(rpc(2, "ping"), with_session(session, [{"mcp-protocol-version", "2026-07-28"}])).status == 400
-      assert post(rpc(2, "ping"), with_session(session, [{"mcp-protocol-version", "2025-03-26"}])).status == 200
+
+      assert post(rpc(2, "ping"), with_session(session, [{"mcp-protocol-version", "2026-07-28"}])).status ==
+               400
+
+      assert post(rpc(2, "ping"), with_session(session, [{"mcp-protocol-version", "2025-03-26"}])).status ==
+               200
     end
 
     test "a draining node is 503 with Retry-After" do
@@ -273,21 +336,28 @@ defmodule SuperPi.MCP.HTTPPlugTest do
     end
 
     test "with no token configured, a foreign Origin is 403 and a loopback one passes" do
-      assert post(rpc(1, "initialize", %{}), [{"origin", "https://evil.example.com"}]).status == 403
+      assert post(rpc(1, "initialize", %{}), [{"origin", "https://evil.example.com"}]).status ==
+               403
+
       assert post(rpc(1, "initialize", %{}), [{"origin", "http://localhost:5173"}]).status == 200
       assert post(rpc(1, "initialize", %{}), [{"origin", "http://127.0.0.1:3000"}]).status == 200
     end
 
     test "an Origin in mcp_allowed_origins passes" do
       Application.put_env(:super_pi, :mcp_allowed_origins, ["https://app.example.com"])
-      assert post(rpc(1, "initialize", %{}), [{"origin", "https://app.example.com"}]).status == 200
-      assert post(rpc(1, "initialize", %{}), [{"origin", "https://other.example.com"}]).status == 403
+
+      assert post(rpc(1, "initialize", %{}), [{"origin", "https://app.example.com"}]).status ==
+               200
+
+      assert post(rpc(1, "initialize", %{}), [{"origin", "https://other.example.com"}]).status ==
+               403
     end
   end
 
   describe "authentication (inherited from the gateway)" do
     setup do
       Application.put_env(:super_pi, :gateway_tokens, [{"alice", "tok-alice"}, {"bob", "tok-bob"}])
+
       :ok
     end
 
@@ -317,32 +387,62 @@ defmodule SuperPi.MCP.HTTPPlugTest do
 
     test "a transcript resource is private to the principal that ran the task" do
       {_, session} = initialize(bearer("tok-alice"))
-      call = rpc(2, "tools/call", %{"name" => "harness_task", "arguments" => %{"prompt" => "alice's plan"}})
-      conv_id = post(call, with_session(session, bearer("tok-alice"))) |> json() |> get_in(["result", "structuredContent", "conversation_id"])
+
+      call =
+        rpc(2, "tools/call", %{
+          "name" => "harness_task",
+          "arguments" => %{"prompt" => "alice's plan"}
+        })
+
+      conv_id =
+        post(call, with_session(session, bearer("tok-alice")))
+        |> json()
+        |> get_in(["result", "structuredContent", "conversation_id"])
+
       uri = "superpi://conversation/#{conv_id}/transcript"
 
       read = rpc(3, "resources/read", %{"uri" => uri})
-      assert [%{"text" => text}] = post(read, with_session(session, bearer("tok-alice"))) |> json() |> get_in(["result", "contents"])
+
+      assert [%{"text" => text}] =
+               post(read, with_session(session, bearer("tok-alice")))
+               |> json()
+               |> get_in(["result", "contents"])
+
       assert text =~ "alice's plan"
 
       {_, bob} = initialize(bearer("tok-bob"))
-      assert post(read, with_session(bob, bearer("tok-bob"))) |> json() |> get_in(["error", "code"]) == -32002
+
+      assert post(read, with_session(bob, bearer("tok-bob")))
+             |> json()
+             |> get_in(["error", "code"]) == -32002
     end
 
     test "origin checks do not apply when tokens are configured" do
-      assert post(rpc(1, "initialize", %{}), bearer("tok-alice") ++ [{"origin", "https://evil.example.com"}]).status == 200
+      assert post(
+               rpc(1, "initialize", %{}),
+               bearer("tok-alice") ++ [{"origin", "https://evil.example.com"}]
+             ).status == 200
     end
   end
 
   describe "the MCP client against this server, over a socket" do
     setup do
-      {:ok, server} = Bandit.start_link(plug: Router, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false)
+      {:ok, server} =
+        Bandit.start_link(
+          plug: Router,
+          scheme: :http,
+          ip: {127, 0, 0, 1},
+          port: 0,
+          startup_log: false
+        )
+
       {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
       on_exit(fn -> Process.alive?(server) && Process.exit(server, :normal) end)
       %{url: "http://127.0.0.1:#{port}/mcp"}
     end
 
-    test "handshake, tool listing, a call, and a new session after the server forgot the old one", %{url: url} do
+    test "handshake, tool listing, a call, and a new session after the server forgot the old one",
+         %{url: url} do
       {:ok, client} = SuperPi.MCP.Client.start_link(name: "self", url: url)
       assert :ok = SuperPi.MCP.Client.await_ready(client, 5_000)
 
@@ -351,7 +451,9 @@ defmodule SuperPi.MCP.HTTPPlugTest do
       assert Enum.find(tools, &(&1["name"] == "read"))["annotations"]["readOnlyHint"] == true
 
       args = %{"path" => System.tmp_dir!()}
-      assert {:ok, %{"isError" => false, "structuredContent" => %{}}} = SuperPi.MCP.Client.call_tool(client, "ls", args)
+
+      assert {:ok, %{"isError" => false, "structuredContent" => %{}}} =
+               SuperPi.MCP.Client.call_tool(client, "ls", args)
 
       # The server restarted, as far as the client can tell.
       Sessions.clear()
@@ -369,9 +471,17 @@ defmodule SuperPi.MCP.HTTPPlugTest do
       on_exit(fn -> System.delete_env("SUPER_PI_TEST_MCP_TOKEN") end)
 
       {:ok, denied} = SuperPi.MCP.Client.start_link(name: "denied", url: url)
-      assert {:error, {:handshake_failed, %{"message" => "HTTP 401" <> _}}} = SuperPi.MCP.Client.await_ready(denied, 5_000)
 
-      {:ok, client} = SuperPi.MCP.Client.start_link(name: "ok", url: url, headers: %{"Authorization" => "Bearer ${SUPER_PI_TEST_MCP_TOKEN}"})
+      assert {:error, {:handshake_failed, %{"message" => "HTTP 401" <> _}}} =
+               SuperPi.MCP.Client.await_ready(denied, 5_000)
+
+      {:ok, client} =
+        SuperPi.MCP.Client.start_link(
+          name: "ok",
+          url: url,
+          headers: %{"Authorization" => "Bearer ${SUPER_PI_TEST_MCP_TOKEN}"}
+        )
+
       assert :ok = SuperPi.MCP.Client.await_ready(client, 5_000)
     end
   end

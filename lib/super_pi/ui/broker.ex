@@ -56,7 +56,10 @@ defmodule SuperPi.UI.Broker do
   """
   def ask(conversation_id, request, timeout, opts \\ []) when is_map(request) do
     if responder?(conversation_id) do
-      request_id = "ui-#{conversation_id}-" <> Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
+      request_id =
+        "ui-#{conversation_id}-" <>
+          Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
+
       pending = {:ui_pending, request_id}
       asking = {:ui_asking, conversation_id}
       :pg.join(@scope, pending, self())
@@ -66,7 +69,11 @@ defmodule SuperPi.UI.Broker do
       event =
         case Keyword.get(opts, :event) do
           :permission_request ->
-            SuperPi.Event.permission_request(conversation_id, Keyword.get(opts, :turn_id), Map.put(request, "request_id", request_id))
+            SuperPi.Event.permission_request(
+              conversation_id,
+              Keyword.get(opts, :turn_id),
+              Map.put(request, "request_id", request_id)
+            )
 
           _ ->
             SuperPi.Event.ui_request(conversation_id, request_id, request)
@@ -84,7 +91,10 @@ defmodule SuperPi.UI.Broker do
           flush(monitor)
         end
 
-      SuperPi.Event.publish(SuperPi.Event.ui_resolved(conversation_id, request_id, outcome(result)))
+      SuperPi.Event.publish(
+        SuperPi.Event.ui_resolved(conversation_id, request_id, outcome(result))
+      )
+
       result
     else
       {:error, :no_interactive_client}

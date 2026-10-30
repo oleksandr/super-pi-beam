@@ -30,13 +30,26 @@ defmodule SuperPi.Plugins.ProtectedPaths do
 
   def id, do: "protected_paths"
   def name, do: "Protected Paths Shield"
-  def description, do: "Blocks modification and inspection of sensitive paths (.env, .git/, credentials)"
+
+  def description,
+    do: "Blocks modification and inspection of sensitive paths (.env, .git/, credentials)"
 
   @default_guarded_tools [
-    "write", "edit", "read",
-    "write_file", "edit_file", "read_file",
-    "grep", "search_files", "ls", "find",
-    "bash", "sh", "terminal", "run_command", "exec"
+    "write",
+    "edit",
+    "read",
+    "write_file",
+    "edit_file",
+    "read_file",
+    "grep",
+    "search_files",
+    "ls",
+    "find",
+    "bash",
+    "sh",
+    "terminal",
+    "run_command",
+    "exec"
   ]
 
   @impl true
@@ -46,7 +59,9 @@ defmodule SuperPi.Plugins.ProtectedPaths do
     guarded_tools = get_config(config, :tools, @default_guarded_tools)
 
     if tool_name in guarded_tools do
-      cmd = Map.get(args, "command") || Map.get(args, :command) || Map.get(args, "cmd") || Map.get(args, :cmd)
+      cmd =
+        Map.get(args, "command") || Map.get(args, :command) || Map.get(args, "cmd") ||
+          Map.get(args, :cmd)
 
       cond do
         is_binary(cmd) and cmd != "" ->
@@ -55,8 +70,8 @@ defmodule SuperPi.Plugins.ProtectedPaths do
         true ->
           path =
             Map.get(args, "path") || Map.get(args, :path) ||
-            Map.get(args, "dir") || Map.get(args, :dir) ||
-            Map.get(args, "file_path") || Map.get(args, :file_path) || ""
+              Map.get(args, "dir") || Map.get(args, :dir) ||
+              Map.get(args, "file_path") || Map.get(args, :file_path) || ""
 
           check_path(tool_name, path, config)
       end
@@ -75,8 +90,12 @@ defmodule SuperPi.Plugins.ProtectedPaths do
       end)
 
     if matches? do
-      Logger.warning("[ProtectedPaths] Blocked #{tool_name} with command referencing protected path: #{cmd}")
-      {:block, "Access denied by SuperPi.Plugins.ProtectedPaths: command '#{cmd}' references a protected path."}
+      Logger.warning(
+        "[ProtectedPaths] Blocked #{tool_name} with command referencing protected path: #{cmd}"
+      )
+
+      {:block,
+       "Access denied by SuperPi.Plugins.ProtectedPaths: command '#{cmd}' references a protected path."}
     else
       :allow
     end
@@ -105,8 +124,11 @@ defmodule SuperPi.Plugins.ProtectedPaths do
 
     matches_path? =
       Enum.any?(effective, fn
-        %Regex{} = r -> Regex.match?(r, normalized)
-        pat when is_binary(pat) -> String.contains?(String.downcase(normalized), String.downcase(pat))
+        %Regex{} = r ->
+          Regex.match?(r, normalized)
+
+        pat when is_binary(pat) ->
+          String.contains?(String.downcase(normalized), String.downcase(pat))
       end)
 
     if matches_path? do
@@ -148,8 +170,12 @@ defmodule SuperPi.Plugins.ProtectedPaths do
 
     env_patterns =
       case System.get_env("PROTECTED_PATHS") do
-        nil -> []
-        "" -> []
+        nil ->
+          []
+
+        "" ->
+          []
+
         val ->
           val
           |> String.split(",")
@@ -162,7 +188,9 @@ defmodule SuperPi.Plugins.ProtectedPaths do
 
   defp get_config(config, key, default) when is_map(config) do
     case Map.fetch(config, key) do
-      {:ok, val} -> val
+      {:ok, val} ->
+        val
+
       :error ->
         case Map.fetch(config, to_string(key)) do
           {:ok, val} -> val

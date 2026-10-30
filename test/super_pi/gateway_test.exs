@@ -126,7 +126,10 @@ defmodule SuperPi.GatewayTest do
     payload = %{
       "model" => "super-pi-agent",
       "messages" => [
-        %{"role" => "system", "content" => "You are a title generator. You output ONLY a thread title. Nothing else."},
+        %{
+          "role" => "system",
+          "content" => "You are a title generator. You output ONLY a thread title. Nothing else."
+        },
         %{"role" => "user", "content" => "Generate a title for this conversation:\nHello world"}
       ],
       "stream" => false
@@ -214,17 +217,29 @@ defmodule SuperPi.GatewayTest do
 
   test "POST /v1/chat/completions streams interim tool progress into reasoning_content" do
     conv = SuperPi.Durable.Storage.create_conversation!()
-    Phoenix.PubSub.broadcast(SuperPi.PubSub, "conversation:#{conv.id}", {:conversation_event, conv.id, %{
-      "type" => "tool_started",
-      "name" => "bash",
-      "args" => %{"command" => "ls -la"}
-    }})
-    Phoenix.PubSub.broadcast(SuperPi.PubSub, "conversation:#{conv.id}", {:conversation_event, conv.id, %{
-      "type" => "tool_completed",
-      "name" => "bash",
-      "output" => "total 0",
-      "is_error" => false
-    }})
+
+    Phoenix.PubSub.broadcast(
+      SuperPi.PubSub,
+      "conversation:#{conv.id}",
+      {:conversation_event, conv.id,
+       %{
+         "type" => "tool_started",
+         "name" => "bash",
+         "args" => %{"command" => "ls -la"}
+       }}
+    )
+
+    Phoenix.PubSub.broadcast(
+      SuperPi.PubSub,
+      "conversation:#{conv.id}",
+      {:conversation_event, conv.id,
+       %{
+         "type" => "tool_completed",
+         "name" => "bash",
+         "output" => "total 0",
+         "is_error" => false
+       }}
+    )
 
     # Verify that stream handler converts tool_started and tool_completed into reasoning_content
     p = %{

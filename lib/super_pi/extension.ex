@@ -116,20 +116,18 @@ defmodule SuperPi.Extension do
       @impl true
       def after_run(_summary, _ctx), do: :accept
 
-      defoverridable [
-        on_input: 2,
-        before_agent_start: 2,
-        before_compact: 2,
-        before_request: 2,
-        before_provider_request: 2,
-        after_response: 2,
-        before_tool: 3,
-        wrap_tool: 4,
-        after_tool: 4,
-        after_tools: 2,
-        on_yield: 2,
-        after_run: 2
-      ]
+      defoverridable on_input: 2,
+                     before_agent_start: 2,
+                     before_compact: 2,
+                     before_request: 2,
+                     before_provider_request: 2,
+                     after_response: 2,
+                     before_tool: 3,
+                     wrap_tool: 4,
+                     after_tool: 4,
+                     after_tools: 2,
+                     on_yield: 2,
+                     after_run: 2
     end
   end
 
@@ -156,15 +154,21 @@ defmodule SuperPi.Extension do
   end
 
   def run_on_input(extensions, input, ctx) do
-    Enum.reduce_while(extensions, {:continue, input, []}, fn ext, {:continue, cur_input, cur_media} ->
+    Enum.reduce_while(extensions, {:continue, input, []}, fn ext,
+                                                             {:continue, cur_input, cur_media} ->
       {mod, _opts} = unpack_ext(ext)
       mod_ctx = ext_ctx(ext, ctx)
 
       if function_exported?(mod, :on_input, 2) do
         case mod.on_input(cur_input, mod_ctx) do
-          :continue -> {:cont, {:continue, cur_input, cur_media}}
-          {:transform, new_input, new_media} -> {:cont, {:continue, new_input, cur_media ++ new_media}}
-          :handled -> {:halt, :handled}
+          :continue ->
+            {:cont, {:continue, cur_input, cur_media}}
+
+          {:transform, new_input, new_media} ->
+            {:cont, {:continue, new_input, cur_media ++ new_media}}
+
+          :handled ->
+            {:halt, :handled}
         end
       else
         {:cont, {:continue, cur_input, cur_media}}
@@ -254,7 +258,8 @@ defmodule SuperPi.Extension do
   end
 
   def run_before_tool(extensions, tool_name, args, ctx) do
-    Enum.reduce_while(extensions, {:allow, args, []}, fn ext, {:allow, cur_args, overwritten_keys} ->
+    Enum.reduce_while(extensions, {:allow, args, []}, fn ext,
+                                                         {:allow, cur_args, overwritten_keys} ->
       {mod, _opts} = unpack_ext(ext)
       mod_ctx = ext_ctx(ext, ctx)
 

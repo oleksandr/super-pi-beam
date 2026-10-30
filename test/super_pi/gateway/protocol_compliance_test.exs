@@ -55,11 +55,15 @@ defmodule SuperPi.Gateway.ProtocolComplianceTest do
 
         # 2. Stop Reason: Exactly one finish_reason: "stop" chunk
         stop_matches = Regex.scan(~r/"finish_reason":"stop"/, raw_body)
-        assert length(stop_matches) == 1, "Turn #{turn} emitted #{length(stop_matches)} stop chunks (expected exactly 1)"
+
+        assert length(stop_matches) == 1,
+               "Turn #{turn} emitted #{length(stop_matches)} stop chunks (expected exactly 1)"
 
         # 3. Usage Chunk: Exactly one choices: [] chunk
         empty_choice_matches = Regex.scan(~r/"choices":\[\]/, raw_body)
-        assert length(empty_choice_matches) == 1, "Turn #{turn} emitted #{length(empty_choice_matches)} choices: [] chunks"
+
+        assert length(empty_choice_matches) == 1,
+               "Turn #{turn} emitted #{length(empty_choice_matches)} choices: [] chunks"
 
         # 4. Content Reconstruction: Extract all delta.content chunks and concatenate
         reconstructed =
@@ -78,16 +82,20 @@ defmodule SuperPi.Gateway.ProtocolComplianceTest do
         # In live mode, reply is direct answer.
         # Regardless of mode, the text must NOT repeat or duplicate chunks!
         expected_echo = "Echo: #{prompt}"
+
         if reconstructed == expected_echo do
           # Exact match: zero duplication!
           assert reconstructed == expected_echo
         else
           # Live model: ensure the string is not duplicated back-to-back (e.g. "Ready.Ready.")
           half_len = div(String.length(reconstructed), 2)
+
           if half_len > 10 do
             first_half = String.slice(reconstructed, 0, half_len)
             second_half = String.slice(reconstructed, half_len, half_len)
-            refute first_half == second_half, "Turn #{turn} output appears duplicated back-to-back: #{inspect(reconstructed)}"
+
+            refute first_half == second_half,
+                   "Turn #{turn} output appears duplicated back-to-back: #{inspect(reconstructed)}"
           end
         end
       end
@@ -113,6 +121,7 @@ defmodule SuperPi.Gateway.ProtocolComplianceTest do
       assert get_resp_header(conn, "connection") == ["keep-alive"]
 
       lines = String.split(conn.resp_body, "\n\n")
+
       json_chunks =
         lines
         |> Enum.filter(&String.starts_with?(&1, "data: {"))
@@ -139,6 +148,7 @@ defmodule SuperPi.Gateway.ProtocolComplianceTest do
       assert is_integer(usage_chunk["usage"]["prompt_tokens"])
       assert is_integer(usage_chunk["usage"]["completion_tokens"])
       assert is_integer(usage_chunk["usage"]["total_tokens"])
+
       assert usage_chunk["usage"]["total_tokens"] ==
                usage_chunk["usage"]["prompt_tokens"] + usage_chunk["usage"]["completion_tokens"]
     end
@@ -156,11 +166,17 @@ defmodule SuperPi.Gateway.ProtocolComplianceTest do
            %{
              "role" => "assistant",
              "content" => [
-               %{"type" => "tool_call", "id" => "c1", "name" => "read", "arguments" => %{"path" => "weather.json"}}
+               %{
+                 "type" => "tool_call",
+                 "id" => "c1",
+                 "name" => "read",
+                 "arguments" => %{"path" => "weather.json"}
+               }
              ]
            }}
         else
           text = "Sunny +21C"
+
           if is_function(ctx[:emit_event], 1) do
             ctx[:emit_event].(%{"type" => "text_delta", "index" => 0, "delta" => text})
           end
@@ -247,6 +263,7 @@ defmodule SuperPi.Gateway.ProtocolComplianceTest do
       assert body["object"] == "list"
 
       ids = Enum.map(body["data"], & &1["id"])
+
       expected = [
         "super-pi-code",
         "super-pi-assistant",
@@ -259,7 +276,13 @@ defmodule SuperPi.Gateway.ProtocolComplianceTest do
       end
 
       # Ids of earlier releases resolve but are not listed.
-      for old_id <- ["super-pi-agent", "super-pi-fast", "super-pi-auto", "super-pi-interactive", "super-pi-workspace"] do
+      for old_id <- [
+            "super-pi-agent",
+            "super-pi-fast",
+            "super-pi-auto",
+            "super-pi-interactive",
+            "super-pi-workspace"
+          ] do
         refute old_id in ids, "#{old_id} should be an alias, not a listed model"
       end
     end

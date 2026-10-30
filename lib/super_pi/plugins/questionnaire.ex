@@ -40,7 +40,8 @@ defmodule SuperPi.Plugins.Questionnaire do
               "options" => %{
                 "type" => "array",
                 "items" => %{"type" => "string"},
-                "description" => "List of available choices, with '(Recommended)' on the first option"
+                "description" =>
+                  "List of available choices, with '(Recommended)' on the first option"
               },
               "is_multi_select" => %{
                 "type" => "boolean",
@@ -75,7 +76,10 @@ defmodule SuperPi.Plugins.Questionnaire do
 
     cond do
       questions == [] or Enum.any?(texts, &(&1 == "")) ->
-        error("ask_question needs a non-empty `questions` list, and every question needs text", "invalid_arguments")
+        error(
+          "ask_question needs a non-empty `questions` list, and every question needs text",
+          "invalid_arguments"
+        )
 
       Enum.all?(texts, &Map.has_key?(overrides, &1)) ->
         answers = Enum.map(texts, &%{"question" => &1, "selected" => Map.fetch!(overrides, &1)})
@@ -102,8 +106,14 @@ defmodule SuperPi.Plugins.Questionnaire do
     case SuperPi.UI.Broker.ask(Map.get(ctx, :conversation_id), request, timeout) do
       {:ok, value} ->
         case normalize_answers(value, questions) do
-          {:ok, answers} -> result(answers, "user", "")
-          :error -> error("The client answered with an unusable value: #{inspect(value)}", "invalid_answer")
+          {:ok, answers} ->
+            result(answers, "user", "")
+
+          :error ->
+            error(
+              "The client answered with an unusable value: #{inspect(value)}",
+              "invalid_answer"
+            )
         end
 
       {:error, :no_interactive_client} ->

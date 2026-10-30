@@ -24,7 +24,9 @@ defmodule SuperPi.UI.PermissionPrompt do
   @doc "True when a prompt can be shown now: enabled, and a client answers for the conversation."
   @spec available?(integer() | nil, map()) :: boolean()
   def available?(nil, _settings), do: false
-  def available?(conversation_id, settings), do: enabled?(settings) and Broker.responder?(conversation_id)
+
+  def available?(conversation_id, settings),
+    do: enabled?(settings) and Broker.responder?(conversation_id)
 
   @doc """
   Asks about one tool call. `fields` has `"tool_name"`, `"arguments"`, `"reason"` and `"risk"`.
@@ -37,9 +39,15 @@ defmodule SuperPi.UI.PermissionPrompt do
     request =
       fields
       |> Map.take(["tool_name", "arguments", "reason", "risk"])
-      |> Map.merge(%{"tool_call_id" => Map.get(ctx, :tool_call_id), "options" => SuperPi.Event.permission_options()})
+      |> Map.merge(%{
+        "tool_call_id" => Map.get(ctx, :tool_call_id),
+        "options" => SuperPi.Event.permission_options()
+      })
 
-    case Broker.ask(Map.get(ctx, :conversation_id), request, timeout, event: :permission_request, turn_id: Map.get(ctx, :turn_id)) do
+    case Broker.ask(Map.get(ctx, :conversation_id), request, timeout,
+           event: :permission_request,
+           turn_id: Map.get(ctx, :turn_id)
+         ) do
       {:ok, value} -> parse(value)
       {:error, _} -> :unavailable
     end

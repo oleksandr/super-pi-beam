@@ -18,7 +18,16 @@ defmodule SuperPi.Durable.Schemas.Task do
       "aborted",
       "cancelled"
     ],
-    "waiting" => ["pending", "running", "completing", "completed", "failed", "aborted", "cancelled", "orphaned"],
+    "waiting" => [
+      "pending",
+      "running",
+      "completing",
+      "completed",
+      "failed",
+      "aborted",
+      "cancelled",
+      "orphaned"
+    ],
     "sleeping" => ["pending", "running", "failed", "aborted", "cancelled", "orphaned"],
     "completing" => ["completed", "failed", "aborted"]
   }
@@ -30,26 +39,26 @@ defmodule SuperPi.Durable.Schemas.Task do
   @type t :: %__MODULE__{}
 
   schema "tasks" do
-    field :conversation_id, :integer
-    field :owner_task_id, :integer
-    field :kind, :string
-    field :status, :string, default: "pending"
-    field :phase, :string, default: "init"
-    field :version, :integer, default: 1
-    field :input, :map, default: %{}
-    field :state, :map, default: %{"phase" => "init"}
-    field :result, :map
-    field :wait_policy, :string
-    field :waiting_on_task_ids, :map, default: %{"ids" => []}
-    field :sleep_until, :utc_datetime_usec
-    field :attempt, :integer, default: 0
-    field :owner_node, :string
-    field :restart_limit, :integer, default: 5
-    field :abandon_on_restart, :boolean, default: false
-    field :abort_requested, :boolean, default: false
-    field :background, :boolean, default: false
-    field :created_seq, :integer
-    field :updated_seq, :integer
+    field(:conversation_id, :integer)
+    field(:owner_task_id, :integer)
+    field(:kind, :string)
+    field(:status, :string, default: "pending")
+    field(:phase, :string, default: "init")
+    field(:version, :integer, default: 1)
+    field(:input, :map, default: %{})
+    field(:state, :map, default: %{"phase" => "init"})
+    field(:result, :map)
+    field(:wait_policy, :string)
+    field(:waiting_on_task_ids, :map, default: %{"ids" => []})
+    field(:sleep_until, :utc_datetime_usec)
+    field(:attempt, :integer, default: 0)
+    field(:owner_node, :string)
+    field(:restart_limit, :integer, default: 5)
+    field(:abandon_on_restart, :boolean, default: false)
+    field(:abort_requested, :boolean, default: false)
+    field(:background, :boolean, default: false)
+    field(:created_seq, :integer)
+    field(:updated_seq, :integer)
 
     timestamps(type: :utc_datetime_usec)
   end

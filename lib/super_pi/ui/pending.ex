@@ -24,7 +24,12 @@ defmodule SuperPi.UI.Pending do
   @spec put(integer(), term(), term()) :: :ok
   def put(conversation_id, tool_call_id, note) do
     sweep()
-    :ets.insert(@table, {{conversation_id, tool_call_id}, note, System.monotonic_time(:millisecond)})
+
+    :ets.insert(
+      @table,
+      {{conversation_id, tool_call_id}, note, System.monotonic_time(:millisecond)}
+    )
+
     :ok
   end
 

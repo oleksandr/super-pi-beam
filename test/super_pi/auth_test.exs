@@ -11,7 +11,12 @@ defmodule SuperPi.AuthTest do
   @opts Router.init([])
 
   setup do
-    saved = Enum.map([:gateway_tokens, :gateway_token, :permissions], &{&1, Application.fetch_env(:super_pi, &1)})
+    saved =
+      Enum.map(
+        [:gateway_tokens, :gateway_token, :permissions],
+        &{&1, Application.fetch_env(:super_pi, &1)}
+      )
+
     System.delete_env("SUPER_PI_GATEWAY_TOKEN")
 
     on_exit(fn ->
@@ -77,14 +82,21 @@ defmodule SuperPi.AuthTest do
 
   describe "gateway" do
     defp request(method, path, token \\ nil, body \\ nil, headers \\ []) do
-      conn = conn(method, path, body && Jason.encode!(body)) |> put_req_header("content-type", "application/json")
+      conn =
+        conn(method, path, body && Jason.encode!(body))
+        |> put_req_header("content-type", "application/json")
+
       conn = if token, do: put_req_header(conn, "authorization", "Bearer " <> token), else: conn
       conn = Enum.reduce(headers, conn, fn {k, v}, c -> put_req_header(c, k, v) end)
       Router.call(conn, @opts)
     end
 
     defp chat(token, headers) do
-      body = %{"model" => "gemini-3-flash-preview", "messages" => [%{"role" => "user", "content" => "hi"}]}
+      body = %{
+        "model" => "gemini-3-flash-preview",
+        "messages" => [%{"role" => "user", "content" => "hi"}]
+      }
+
       request(:post, "/v1/chat/completions", token, body, headers)
     end
 
@@ -169,7 +181,9 @@ defmodule SuperPi.AuthTest do
 
   describe "rpc" do
     defp rpc(state, method, params, id \\ 1) do
-      payload = Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params})
+      payload =
+        Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params})
+
       RPC.handle_rpc_payload(payload, state)
     end
 
@@ -210,8 +224,16 @@ defmodule SuperPi.AuthTest do
       {%{"result" => %{"conversation_id" => conv}}, _, _} = rpc(alice, "session.open", %{})
       assert Auth.owner(conv) == "alice"
 
-      for method <- ["session.open", "session.context", "session.watch", "session.configure", "session.compact"] do
-        {reply, _, _} = rpc(bob, method, %{"conversation_id" => conv, "text" => "x", "agent" => %{}})
+      for method <- [
+            "session.open",
+            "session.context",
+            "session.watch",
+            "session.configure",
+            "session.compact"
+          ] do
+        {reply, _, _} =
+          rpc(bob, method, %{"conversation_id" => conv, "text" => "x", "agent" => %{}})
+
         assert %{"error" => %{"code" => -32004}} = reply, "#{method}: #{inspect(reply)}"
       end
 
@@ -223,7 +245,12 @@ defmodule SuperPi.AuthTest do
       tokens(alice: "tok-a")
       {_, alice, _} = rpc(RPC.new_client_state(), "auth.login", %{"token" => "tok-a"})
       {%{"result" => %{"conversation_id" => conv}}, _, _} = rpc(alice, "session.open", %{})
-      entry = SuperPi.Durable.Storage.append_entry!(conv, "message", %{"role" => "user", "content" => "x"})
+
+      entry =
+        SuperPi.Durable.Storage.append_entry!(conv, "message", %{
+          "role" => "user",
+          "content" => "x"
+        })
 
       {%{"result" => %{"conversation_id" => fork}}, _, _} =
         rpc(alice, "session.fork", %{"conversation_id" => conv, "at_entry_id" => entry.id})
@@ -242,7 +269,13 @@ defmodule SuperPi.AuthTest do
     end
 
     defp call_tool(name, args, state \\ %{}) do
-      req = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/call", "params" => %{"name" => name, "arguments" => args}}
+      req = %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "tools/call",
+        "params" => %{"name" => name, "arguments" => args}
+      }
+
       {:reply, %{"result" => result}, state} = MCP.handle_mcp_line(Jason.encode!(req), state)
       {result, state}
     end
@@ -267,7 +300,11 @@ defmodule SuperPi.AuthTest do
     end
 
     test "permissions.deny blocks a command" do
-      Application.put_env(:super_pi, :permissions, remote_max_mode: "auto", remote_default_mode: "auto")
+      Application.put_env(:super_pi, :permissions,
+        remote_max_mode: "auto",
+        remote_default_mode: "auto"
+      )
+
       settings = %{"permissions" => %{"deny" => ["command(curl)"]}}
 
       {_, state} = call_tool("ls", %{"path" => "."})

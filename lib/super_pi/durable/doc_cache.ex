@@ -21,7 +21,12 @@ defmodule SuperPi.Durable.DocCache do
 
   def broadcast(keys) when is_list(keys) do
     if Node.list() != [] do
-      Phoenix.PubSub.broadcast_from(SuperPi.PubSub, self(), @topic, {:doc_invalidate, node(), Enum.uniq(keys)})
+      Phoenix.PubSub.broadcast_from(
+        SuperPi.PubSub,
+        self(),
+        @topic,
+        {:doc_invalidate, node(), Enum.uniq(keys)}
+      )
     end
 
     :ok

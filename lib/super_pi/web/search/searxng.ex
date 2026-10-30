@@ -16,12 +16,21 @@ defmodule SuperPi.Web.Search.SearxNG do
 
   @impl true
   def search(query, max_results, opts) do
-    req = [url: String.trim_trailing(base_url(opts), "/") <> "/search", params: [q: query, format: "json"]] ++ Search.req_options(opts)
+    req =
+      [
+        url: String.trim_trailing(base_url(opts), "/") <> "/search",
+        params: [q: query, format: "json"]
+      ] ++ Search.req_options(opts)
 
     case Req.get(req) do
       {:ok, %Req.Response{status: 200, body: %{} = body}} ->
         results = body["results"] || []
-        {:ok, results |> Enum.map(&Search.result(&1["title"], &1["url"], &1["content"])) |> Enum.reject(&is_nil/1) |> Enum.take(max_results)}
+
+        {:ok,
+         results
+         |> Enum.map(&Search.result(&1["title"], &1["url"], &1["content"]))
+         |> Enum.reject(&is_nil/1)
+         |> Enum.take(max_results)}
 
       {:ok, resp} ->
         Search.failed(resp)

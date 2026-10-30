@@ -80,7 +80,7 @@ defmodule SuperPi.Compaction do
 
       # Adjust `initial_idx` backwards if it lands on a `role == "tool"` message so we never orphan
       # a tool result from its preceding assistant `tool_call` message (`REQ-PBT-06`).
-      safe_idx =rewind_before_tool_sequence(visible_entries, initial_idx)
+      safe_idx = rewind_before_tool_sequence(visible_entries, initial_idx)
 
       {prefix, tail} = Enum.split(visible_entries, safe_idx)
 
@@ -170,7 +170,9 @@ defmodule SuperPi.Compaction do
         {:ok, :noop}
       else
         {prefix, tail, raw_head_id} = find_safe_cut_point(eligible_entries, keep_recent_tokens)
-        head_entry_id = if prev_head_id, do: max(raw_head_id || 0, prev_head_id), else: raw_head_id
+
+        head_entry_id =
+          if prev_head_id, do: max(raw_head_id || 0, prev_head_id), else: raw_head_id
 
         summarizer = Keyword.get(opts, :summarizer, &default_summarizer/2)
         summary_text = summarizer.(prefix, mode)

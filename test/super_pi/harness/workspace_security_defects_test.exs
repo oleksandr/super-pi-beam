@@ -18,7 +18,6 @@ defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
   alias SuperPi.Plugins.Hooks, as: HooksJson
   alias SuperPi.Plugins.Permissions
 
-
   # --- helpers ---
 
   defp tmp_dir!(label) do
@@ -39,7 +38,9 @@ defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
   end
 
   defp pre_tool_hooks!(dir, matcher, command, extra \\ %{}) do
-    write_hooks!(dir, "PreToolUse", [%{"matcher" => matcher, "hooks" => [Map.merge(%{"command" => command}, extra)]}])
+    write_hooks!(dir, "PreToolUse", [
+      %{"matcher" => matcher, "hooks" => [Map.merge(%{"command" => command}, extra)]}
+    ])
   end
 
   defp run_pre_tool(hooks_file, tool, args) do
@@ -60,11 +61,15 @@ defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
     end
 
     test "blocks read of an outside path passed as file_path", %{conv: conv} do
-      assert {:block, _} = Permissions.before_tool("read", %{"file_path" => "/etc/passwd"}, %{conversation_id: conv.id})
+      assert {:block, _} =
+               Permissions.before_tool("read", %{"file_path" => "/etc/passwd"}, %{
+                 conversation_id: conv.id
+               })
     end
 
     test "blocks ls of an outside directory passed as dir", %{conv: conv} do
-      assert {:block, _} = Permissions.before_tool("ls", %{"dir" => "/etc"}, %{conversation_id: conv.id})
+      assert {:block, _} =
+               Permissions.before_tool("ls", %{"dir" => "/etc"}, %{conversation_id: conv.id})
     end
 
     test "blocks write through a symlink that leaves the workspace" do
@@ -78,7 +83,9 @@ defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
         })
 
       assert {:block, _} =
-               Permissions.before_tool("write", %{"path" => Path.join(ws, "escape/passwd")}, %{conversation_id: conv.id})
+               Permissions.before_tool("write", %{"path" => Path.join(ws, "escape/passwd")}, %{
+                 conversation_id: conv.id
+               })
     end
 
     test "a null path does not crash the extension", %{conv: conv} do
@@ -119,7 +126,10 @@ defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
           "settingsOverride" => %{"permissions" => %{"allow" => ["command(git status)"]}}
         })
 
-      assert :allow = Permissions.before_tool("bash", %{"cmd" => "git status"}, %{conversation_id: conv.id})
+      assert :allow =
+               Permissions.before_tool("bash", %{"cmd" => "git status"}, %{
+                 conversation_id: conv.id
+               })
     end
   end
 
@@ -127,13 +137,19 @@ defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
     for mode <- ["PLAN", "Plan", "plan ", "foo"] do
       test "mode #{inspect(mode)} does not allow write" do
         conv = perms_conv!(%{"executionMode" => unquote(mode)})
-        assert {:block, _} = Permissions.before_tool("write", %{"path" => "x.txt"}, %{conversation_id: conv.id})
+
+        assert {:block, _} =
+                 Permissions.before_tool("write", %{"path" => "x.txt"}, %{
+                   conversation_id: conv.id
+                 })
       end
     end
 
     test "accept-edits does not allow an unknown tool by default" do
       conv = perms_conv!(%{"executionMode" => "accept-edits"})
-      assert {:block, _} = Permissions.before_tool("some_mcp_tool", %{}, %{conversation_id: conv.id})
+
+      assert {:block, _} =
+               Permissions.before_tool("some_mcp_tool", %{}, %{conversation_id: conv.id})
     end
   end
 
@@ -151,7 +167,9 @@ defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
     end
 
     test "decision ask does not silently allow the tool" do
-      file = pre_tool_hooks!(tmp_dir!("hk_ask"), "*", ~s(echo '{"decision":"ask","reason":"confirm"}'))
+      file =
+        pre_tool_hooks!(tmp_dir!("hk_ask"), "*", ~s(echo '{"decision":"ask","reason":"confirm"}'))
+
       refute run_pre_tool(file, "bash", %{"command" => "ls"}) == :allow
     end
 
@@ -171,7 +189,9 @@ defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
     end
 
     test "a deny hook with matcher Bash blocks tool bash" do
-      file = pre_tool_hooks!(tmp_dir!("hk_case"), "Bash", ~s(echo '{"decision":"deny","reason":"no"}'))
+      file =
+        pre_tool_hooks!(tmp_dir!("hk_case"), "Bash", ~s(echo '{"decision":"deny","reason":"no"}'))
+
       assert {:block, _} = run_pre_tool(file, "bash", %{"command" => "ls"})
     end
   end
@@ -194,7 +214,9 @@ defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
       {:ok, cfg2} = HooksJson.before_agent_start(cfg1, ctx)
       {:ok, cfg3} = HooksJson.before_agent_start(cfg2, ctx)
 
-      sections = Enum.filter(Map.get(cfg3, "systemSections", []), &(&1["id"] == "session_start_hooks"))
+      sections =
+        Enum.filter(Map.get(cfg3, "systemSections", []), &(&1["id"] == "session_start_hooks"))
+
       assert length(sections) == 1, "#{length(sections)} duplicate sections after 3 requests"
     end
   end
@@ -206,11 +228,18 @@ defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
       conv = conversation!(%{})
 
       assert {:ok, _} =
-               HooksJson.before_agent_start(%{"hooksFiles" => [file], "workspacePaths" => [dir]}, %{conversation_id: conv.id})
+               HooksJson.before_agent_start(
+                 %{"hooksFiles" => [file], "workspacePaths" => [dir]},
+                 %{conversation_id: conv.id}
+               )
     end
 
     test "PreToolUse handler without a command" do
-      file = write_hooks!(tmp_dir!("hk_nocmd"), "PreToolUse", [%{"matcher" => "*", "hooks" => [%{"type" => "command"}]}])
+      file =
+        write_hooks!(tmp_dir!("hk_nocmd"), "PreToolUse", [
+          %{"matcher" => "*", "hooks" => [%{"type" => "command"}]}
+        ])
+
       result = run_pre_tool(file, "bash", %{})
       assert result == :allow or match?({:block, _}, result)
     end
@@ -222,7 +251,11 @@ defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
     end
 
     test "PreToolUse matcher that is not a string" do
-      file = write_hooks!(tmp_dir!("hk_matcher"), "PreToolUse", [%{"matcher" => 5, "hooks" => [%{"command" => "echo '{}'"}]}])
+      file =
+        write_hooks!(tmp_dir!("hk_matcher"), "PreToolUse", [
+          %{"matcher" => 5, "hooks" => [%{"command" => "echo '{}'"}]}
+        ])
+
       result = run_pre_tool(file, "bash", %{})
       assert result == :allow or match?({:block, _}, result)
     end
@@ -234,7 +267,10 @@ defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
     test "truncating a long multibyte step keeps the transcript valid JSON" do
       conv = conversation!(%{})
       # 2000 x 3 bytes: the 4096 byte cut lands inside a character.
-      Storage.append_entry!(conv.id, "pi.message", %{"role" => "assistant", "content" => String.duplicate("日", 2000)})
+      Storage.append_entry!(conv.id, "pi.message", %{
+        "role" => "assistant",
+        "content" => String.duplicate("日", 2000)
+      })
 
       app_dir = tmp_dir!("brain")
       info = Brain.sync_transcript!(conv.id, app_data_dir: app_dir)

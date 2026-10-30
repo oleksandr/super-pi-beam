@@ -49,8 +49,11 @@ defmodule SuperPi.Auth do
           [{token, to_string(name)}]
         end
 
-      token when is_binary(token) and token != "" -> [{token, "token:" <> fingerprint(token)}]
-      _ -> []
+      token when is_binary(token) and token != "" ->
+        [{token, "token:" <> fingerprint(token)}]
+
+      _ ->
+        []
     end)
     |> Map.new()
   end

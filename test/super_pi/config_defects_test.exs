@@ -9,7 +9,6 @@ defmodule SuperPi.ConfigDefectsTest do
   """
   use ExUnit.Case, async: false
 
-
   @config_dir Path.expand("../../config", __DIR__)
 
   defp read_config(file, env) do
@@ -82,6 +81,8 @@ defmodule SuperPi.ConfigDefectsTest do
       end)
 
     assert Oban.Plugins.Pruner in plugins, "oban_jobs grows without bound"
-    assert Oban.Plugins.Lifeline in plugins, "jobs executing during a crash stay executing forever"
+
+    assert Oban.Plugins.Lifeline in plugins,
+           "jobs executing during a crash stay executing forever"
   end
 end

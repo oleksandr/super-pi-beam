@@ -11,7 +11,6 @@ defmodule SuperPi.AI.StreamNormalizerDefectsTest do
 
   alias SuperPi.AI.StreamNormalizer
 
-
   defp run(provider, chunks) when is_list(chunks) do
     {events, st} =
       Enum.reduce(chunks, {[], StreamNormalizer.new(provider, "m")}, fn chunk, {acc, st} ->
@@ -23,7 +22,12 @@ defmodule SuperPi.AI.StreamNormalizerDefectsTest do
     events ++ flush
   end
 
-  defp done(events), do: Enum.find_value(events, fn {:done, d} -> d; _ -> nil end)
+  defp done(events),
+    do:
+      Enum.find_value(events, fn
+        {:done, d} -> d
+        _ -> nil
+      end)
 
   defp sse(map), do: "data: " <> Jason.encode!(map) <> "\n\n"
 
@@ -37,7 +41,13 @@ defmodule SuperPi.AI.StreamNormalizerDefectsTest do
 
   describe "non-object JSON data lines (stream_normalizer.ex:187-193)" do
     for provider <- [:anthropic, :openai, :google],
-        {label, payload} <- [array: "[1,2]", string: ~s("hello"), number: "42", null: "null", bool: "true"] do
+        {label, payload} <- [
+          array: "[1,2]",
+          string: ~s("hello"),
+          number: "42",
+          null: "null",
+          bool: "true"
+        ] do
       test "#{provider}: #{label} payload does not raise" do
         result =
           try do
@@ -116,7 +126,10 @@ defmodule SuperPi.AI.StreamNormalizerDefectsTest do
     test "response.completed ends the stream with a :done event and usage" do
       chunks = [
         sse(%{"type" => "response.output_text.delta", "content_index" => 0, "delta" => "hi"}),
-        sse(%{"type" => "response.completed", "response" => %{"usage" => %{"input_tokens" => 5, "output_tokens" => 7}}})
+        sse(%{
+          "type" => "response.completed",
+          "response" => %{"usage" => %{"input_tokens" => 5, "output_tokens" => 7}}
+        })
       ]
 
       d = run(:openai, chunks) |> done()
@@ -126,17 +139,43 @@ defmodule SuperPi.AI.StreamNormalizerDefectsTest do
 
     test "Responses API function calls produce toolcall_delta events and a tool_call block" do
       chunks = [
-        sse(%{"type" => "response.output_item.added", "output_index" => 0, "item" => %{"type" => "function_call", "call_id" => "call_1", "name" => "read"}}),
-        sse(%{"type" => "response.function_call_arguments.delta", "output_index" => 0, "delta" => ~s({"path":"a"})}),
+        sse(%{
+          "type" => "response.output_item.added",
+          "output_index" => 0,
+          "item" => %{"type" => "function_call", "call_id" => "call_1", "name" => "read"}
+        }),
+        sse(%{
+          "type" => "response.function_call_arguments.delta",
+          "output_index" => 0,
+          "delta" => ~s({"path":"a"})
+        }),
         sse(%{"type" => "response.completed", "response" => %{}})
       ]
 
       events = run(:openai, chunks)
-      assert Enum.any?(events, &match?({:toolcall_delta, _}, &1)), "tool call events dropped: #{inspect(events)}"
+
+      assert Enum.any?(events, &match?({:toolcall_delta, _}, &1)),
+             "tool call events dropped: #{inspect(events)}"
     end
 
     test "a tool_calls delta with \"arguments\": null does not raise" do
-      chunk = sse(%{"choices" => [%{"delta" => %{"tool_calls" => [%{"index" => 0, "id" => "c1", "function" => %{"name" => "read", "arguments" => nil}}]}}]})
+      chunk =
+        sse(%{
+          "choices" => [
+            %{
+              "delta" => %{
+                "tool_calls" => [
+                  %{
+                    "index" => 0,
+                    "id" => "c1",
+                    "function" => %{"name" => "read", "arguments" => nil}
+                  }
+                ]
+              }
+            }
+          ]
+        })
+
       assert {:ok, _} = safe(fn -> run(:openai, [chunk]) end)
     end
 
@@ -162,17 +201,34 @@ defmodule SuperPi.AI.StreamNormalizerDefectsTest do
   describe "unknown Anthropic blocks (stream_normalizer.ex:362-364)" do
     test "redacted_thinking blocks are preserved, not turned into empty text" do
       chunks = [
-        sse(%{"type" => "content_block_start", "index" => 0, "content_block" => %{"type" => "redacted_thinking", "data" => "opaque"}}),
+        sse(%{
+          "type" => "content_block_start",
+          "index" => 0,
+          "content_block" => %{"type" => "redacted_thinking", "data" => "opaque"}
+        }),
         sse(%{"type" => "message_stop"})
       ]
 
       d = run(:anthropic, chunks) |> done()
-      assert Enum.any?(d.content, &(&1["type"] == "redacted_thinking" and &1["data"] == "opaque")), "got #{inspect(d.content)}"
+
+      assert Enum.any?(
+               d.content,
+               &(&1["type"] == "redacted_thinking" and &1["data"] == "opaque")
+             ),
+             "got #{inspect(d.content)}"
     end
 
     test "server_tool_use blocks do not become empty text blocks" do
       chunks = [
-        sse(%{"type" => "content_block_start", "index" => 0, "content_block" => %{"type" => "server_tool_use", "id" => "srv_1", "name" => "web_search"}}),
+        sse(%{
+          "type" => "content_block_start",
+          "index" => 0,
+          "content_block" => %{
+            "type" => "server_tool_use",
+            "id" => "srv_1",
+            "name" => "web_search"
+          }
+        }),
         sse(%{"type" => "message_stop"})
       ]
 
@@ -183,7 +239,13 @@ defmodule SuperPi.AI.StreamNormalizerDefectsTest do
 
   describe "SSE framing (stream_normalizer.ex:59,168-175)" do
     test "bare CR line endings are honoured" do
-      payload = Jason.encode!(%{"type" => "content_block_delta", "index" => 0, "delta" => %{"type" => "text_delta", "text" => "hi"}})
+      payload =
+        Jason.encode!(%{
+          "type" => "content_block_delta",
+          "index" => 0,
+          "delta" => %{"type" => "text_delta", "text" => "hi"}
+        })
+
       events = run(:anthropic, ["data: " <> payload <> "\r\r" <> "data: " <> payload <> "\r\r"])
       deltas = Enum.filter(events, &match?({:text_delta, %{delta: "hi"}}, &1))
       assert length(deltas) == 2, "got #{inspect(events)}"
@@ -196,7 +258,9 @@ defmodule SuperPi.AI.StreamNormalizerDefectsTest do
           ~s(data: "delta":{"type":"text_delta","text":"hi"}}\n\n)
         ])
 
-      refute Enum.any?(events, &match?({:error, _}, &1)), "multi-line data produced #{inspect(events)}"
+      refute Enum.any?(events, &match?({:error, _}, &1)),
+             "multi-line data produced #{inspect(events)}"
+
       assert Enum.any?(events, &match?({:text_delta, %{delta: "hi"}}, &1))
     end
   end
@@ -208,16 +272,27 @@ defmodule SuperPi.AI.StreamNormalizerDefectsTest do
       value = String.duplicate("a", 100_000)
       json = Jason.encode!(%{"content" => value})
 
-      deltas = for <<piece::binary-size(50) <- binary_part(json, 0, div(byte_size(json), 50) * 50)>>, do: piece
+      deltas =
+        for <<piece::binary-size(50) <- binary_part(json, 0, div(byte_size(json), 50) * 50)>>,
+          do: piece
+
       rest = binary_part(json, div(byte_size(json), 50) * 50, rem(byte_size(json), 50))
 
       start_ev =
-        sse(%{"type" => "content_block_start", "index" => 0, "content_block" => %{"type" => "tool_use", "id" => "t", "name" => "write"}})
+        sse(%{
+          "type" => "content_block_start",
+          "index" => 0,
+          "content_block" => %{"type" => "tool_use", "id" => "t", "name" => "write"}
+        })
 
       chunks =
         [start_ev] ++
           Enum.map(deltas ++ [rest], fn d ->
-            sse(%{"type" => "content_block_delta", "index" => 0, "delta" => %{"type" => "input_json_delta", "partial_json" => d}})
+            sse(%{
+              "type" => "content_block_delta",
+              "index" => 0,
+              "delta" => %{"type" => "input_json_delta", "partial_json" => d}
+            })
           end)
 
       {micros, _} = :timer.tc(fn -> run(:anthropic, chunks) end)

@@ -2,6 +2,7 @@ defmodule SuperPi.PluginsTest do
   use SuperPi.DataCase, async: false
 
   alias SuperPi.Plugins
+
   alias SuperPi.Plugins.{
     AutoCommit,
     ConfirmDestructive,
@@ -17,6 +18,7 @@ defmodule SuperPi.PluginsTest do
     Subagent,
     Todo
   }
+
   alias SuperPi.Durable.Storage
   alias SuperPi.Durable.Schemas.Conversation
 
@@ -50,15 +52,19 @@ defmodule SuperPi.PluginsTest do
       assert Plugins.resolve(:protected_paths) == ProtectedPaths
       assert Plugins.resolve("protected-paths") == ProtectedPaths
       assert Plugins.resolve("jev-router") == JevRouter
-      assert Plugins.resolve({:inline_bash, [timeout_ms: 5000]}) == {InlineBash, [timeout_ms: 5000]}
+
+      assert Plugins.resolve({:inline_bash, [timeout_ms: 5000]}) ==
+               {InlineBash, [timeout_ms: 5000]}
+
       assert Plugins.resolve({"subagent", [timeout_ms: 5000]}) == {Subagent, [timeout_ms: 5000]}
 
-      resolved = Plugins.resolve_all([
-        :protected_paths,
-        "jev-router",
-        {StructuredOutput, [terminating: true]},
-        :unknown_plugin
-      ])
+      resolved =
+        Plugins.resolve_all([
+          :protected_paths,
+          "jev-router",
+          {StructuredOutput, [terminating: true]},
+          :unknown_plugin
+        ])
 
       assert resolved == [ProtectedPaths, JevRouter, {StructuredOutput, [terminating: true]}]
     end
@@ -72,7 +78,9 @@ defmodule SuperPi.PluginsTest do
       assert {:block, msg1} = ProtectedPaths.before_tool("write", %{"path" => ".env"}, %{})
       assert msg1 =~ "path '.env' is protected"
 
-      assert {:block, msg2} = ProtectedPaths.before_tool("edit", %{"path" => "config/.env.prod"}, %{})
+      assert {:block, msg2} =
+               ProtectedPaths.before_tool("edit", %{"path" => "config/.env.prod"}, %{})
+
       assert msg2 =~ "is protected"
 
       assert {:block, msg3} = ProtectedPaths.before_tool("read", %{"path" => ".git/config"}, %{})
@@ -102,11 +110,17 @@ defmodule SuperPi.PluginsTest do
       {:ok, cfg} = StructuredOutput.before_agent_start(%{"tools" => []}, %{})
       assert Enum.any?(cfg["tools"], &(&1["name"] == "structured_output"))
 
-      res = StructuredOutput.wrap_tool("structured_output", %{
-        "headline" => "Security Audit",
-        "summary" => "All checks passed cleanly.",
-        "action_items" => ["Deploy to prod"]
-      }, fn _ -> %{} end, %{})
+      res =
+        StructuredOutput.wrap_tool(
+          "structured_output",
+          %{
+            "headline" => "Security Audit",
+            "summary" => "All checks passed cleanly.",
+            "action_items" => ["Deploy to prod"]
+          },
+          fn _ -> %{} end,
+          %{}
+        )
 
       assert res["output"] =~ "Security Audit"
       assert res["control"] == %{"terminate" => true}
@@ -119,29 +133,41 @@ defmodule SuperPi.PluginsTest do
       # Planning phase: no edits yet
       messages_planning = [
         %{"role" => "user", "content" => "Inspect the codebase"},
-        %{"role" => "assistant", "content" => [%{"type" => "tool_call", "name" => "read", "id" => "c1"}]},
+        %{
+          "role" => "assistant",
+          "content" => [%{"type" => "tool_call", "name" => "read", "id" => "c1"}]
+        },
         %{"role" => "tool", "name" => "read", "content" => "code"}
       ]
 
       assert JevRouter.determine_phase(messages_planning) == :planning
 
-      {:ok, ctx_planning} = JevRouter.before_request(%{messages: messages_planning}, %{
-        jev_opts: [planning_model: "gemini-2.5-pro", implementation_model: "gemini-2.5-flash"]
-      })
+      {:ok, ctx_planning} =
+        JevRouter.before_request(%{messages: messages_planning}, %{
+          jev_opts: [planning_model: "gemini-2.5-pro", implementation_model: "gemini-2.5-flash"]
+        })
+
       assert ctx_planning[:model] == "gemini-2.5-pro"
       assert ctx_planning[:jev_phase] == :planning
 
       # Implementation phase: edit tool has been called
-      messages_implementation = messages_planning ++ [
-        %{"role" => "assistant", "content" => [%{"type" => "tool_call", "name" => "edit", "id" => "c2"}]},
-        %{"role" => "tool", "name" => "edit", "content" => "ok"}
-      ]
+      messages_implementation =
+        messages_planning ++
+          [
+            %{
+              "role" => "assistant",
+              "content" => [%{"type" => "tool_call", "name" => "edit", "id" => "c2"}]
+            },
+            %{"role" => "tool", "name" => "edit", "content" => "ok"}
+          ]
 
       assert JevRouter.determine_phase(messages_implementation) == :implementation
 
-      {:ok, ctx_impl} = JevRouter.before_request(%{messages: messages_implementation}, %{
-        jev_opts: [planning_model: "gemini-2.5-pro", implementation_model: "gemini-2.5-flash"]
-      })
+      {:ok, ctx_impl} =
+        JevRouter.before_request(%{messages: messages_implementation}, %{
+          jev_opts: [planning_model: "gemini-2.5-pro", implementation_model: "gemini-2.5-flash"]
+        })
+
       assert ctx_impl[:model] == "gemini-2.5-flash"
       assert ctx_impl[:jev_phase] == :implementation
     end
@@ -153,12 +179,26 @@ defmodule SuperPi.PluginsTest do
       ctx = %{conversation_id: conv.id}
 
       # 1. Add todo
-      res1 = Todo.wrap_tool("todo", %{"action" => "add", "text" => "Write tests"}, fn _ -> %{} end, ctx)
+      res1 =
+        Todo.wrap_tool(
+          "todo",
+          %{"action" => "add", "text" => "Write tests"},
+          fn _ -> %{} end,
+          ctx
+        )
+
       assert res1["output"] =~ "Added todo #1"
       assert length(res1["structured_output"]["todos"]) == 1
 
       # 2. Add second todo
-      res2 = Todo.wrap_tool("todo", %{"action" => "add", "text" => "Run dialyzer"}, fn _ -> %{} end, ctx)
+      res2 =
+        Todo.wrap_tool(
+          "todo",
+          %{"action" => "add", "text" => "Run dialyzer"},
+          fn _ -> %{} end,
+          ctx
+        )
+
       assert length(res2["structured_output"]["todos"]) == 2
 
       # 3. Toggle todo
@@ -194,7 +234,10 @@ defmodule SuperPi.PluginsTest do
     end
 
     test "with no client able to answer, the call fails and never picks an answer itself" do
-      res = Questionnaire.wrap_tool("ask_question", %{"questions" => @questions}, fn _ -> %{} end, %{conversation_id: 987_654})
+      res =
+        Questionnaire.wrap_tool("ask_question", %{"questions" => @questions}, fn _ -> %{} end, %{
+          conversation_id: 987_654
+        })
 
       assert res["is_error"] == true
       assert res["structured_output"]["status"] == "no_interactive_client"
@@ -235,14 +278,20 @@ defmodule SuperPi.PluginsTest do
   describe "CustomCompaction Plugin" do
     test "synthesizes structured milestone summary" do
       conv = Storage.create_conversation!()
-      e1 = Storage.append_entry!(conv.id, "pi.message", %{"role" => "user", "content" => "Fix bug"})
-      e2 = Storage.append_entry!(conv.id, "pi.message", %{
-        "role" => "tool",
-        "name" => "edit",
-        "arguments" => %{"path" => "lib/app.ex"}
-      })
 
-      assert {:compacted, summary, meta} = CustomCompaction.before_compact(%{entries: [e1, e2], opts: []}, %{})
+      e1 =
+        Storage.append_entry!(conv.id, "pi.message", %{"role" => "user", "content" => "Fix bug"})
+
+      e2 =
+        Storage.append_entry!(conv.id, "pi.message", %{
+          "role" => "tool",
+          "name" => "edit",
+          "arguments" => %{"path" => "lib/app.ex"}
+        })
+
+      assert {:compacted, summary, meta} =
+               CustomCompaction.before_compact(%{entries: [e1, e2], opts: []}, %{})
+
       assert summary =~ "## Context Compaction Summary"
       assert summary =~ "- Total conversation turns compressed: 2"
       assert summary =~ "- `lib/app.ex`"
@@ -255,11 +304,17 @@ defmodule SuperPi.PluginsTest do
       parent = Storage.create_conversation!()
       ctx = %{conversation_id: parent.id}
 
-      res = Handoff.wrap_tool("handoff", %{
-        "goal" => "Implement payment webhook",
-        "summary" => "Database schemas created in previous session",
-        "files" => ["lib/billing.ex"]
-      }, fn _ -> %{} end, ctx)
+      res =
+        Handoff.wrap_tool(
+          "handoff",
+          %{
+            "goal" => "Implement payment webhook",
+            "summary" => "Database schemas created in previous session",
+            "files" => ["lib/billing.ex"]
+          },
+          fn _ -> %{} end,
+          ctx
+        )
 
       assert res["control"] == %{"terminate" => true}
       child_id = res["structured_output"]["child_conversation_id"]
@@ -290,9 +345,24 @@ defmodule SuperPi.PluginsTest do
   describe "Declarative Showcase Harnesses" do
     test "SuperPi.Harness.Code resolves all composed plugins with options" do
       exts = SuperPi.Harness.Code.extensions()
-      mods = Enum.map(exts, fn {m, _} -> m; m -> m end)
 
-      for mod <- [SuperPi.Plugins.Permissions, ProtectedPaths, ConfirmDestructive, GitCheckpoint, AutoCommit, JevRouter, Todo, PromptCustomizer, SuperPi.Plugins.TranscriptLogger] do
+      mods =
+        Enum.map(exts, fn
+          {m, _} -> m
+          m -> m
+        end)
+
+      for mod <- [
+            SuperPi.Plugins.Permissions,
+            ProtectedPaths,
+            ConfirmDestructive,
+            GitCheckpoint,
+            AutoCommit,
+            JevRouter,
+            Todo,
+            PromptCustomizer,
+            SuperPi.Plugins.TranscriptLogger
+          ] do
         assert mod in mods
       end
 
@@ -309,9 +379,22 @@ defmodule SuperPi.PluginsTest do
 
     test "SuperPi.Harness.Assistant composes the interactive plugins and no shell expansion" do
       exts = SuperPi.Harness.Assistant.extensions()
-      mods = Enum.map(exts, fn {m, _} -> m; m -> m end)
 
-      for mod <- [Questionnaire, StructuredOutput, Handoff, Subagent, CustomCompaction, Todo, SuperPi.Plugins.Permissions] do
+      mods =
+        Enum.map(exts, fn
+          {m, _} -> m
+          m -> m
+        end)
+
+      for mod <- [
+            Questionnaire,
+            StructuredOutput,
+            Handoff,
+            Subagent,
+            CustomCompaction,
+            Todo,
+            SuperPi.Plugins.Permissions
+          ] do
         assert mod in mods
       end
 
@@ -344,7 +427,10 @@ defmodule SuperPi.PluginsTest do
 
       # Blocked when custom pattern configured in ctx[:config]
       ctx = %{config: [patterns: [~r/\.secret$/]]}
-      assert {:block, msg} = ProtectedPaths.before_tool("write", %{"path" => "lib/custom.secret"}, ctx)
+
+      assert {:block, msg} =
+               ProtectedPaths.before_tool("write", %{"path" => "lib/custom.secret"}, ctx)
+
       assert msg =~ "path 'lib/custom.secret' is protected"
     end
 
@@ -352,17 +438,31 @@ defmodule SuperPi.PluginsTest do
       configured_ext = {ProtectedPaths, [patterns: [~r/locked_file\.txt$/]]}
 
       # Run before_tool through extension pipeline
-      result = SuperPi.Extension.run_before_tool([configured_ext], "write", %{"path" => "locked_file.txt"}, %{})
+      result =
+        SuperPi.Extension.run_before_tool(
+          [configured_ext],
+          "write",
+          %{"path" => "locked_file.txt"},
+          %{}
+        )
+
       assert {:block, msg} = result
       assert msg =~ "path 'locked_file.txt' is protected"
 
       # Verify clean path is allowed
       assert {:allow, %{"path" => "normal.txt"}} =
-               SuperPi.Extension.run_before_tool([configured_ext], "write", %{"path" => "normal.txt"}, %{})
+               SuperPi.Extension.run_before_tool(
+                 [configured_ext],
+                 "write",
+                 %{"path" => "normal.txt"},
+                 %{}
+               )
     end
 
     test "JevRouter respects custom planning and implementation models via ctx[:config]" do
-      ctx = %{config: [planning_model: "test-pro-model", implementation_model: "test-flash-model"]}
+      ctx = %{
+        config: [planning_model: "test-pro-model", implementation_model: "test-flash-model"]
+      }
 
       # In planning phase
       assert {:ok, derived} = JevRouter.before_request(%{messages: []}, ctx)
@@ -370,7 +470,11 @@ defmodule SuperPi.PluginsTest do
       assert derived[:jev_phase] == :planning
 
       # In implementation phase (after write tool call)
-      edit_msg = %{"role" => "assistant", "content" => [%{"type" => "tool_call", "name" => "write"}]}
+      edit_msg = %{
+        "role" => "assistant",
+        "content" => [%{"type" => "tool_call", "name" => "write"}]
+      }
+
       assert {:ok, derived_impl} = JevRouter.before_request(%{messages: [edit_msg]}, ctx)
       assert derived_impl[:model] == "test-flash-model"
       assert derived_impl[:jev_phase] == :implementation

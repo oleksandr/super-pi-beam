@@ -30,12 +30,16 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
     app = Path.join(System.tmp_dir!(), "eff_#{System.unique_integer([:positive])}")
     File.mkdir_p!(app)
     on_exit(fn -> File.rm_rf(app) end)
-    Storage.create_conversation!(agent: Map.merge(%{"workspacePaths" => [File.cwd!()], "appDataDir" => app}, agent))
+
+    Storage.create_conversation!(
+      agent: Map.merge(%{"workspacePaths" => [File.cwd!()], "appDataDir" => app}, agent)
+    )
   end
 
   defp tool(name, effects), do: %{"name" => name, "effects" => effects}
 
-  defp check(conv, name, args \\ %{}), do: Permissions.before_tool(name, args, %{conversation_id: conv.id})
+  defp check(conv, name, args \\ %{}),
+    do: Permissions.before_tool(name, args, %{conversation_id: conv.id})
 
   describe "Tools.effects/2" do
     test "built-in tools have effects" do
@@ -55,8 +59,14 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
     end
 
     test "the artifact, todo, subagent and question tools state effects" do
-      for spec <- SuperPi.Artifacts.tool_specs(), do: assert(is_list(spec["effects"]), spec["name"])
-      assert SuperPi.Plugins.Todo.before_agent_start(%{"tools" => []}, %{}) |> elem(1) |> Map.fetch!("tools") |> hd() |> Map.fetch!("effects") == ["state_write"]
+      for spec <- SuperPi.Artifacts.tool_specs(),
+          do: assert(is_list(spec["effects"]), spec["name"])
+
+      assert SuperPi.Plugins.Todo.before_agent_start(%{"tools" => []}, %{})
+             |> elem(1)
+             |> Map.fetch!("tools")
+             |> hd()
+             |> Map.fetch!("effects") == ["state_write"]
     end
   end
 
@@ -64,24 +74,43 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
     test "artifact tools, todo, delegate_subagent and ask_question are allowed in accept-edits" do
       tools =
         SuperPi.Artifacts.tool_specs() ++
-          [tool("todo", ["state_write"]), tool("delegate_subagent", ["state_write"]), tool("ask_question", ["read"])]
+          [
+            tool("todo", ["state_write"]),
+            tool("delegate_subagent", ["state_write"]),
+            tool("ask_question", ["read"])
+          ]
 
       conv = conv!(%{"executionMode" => "accept-edits", "tools" => tools})
 
-      for name <- ["artifact_get", "artifact_list", "artifact_put", "todo", "delegate_subagent", "ask_question"] do
+      for name <- [
+            "artifact_get",
+            "artifact_list",
+            "artifact_put",
+            "todo",
+            "delegate_subagent",
+            "ask_question"
+          ] do
         assert :allow = check(conv, name), "#{name} must be allowed in accept-edits"
       end
     end
 
     test "state changes are blocked in plan mode, pure reads are not" do
-      conv = conv!(%{"executionMode" => "plan", "tools" => [tool("todo", ["state_write"]), tool("ask_question", ["read"])]})
+      conv =
+        conv!(%{
+          "executionMode" => "plan",
+          "tools" => [tool("todo", ["state_write"]), tool("ask_question", ["read"])]
+        })
+
       assert {:block, _} = check(conv, "todo")
       assert :allow = check(conv, "ask_question")
     end
 
     test "a tool that states no effects keeps the old behaviour" do
       conv = conv!(%{"executionMode" => "accept-edits", "tools" => [%{"name" => "mystery"}]})
-      assert {:block, "Tool `mystery` is not allowed by default in mode `accept-edits`."} = check(conv, "mystery")
+
+      assert {:block, "Tool `mystery` is not allowed by default in mode `accept-edits`."} =
+               check(conv, "mystery")
+
       assert :allow = check(conv!(%{"executionMode" => "auto"}), "mystery")
     end
 
@@ -92,13 +121,21 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
         assert :allow = check(conv!(%{"executionMode" => mode, "tools" => tools}), "peek")
       end
 
-      assert {:block, _} = check(conv!(%{"executionMode" => "accept-edits", "tools" => tools}), "poke")
+      assert {:block, _} =
+               check(conv!(%{"executionMode" => "accept-edits", "tools" => tools}), "poke")
+
       assert {:block, _} = check(conv!(%{"executionMode" => "plan", "tools" => tools}), "poke")
       assert :allow = check(conv!(%{"executionMode" => "auto", "tools" => tools}), "poke")
     end
 
     test "network_in_plan_mode: false blocks a network read in plan mode" do
-      conv = conv!(%{"executionMode" => "plan", "tools" => [tool("peek", ["net_read"])], "settingsOverride" => %{"network_in_plan_mode" => false}})
+      conv =
+        conv!(%{
+          "executionMode" => "plan",
+          "tools" => [tool("peek", ["net_read"])],
+          "settingsOverride" => %{"network_in_plan_mode" => false}
+        })
+
       assert {:block, _} = check(conv, "peek")
     end
 
@@ -106,7 +143,13 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
       tools = [tool("peek", ["net_read"]), tool("poke", ["net_write"])]
 
       for mode <- ["plan", "accept-edits", "auto"], name <- ["peek", "poke"] do
-        conv = conv!(%{"executionMode" => mode, "tools" => tools, "settingsOverride" => %{"network" => "deny"}})
+        conv =
+          conv!(%{
+            "executionMode" => mode,
+            "tools" => tools,
+            "settingsOverride" => %{"network" => "deny"}
+          })
+
         assert {:block, msg} = check(conv, name, %{"url" => "https://example.com"})
         if mode != "plan", do: assert(msg =~ "network")
       end
@@ -114,7 +157,13 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
 
     test "network: allowlist allows a listed host and its subdomains only" do
       settings = %{"network" => "allowlist", "networkAllowHosts" => ["example.com"]}
-      conv = conv!(%{"executionMode" => "accept-edits", "tools" => [tool("peek", ["net_read"])], "settingsOverride" => settings})
+
+      conv =
+        conv!(%{
+          "executionMode" => "accept-edits",
+          "tools" => [tool("peek", ["net_read"])],
+          "settingsOverride" => settings
+        })
 
       assert :allow = check(conv, "peek", %{"url" => "https://example.com/a"})
       assert :allow = check(conv, "peek", %{"url" => "https://docs.example.com/a"})
@@ -125,13 +174,20 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
 
     test "a promptable block message is the one that earlier releases produced" do
       conv = conv!(%{"executionMode" => "accept-edits", "tools" => [tool("poke", ["net_write"])]})
-      assert {:block, "Tool `poke` is not allowed by default in mode `accept-edits`."} = check(conv, "poke")
-      assert {:block, "Command `make x` is not in `permissions.allow` under mode `accept-edits`."} = check(conv, "bash", %{"command" => "make x"})
+
+      assert {:block, "Tool `poke` is not allowed by default in mode `accept-edits`."} =
+               check(conv, "poke")
+
+      assert {:block, "Command `make x` is not in `permissions.allow` under mode `accept-edits`."} =
+               check(conv, "bash", %{"command" => "make x"})
     end
 
     test "artifact path arguments stay inside the workspace" do
       conv = conv!(%{"executionMode" => "accept-edits"})
-      assert {:block, _} = check(conv, "artifact_get", %{"name" => "a", "to_path" => "/etc/passwd"})
+
+      assert {:block, _} =
+               check(conv, "artifact_get", %{"name" => "a", "to_path" => "/etc/passwd"})
+
       assert {:block, _} = check(conv, "artifact_put", %{"name" => "a", "path" => "/etc/passwd"})
       assert :allow = check(conv, "artifact_put", %{"name" => "a", "content" => "x"})
     end
@@ -139,8 +195,12 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
 
   describe "maxExecutionMode" do
     test "clamp_mode/1 lowers a mode above the ceiling and keeps the rest" do
-      assert %{"executionMode" => "plan"} = Permissions.clamp_mode(%{"executionMode" => "auto", "maxExecutionMode" => "plan"})
-      assert %{"executionMode" => "plan"} = Permissions.clamp_mode(%{"executionMode" => "plan", "maxExecutionMode" => "auto"})
+      assert %{"executionMode" => "plan"} =
+               Permissions.clamp_mode(%{"executionMode" => "auto", "maxExecutionMode" => "plan"})
+
+      assert %{"executionMode" => "plan"} =
+               Permissions.clamp_mode(%{"executionMode" => "plan", "maxExecutionMode" => "auto"})
+
       assert %{"executionMode" => "auto"} = Permissions.clamp_mode(%{"executionMode" => "auto"})
     end
 
@@ -154,7 +214,9 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
     test "every kind has net, and network false removes it" do
       assert :net in elem(Workspace.build(%{"kind" => "local"}), 1).capabilities
       assert :net in elem(Workspace.build(%{"kind" => "none"}), 1).capabilities
+
       refute :net in elem(Workspace.build(%{"kind" => "none", "network" => false}), 1).capabilities
+
       refute :net in elem(Workspace.build(%{"kind" => "local", "network" => false}), 1).capabilities
     end
 
@@ -162,7 +224,11 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
       assert Workspace.required_capabilities("read") == [:fs]
       assert Workspace.required_capabilities("bash") == [:exec]
       assert Workspace.required_capabilities("artifact_get") == [:artifacts]
-      assert Workspace.required_capabilities("x", %{"tools" => [tool("x", ["net_read", "state_write"])]}) == [:net]
+
+      assert Workspace.required_capabilities("x", %{
+               "tools" => [tool("x", ["net_read", "state_write"])]
+             }) == [:net]
+
       assert Workspace.required_capabilities("x", %{"tools" => [tool("x", ["read"])]}) == []
       assert Workspace.required_capabilities("who") == [:fs, :exec, :net]
     end
@@ -177,7 +243,10 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
         %{"name" => "mystery"}
       ]
 
-      names = fn ws -> Workspace.offered_tools(tools, %{"workspace" => ws, "tools" => tools}) |> Enum.map(& &1["name"]) end
+      names = fn ws ->
+        Workspace.offered_tools(tools, %{"workspace" => ws, "tools" => tools})
+        |> Enum.map(& &1["name"])
+      end
 
       none = names.(%{"kind" => "none"})
       assert "web_like" in none and "mcp__x__y" in none and "todo" in none
@@ -188,7 +257,9 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
 
       local_offline = names.(%{"kind" => "local", "network" => false})
       assert "read" in local_offline and "bash" in local_offline
-      refute "web_like" in local_offline or "mcp__x__y" in local_offline or "mystery" in local_offline
+
+      refute "web_like" in local_offline or "mcp__x__y" in local_offline or
+               "mystery" in local_offline
     end
 
     test "an MCP tool is refused in a workspace without network" do
@@ -223,15 +294,22 @@ defmodule SuperPi.Plugins.ToolEffectsTest do
     end
 
     test "the assistant offers no file or shell tool, and the same harness without network offers no net tool" do
-      tools = Harness.Assistant.agent_defaults()["tools"] ++ [%{"name" => "mcp__a__b", "effects" => ["net_write"]}]
+      tools =
+        Harness.Assistant.agent_defaults()["tools"] ++
+          [%{"name" => "mcp__a__b", "effects" => ["net_write"]}]
+
       agent = Harness.Assistant.agent_defaults()
-      offered = Workspace.offered_tools(tools, Map.put(agent, "tools", tools)) |> Enum.map(& &1["name"])
+
+      offered =
+        Workspace.offered_tools(tools, Map.put(agent, "tools", tools)) |> Enum.map(& &1["name"])
 
       refute Enum.any?(["read", "write", "edit", "bash"], &(&1 in offered))
       assert "mcp__a__b" in offered
 
       offline = Map.put(agent, "workspace", %{"kind" => "none", "network" => false})
-      refute "mcp__a__b" in (Workspace.offered_tools(tools, Map.put(offline, "tools", tools)) |> Enum.map(& &1["name"]))
+
+      refute "mcp__a__b" in (Workspace.offered_tools(tools, Map.put(offline, "tools", tools))
+                             |> Enum.map(& &1["name"]))
     end
 
     test "the librarian has no bash and its workspace comes from :knowledge_paths" do

@@ -15,7 +15,10 @@ defmodule SuperPi.Plugins.TranscriptLogger do
 
   def id, do: "transcript_logger"
   def name, do: "JSONL Dual-Write Transcript Logger"
-  def description, do: "Dual-writes compact and full JSONL conversation transcripts and manages MCP configuration"
+
+  def description,
+    do:
+      "Dual-writes compact and full JSONL conversation transcripts and manages MCP configuration"
 
   alias SuperPi.Discovery
   alias SuperPi.Durable.Context
@@ -31,6 +34,7 @@ defmodule SuperPi.Plugins.TranscriptLogger do
         _ -> :ok
       end
     end
+
     :accept
   end
 
@@ -40,7 +44,10 @@ defmodule SuperPi.Plugins.TranscriptLogger do
   """
   def sync_transcript!(conversation_id, opts \\ []) do
     app_dir = Keyword.get(opts, :app_data_dir, Discovery.default_app_data_dir())
-    logs_dir = Path.join([app_dir, "brain", to_string(conversation_id), ".system_generated", "logs"])
+
+    logs_dir =
+      Path.join([app_dir, "brain", to_string(conversation_id), ".system_generated", "logs"])
+
     File.mkdir_p!(logs_dir)
 
     compact_path = Path.join(logs_dir, "transcript.jsonl")
@@ -77,7 +84,9 @@ defmodule SuperPi.Plugins.TranscriptLogger do
 
     visible
     |> Enum.with_index(1)
-    |> Enum.map(fn {entry, idx} -> entry |> entry_to_transcript_step(idx) |> truncate_step_for_compact() end)
+    |> Enum.map(fn {entry, idx} ->
+      entry |> entry_to_transcript_step(idx) |> truncate_step_for_compact()
+    end)
   end
 
   # --- MCP Server Management (`mcp ...`) ---
@@ -90,7 +99,11 @@ defmodule SuperPi.Plugins.TranscriptLogger do
     servers
     |> Enum.map(fn
       {name, spec} when is_map(spec) ->
-        type = if Map.has_key?(spec, "url") or Map.has_key?(spec, "serverUrl"), do: "http", else: "stdio"
+        type =
+          if Map.has_key?(spec, "url") or Map.has_key?(spec, "serverUrl"),
+            do: "http",
+            else: "stdio"
+
         status = if Map.get(spec, "disabled", false) == true, do: "disabled", else: "enabled"
 
         args_list =
@@ -117,7 +130,9 @@ defmodule SuperPi.Plugins.TranscriptLogger do
     case read_json_map(mcp_config_path(opts))["mcpServers"] do
       servers when is_map(servers) ->
         servers
-        |> Enum.filter(fn {_name, spec} -> is_map(spec) and Map.get(spec, "disabled", false) != true end)
+        |> Enum.filter(fn {_name, spec} ->
+          is_map(spec) and Map.get(spec, "disabled", false) != true
+        end)
         |> Map.new()
 
       _ ->
@@ -202,7 +217,8 @@ defmodule SuperPi.Plugins.TranscriptLogger do
     end
   end
 
-  def plugin_set_enabled(plugin_id, enabled?, opts \\ []) when is_binary(plugin_id) and is_boolean(enabled?) do
+  def plugin_set_enabled(plugin_id, enabled?, opts \\ [])
+      when is_binary(plugin_id) and is_boolean(enabled?) do
     global_dir = Keyword.get(opts, :global_config_dir, Discovery.default_global_config_dir())
     cfg_path = Path.join(global_dir, "config.json")
 
@@ -223,7 +239,8 @@ defmodule SuperPi.Plugins.TranscriptLogger do
       {:ok, raw} ->
         case Jason.decode(raw) do
           {:ok, map} when is_map(map) ->
-            {:ok, %{valid: true, name: Map.get(map, "name", Path.basename(plugin_dir)), errors: []}}
+            {:ok,
+             %{valid: true, name: Map.get(map, "name", Path.basename(plugin_dir)), errors: []}}
 
           {:ok, _non_map} ->
             {:error, %{valid: false, errors: ["plugin.json must be a JSON object"]}}
@@ -233,7 +250,8 @@ defmodule SuperPi.Plugins.TranscriptLogger do
         end
 
       {:error, reason} ->
-        {:error, %{valid: false, errors: ["Cannot read plugin.json in #{plugin_dir}: #{inspect(reason)}"]}}
+        {:error,
+         %{valid: false, errors: ["Cannot read plugin.json in #{plugin_dir}: #{inspect(reason)}"]}}
     end
   end
 
@@ -274,7 +292,8 @@ defmodule SuperPi.Plugins.TranscriptLogger do
     }
   end
 
-  defp truncate_step_for_compact(%{"content" => c} = step) when byte_size(c) > @compact_limit_bytes do
+  defp truncate_step_for_compact(%{"content" => c} = step)
+       when byte_size(c) > @compact_limit_bytes do
     truncated = safe_truncate_utf8(c, @compact_limit_bytes) <> "...[TRUNCATED]"
 
     step

@@ -50,8 +50,8 @@ defmodule SuperPi.Gateway.AGUI do
   @keepalive_ms 15_000
   @run_timeout_ms 300_000
 
-  plug :match
-  plug :dispatch
+  plug(:match)
+  plug(:dispatch)
 
   post "/run" do
     params = conn.body_params
@@ -61,17 +61,24 @@ defmodule SuperPi.Gateway.AGUI do
          {:ok, prompt} <- last_user_text(params["messages"]),
          {:ok, harness} <- pick_harness(conn, params) do
       {conv_id, new?} =
-        Sessions.fetch_or_create(principal, "agui:" <> thread_id, fn -> Storage.create_conversation!(agent: %{}, owner: principal) end)
+        Sessions.fetch_or_create(principal, "agui:" <> thread_id, fn ->
+          Storage.create_conversation!(agent: %{}, owner: principal)
+        end)
 
       configure(conv_id, new?, harness, params)
       if new?, do: seed(conv_id, params["messages"])
 
-      pid = SuperPi.Conversation.Locator.ensure_started!(conv_id, Harness.remote_extensions(harness), set_extensions: true)
+      pid =
+        SuperPi.Conversation.Locator.ensure_started!(conv_id, Harness.remote_extensions(harness),
+          set_extensions: true
+        )
+
       if conn.query_params["interactive"] != "false", do: Broker.register_responder(conv_id)
 
       stream_run(conn, conv_id, pid, prompt, thread_id, to_string(params["runId"] || ""))
     else
-      {:error, message} -> json(conn, 400, %{"error" => %{"message" => message, "type" => "invalid_request_error"}})
+      {:error, message} ->
+        json(conn, 400, %{"error" => %{"message" => message, "type" => "invalid_request_error"}})
     end
   end
 
@@ -93,7 +100,12 @@ defmodule SuperPi.Gateway.AGUI do
   end
 
   match _ do
-    json(conn, 404, %{"error" => %{"message" => "Endpoint not found: #{conn.request_path}", "type" => "invalid_request_error"}})
+    json(conn, 404, %{
+      "error" => %{
+        "message" => "Endpoint not found: #{conn.request_path}",
+        "type" => "invalid_request_error"
+      }
+    })
   end
 
   # --- Run ---
@@ -119,7 +131,11 @@ defmodule SuperPi.Gateway.AGUI do
       {:ok, conn} ->
         task =
           Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
-            Machine.safe_submit(pid, prompt, mode: :queue, timeout: @run_timeout_ms, otel_ctx: otel_ctx)
+            Machine.safe_submit(pid, prompt,
+              mode: :queue,
+              timeout: @run_timeout_ms,
+              otel_ctx: otel_ctx
+            )
           end)
 
         try do
@@ -148,8 +164,11 @@ defmodule SuperPi.Gateway.AGUI do
 
       {^ref, {:error, reason}} ->
         Process.demonitor(ref, [:flush])
+
         # A machine that died publishes nothing. If the turn already ended there is nothing to add.
-        if turn_over?(conv_id), do: conn, else: finish_with_error(conn, rstate, "Run failed: #{inspect(reason)}")
+        if turn_over?(conv_id),
+          do: conn,
+          else: finish_with_error(conn, rstate, "Run failed: #{inspect(reason)}")
 
       {^ref, {:ok, _}} ->
         Process.demonitor(ref, [:flush])
@@ -175,7 +194,8 @@ defmodule SuperPi.Gateway.AGUI do
   end
 
   defp finish_with_error(conn, rstate, message) do
-    {items, _} = Renderer.AGUI.render(Event.from_wire(%{"type" => "turn_error", "error" => message}), rstate)
+    {items, _} =
+      Renderer.AGUI.render(Event.from_wire(%{"type" => "turn_error", "error" => message}), rstate)
 
     case send_items(conn, items) do
       {:ok, conn} -> conn
@@ -185,7 +205,9 @@ defmodule SuperPi.Gateway.AGUI do
 
   defp turn_over?(conv_id) do
     receive do
-      {:conversation_event, ^conv_id, %{"type" => type}} when type in ["turn_completed", "turn_error", "turn_cancelled"] -> true
+      {:conversation_event, ^conv_id, %{"type" => type}}
+      when type in ["turn_completed", "turn_error", "turn_cancelled"] ->
+        true
     after
       0 -> false
     end
@@ -213,7 +235,11 @@ defmodule SuperPi.Gateway.AGUI do
 
     {snapshot, rstate} = Renderer.AGUI.snapshot(rstate)
 
-    messages = %{"type" => "MESSAGES_SNAPSHOT", "messages" => History.agui_messages(conv_id), "timestamp" => System.system_time(:millisecond)}
+    messages = %{
+      "type" => "MESSAGES_SNAPSHOT",
+      "messages" => History.agui_messages(conv_id),
+      "timestamp" => System.system_time(:millisecond)
+    }
 
     try do
       case send_items(conn, snapshot ++ [messages]) do
@@ -247,17 +273,28 @@ defmodule SuperPi.Gateway.AGUI do
 
   # --- Input ---
 
-  defp handle_input(conn, conv_id, %{"type" => "prompt", "text" => text}) when is_binary(text) and text != "" do
-    pid = SuperPi.Conversation.Locator.ensure_started!(conv_id, Harness.remote_extensions(Harness.default()))
-    Task.Supervisor.start_child(SuperPi.ToolTaskSupervisor, fn -> Machine.safe_submit(pid, text, mode: :queue, timeout: @run_timeout_ms) end)
+  defp handle_input(conn, conv_id, %{"type" => "prompt", "text" => text})
+       when is_binary(text) and text != "" do
+    pid =
+      SuperPi.Conversation.Locator.ensure_started!(
+        conv_id,
+        Harness.remote_extensions(Harness.default())
+      )
+
+    Task.Supervisor.start_child(SuperPi.ToolTaskSupervisor, fn ->
+      Machine.safe_submit(pid, text, mode: :queue, timeout: @run_timeout_ms)
+    end)
+
     json(conn, 202, %{"status" => "accepted"})
   end
 
-  defp handle_input(conn, conv_id, %{"type" => "permission", "request_id" => rid} = body) when is_binary(rid) do
+  defp handle_input(conn, conv_id, %{"type" => "permission", "request_id" => rid} = body)
+       when is_binary(rid) do
     answer(conn, conv_id, rid, body["option_id"] || body["optionId"])
   end
 
-  defp handle_input(conn, conv_id, %{"type" => "answer", "request_id" => rid} = body) when is_binary(rid) do
+  defp handle_input(conn, conv_id, %{"type" => "answer", "request_id" => rid} = body)
+       when is_binary(rid) do
     answer(conn, conv_id, rid, body["value"])
   end
 
@@ -272,7 +309,11 @@ defmodule SuperPi.Gateway.AGUI do
     json(conn, 200, %{"status" => "cancelled"})
   end
 
-  defp handle_input(conn, _conv_id, _body), do: json(conn, 400, %{"error" => %{"message" => "Unknown input. Use type prompt, permission, answer or cancel."}})
+  defp handle_input(conn, _conv_id, _body),
+    do:
+      json(conn, 400, %{
+        "error" => %{"message" => "Unknown input. Use type prompt, permission, answer or cancel."}
+      })
 
   defp answer(conn, conv_id, request_id, value) do
     # A request id answers only inside its own conversation.
@@ -290,7 +331,9 @@ defmodule SuperPi.Gateway.AGUI do
     {items, rstate, ended?} =
       Enum.reduce(wires, {[], rstate, false}, fn wire, {acc, st, ended?} ->
         {out, st} = Renderer.AGUI.render(Event.from_wire(wire), st)
-        {acc ++ out, st, ended? or wire["type"] in ["turn_completed", "turn_error", "turn_cancelled"]}
+
+        {acc ++ out, st,
+         ended? or wire["type"] in ["turn_completed", "turn_error", "turn_cancelled"]}
       end)
 
     {Renderer.AGUI.coalesce(items), rstate, ended?}
@@ -344,9 +387,14 @@ defmodule SuperPi.Gateway.AGUI do
     |> Enum.reverse()
     |> Enum.find(&(is_map(&1) and &1["role"] == "user"))
     |> case do
-      %{"content" => c} when is_binary(c) and c != "" -> {:ok, c}
-      %{"content" => parts} when is_list(parts) -> {:ok, parts |> Enum.map(&(is_map(&1) && &1["text"] || "")) |> Enum.join("")}
-      _ -> {:error, "`messages` needs a user message"}
+      %{"content" => c} when is_binary(c) and c != "" ->
+        {:ok, c}
+
+      %{"content" => parts} when is_list(parts) ->
+        {:ok, parts |> Enum.map(&((is_map(&1) && &1["text"]) || "")) |> Enum.join("")}
+
+      _ ->
+        {:error, "`messages` needs a user message"}
     end
   end
 
@@ -381,8 +429,12 @@ defmodule SuperPi.Gateway.AGUI do
     messages
     |> Enum.drop(-1)
     |> Enum.each(fn
-      %{"role" => role, "content" => text} when role in ["user", "assistant"] and is_binary(text) and text != "" ->
-        Storage.append_entry!(conv_id, "pi.message", %{"role" => role, "content" => [%{"type" => "text", "text" => text}]})
+      %{"role" => role, "content" => text}
+      when role in ["user", "assistant"] and is_binary(text) and text != "" ->
+        Storage.append_entry!(conv_id, "pi.message", %{
+          "role" => role,
+          "content" => [%{"type" => "text", "text" => text}]
+        })
 
       _ ->
         :ok

@@ -18,8 +18,7 @@ config :super_pi, SuperPi.Repo.SQLite,
   synchronous: :normal,
   busy_timeout: 30000
 
-config :super_pi, SuperPi.Repo.Postgres,
-  priv: "priv/repo"
+config :super_pi, SuperPi.Repo.Postgres, priv: "priv/repo"
 
 config :super_pi, Oban,
   engine: Oban.Engines.Lite,

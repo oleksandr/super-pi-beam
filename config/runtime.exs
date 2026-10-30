@@ -21,9 +21,14 @@ end
 #                           needs a token (SUPER_PI_GATEWAY_TOKEN); the gateway refuses to start without one.
 if System.get_env("SUPER_PI_GATEWAY") in ["1", "true"] do
   bind =
-    case :inet.parse_address(String.to_charlist(System.get_env("SUPER_PI_GATEWAY_BIND") || "127.0.0.1")) do
-      {:ok, ip} -> ip
-      {:error, _} -> raise "SUPER_PI_GATEWAY_BIND must be an IP address, got: #{inspect(System.get_env("SUPER_PI_GATEWAY_BIND"))}"
+    case :inet.parse_address(
+           String.to_charlist(System.get_env("SUPER_PI_GATEWAY_BIND") || "127.0.0.1")
+         ) do
+      {:ok, ip} ->
+        ip
+
+      {:error, _} ->
+        raise "SUPER_PI_GATEWAY_BIND must be an IP address, got: #{inspect(System.get_env("SUPER_PI_GATEWAY_BIND"))}"
     end
 
   config :super_pi,
@@ -62,16 +67,28 @@ case System.get_env("SUPER_PI_STORAGE_BACKEND") do
 
     ssl_mode =
       case System.get_env("SUPER_PI_DB_SSL") || Map.get(query, "sslmode") || "disable" do
-        mode when mode in ["disable", "require", "verify-full"] -> mode
-        mode when mode in ["verify-ca", "verify_full", "verify_ca"] -> "verify-full"
-        mode when mode in ["allow", "prefer"] -> "require"
-        other -> raise "SUPER_PI_DB_SSL must be disable, require or verify-full, got: #{inspect(other)}"
+        mode when mode in ["disable", "require", "verify-full"] ->
+          mode
+
+        mode when mode in ["verify-ca", "verify_full", "verify_ca"] ->
+          "verify-full"
+
+        mode when mode in ["allow", "prefer"] ->
+          "require"
+
+        other ->
+          raise "SUPER_PI_DB_SSL must be disable, require or verify-full, got: #{inspect(other)}"
       end
 
     # `sslmode` is read here, not by the driver, so drop it from the URL.
     database_url =
       uri
-      |> Map.put(:query, query |> Map.delete("sslmode") |> then(&if(&1 == %{}, do: nil, else: URI.encode_query(&1))))
+      |> Map.put(
+        :query,
+        query
+        |> Map.delete("sslmode")
+        |> then(&if(&1 == %{}, do: nil, else: URI.encode_query(&1)))
+      )
       |> URI.to_string()
 
     client_cert =
@@ -90,7 +107,8 @@ case System.get_env("SUPER_PI_STORAGE_BACKEND") do
           [ssl: [verify: :verify_none] ++ client_cert]
 
         "verify-full" ->
-          host = System.get_env("SUPER_PI_DB_SSL_SNI") || uri.host || raise "DATABASE_URL has no host"
+          host =
+            System.get_env("SUPER_PI_DB_SSL_SNI") || uri.host || raise "DATABASE_URL has no host"
 
           trust =
             case System.get_env("SUPER_PI_DB_SSL_CA") do
@@ -103,7 +121,9 @@ case System.get_env("SUPER_PI_STORAGE_BACKEND") do
               [
                 verify: :verify_peer,
                 server_name_indication: String.to_charlist(host),
-                customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
+                customize_hostname_check: [
+                  match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+                ]
               ] ++ trust ++ client_cert
           ]
       end
@@ -118,10 +138,14 @@ case System.get_env("SUPER_PI_STORAGE_BACKEND") do
              url: database_url,
              pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
              queue_target: String.to_integer(System.get_env("SUPER_PI_DB_QUEUE_TARGET") || "50"),
-             queue_interval: String.to_integer(System.get_env("SUPER_PI_DB_QUEUE_INTERVAL") || "1000")
+             queue_interval:
+               String.to_integer(System.get_env("SUPER_PI_DB_QUEUE_INTERVAL") || "1000")
            ] ++
              ssl_opts ++
-             if(System.get_env("SUPER_PI_DB_IPV6") in ["1", "true"], do: [socket_options: [:inet6]], else: [])
+             if(System.get_env("SUPER_PI_DB_IPV6") in ["1", "true"],
+               do: [socket_options: [:inet6]],
+               else: []
+             )
 
     # `SUPER_PI_STORAGE_BACKEND=postgres mix test` runs the suite on PostgreSQL.
     if config_env() == :test do
@@ -165,7 +189,8 @@ cluster_basename = System.get_env("SUPER_PI_CLUSTER_NODE_BASENAME") || "super_pi
 cluster_poll = String.to_integer(System.get_env("SUPER_PI_CLUSTER_POLL_MS") || "5000")
 
 cluster_required = fn var ->
-  System.get_env(var) || raise "#{var} is required when SUPER_PI_CLUSTER_STRATEGY=#{cluster_strategy}"
+  System.get_env(var) ||
+    raise "#{var} is required when SUPER_PI_CLUSTER_STRATEGY=#{cluster_strategy}"
 end
 
 cluster_topologies =
@@ -185,7 +210,11 @@ cluster_topologies =
       [
         super_pi: [
           strategy: Cluster.Strategy.DNSPoll,
-          config: [polling_interval: cluster_poll, query: cluster_required.("SUPER_PI_CLUSTER_DNS_QUERY"), node_basename: cluster_basename]
+          config: [
+            polling_interval: cluster_poll,
+            query: cluster_required.("SUPER_PI_CLUSTER_DNS_QUERY"),
+            node_basename: cluster_basename
+          ]
         ]
       ]
 
@@ -193,7 +222,11 @@ cluster_topologies =
       [
         super_pi: [
           strategy: Cluster.Strategy.Kubernetes.DNS,
-          config: [service: cluster_required.("SUPER_PI_CLUSTER_K8S_SERVICE"), application_name: cluster_basename, polling_interval: cluster_poll]
+          config: [
+            service: cluster_required.("SUPER_PI_CLUSTER_K8S_SERVICE"),
+            application_name: cluster_basename,
+            polling_interval: cluster_poll
+          ]
         ]
       ]
 
@@ -212,7 +245,9 @@ cluster_topologies =
       raise "SUPER_PI_CLUSTER_STRATEGY must be none, epmd, dnspoll, kubernetes_dns or gossip, got: #{inspect(other)}"
   end
 
-config :super_pi, :cluster, strategy: String.to_atom(cluster_strategy), topologies: cluster_topologies
+config :super_pi, :cluster,
+  strategy: String.to_atom(cluster_strategy),
+  topologies: cluster_topologies
 
 if cluster_topologies != [] and System.get_env("SUPER_PI_STORAGE_BACKEND") != "postgres" do
   raise "SUPER_PI_CLUSTER_STRATEGY=#{cluster_strategy} needs SUPER_PI_STORAGE_BACKEND=postgres (SQLite is a single-node store)"

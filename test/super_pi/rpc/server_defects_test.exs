@@ -11,7 +11,6 @@ defmodule SuperPi.RPC.ServerDefectsTest do
 
   alias SuperPi.RPC.Server
 
-
   defp non_loopback_ipv4 do
     case :inet.getifaddrs() do
       {:ok, ifaces} ->
@@ -44,7 +43,10 @@ defmodule SuperPi.RPC.ServerDefectsTest do
           case result do
             {:ok, sock} ->
               :gen_tcp.close(sock)
-              flunk("RPC server accepted a connection on #{inspect(ip)}:#{port}; it must bind to loopback only")
+
+              flunk(
+                "RPC server accepted a connection on #{inspect(ip)}:#{port}; it must bind to loopback only"
+              )
 
             {:error, _reason} ->
               :ok
@@ -60,7 +62,8 @@ defmodule SuperPi.RPC.ServerDefectsTest do
       {"params is a list", "session.submit", []},
       {"submit without conversation_id", "session.submit", %{"text" => "hi"}},
       {"submit without text", "session.submit", %{"conversation_id" => 1}},
-      {"submit with non-integer conversation_id", "session.submit", %{"conversation_id" => "abc", "text" => "hi"}},
+      {"submit with non-integer conversation_id", "session.submit",
+       %{"conversation_id" => "abc", "text" => "hi"}},
       {"watch without conversation_id", "session.watch", %{}},
       {"ack with non-integer batch_id", "session.ack", %{"batch_id" => "x"}},
       {"open with non-map agent", "session.open", %{"agent" => "not-a-map"}}
@@ -69,7 +72,12 @@ defmodule SuperPi.RPC.ServerDefectsTest do
     for {label, method, params} <- @bad_requests do
       test "#{label}: #{method}" do
         payload =
-          Jason.encode!(%{"jsonrpc" => "2.0", "id" => 7, "method" => unquote(method), "params" => unquote(Macro.escape(params))})
+          Jason.encode!(%{
+            "jsonrpc" => "2.0",
+            "id" => 7,
+            "method" => unquote(method),
+            "params" => unquote(Macro.escape(params))
+          })
 
         outcome =
           try do
@@ -81,18 +89,25 @@ defmodule SuperPi.RPC.ServerDefectsTest do
         assert {:ok, {reply, _state, _notifs}} = outcome,
                "handle_rpc_payload raised: #{inspect(outcome)}"
 
-        assert is_map(reply) and is_map(reply["error"]), "expected a JSON-RPC error reply, got: #{inspect(reply)}"
+        assert is_map(reply) and is_map(reply["error"]),
+               "expected a JSON-RPC error reply, got: #{inspect(reply)}"
+
         assert reply["error"]["code"] in [-32602, -32603]
       end
     end
 
     test "request without id is a notification and gets no reply" do
       payload =
-        Jason.encode!(%{"jsonrpc" => "2.0", "method" => "session.open", "params" => %{"agent" => %{}}})
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "method" => "session.open",
+          "params" => %{"agent" => %{}}
+        })
 
       {reply, _state, _notifs} = Server.handle_rpc_payload(payload, Server.new_client_state())
 
-      assert reply == nil, "JSON-RPC 2.0 forbids replying to notifications, got: #{inspect(reply)}"
+      assert reply == nil,
+             "JSON-RPC 2.0 forbids replying to notifications, got: #{inspect(reply)}"
     end
   end
 end

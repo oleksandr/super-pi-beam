@@ -26,7 +26,8 @@ defmodule SuperPi.Harness.Assistant do
   use SuperPi.Harness.DSL,
     id: "super-pi-assistant",
     name: "Super-Pi Assistant",
-    description: "Assistant for knowledge work: questions, web access, MCP connectors and delegation, no filesystem",
+    description:
+      "Assistant for knowledge work: questions, web access, MCP connectors and delegation, no filesystem",
     effort: "medium",
     mode: "accept-edits",
     max_mode: "accept-edits",

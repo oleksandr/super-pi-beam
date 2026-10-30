@@ -42,7 +42,7 @@ defmodule SuperPi.Telemetry do
 
   @doc "Makes `ctx` current in this process. Pair it with `current_ctx/0`."
   def attach(nil), do: :ok
-  def attach(ctx), do: (Ctx.attach(ctx) && :ok)
+  def attach(ctx), do: Ctx.attach(ctx) && :ok
 
   # --- Spans that cross callbacks (the turn and the HTTP request) ---
 
@@ -90,7 +90,10 @@ defmodule SuperPi.Telemetry do
 
   def turn_stop(handle, status) do
     duration = stop_span(handle, status)
-    :telemetry.execute([:super_pi, :turn, :stop], %{duration: duration}, %{status: status_tag(status)})
+
+    :telemetry.execute([:super_pi, :turn, :stop], %{duration: duration}, %{
+      status: status_tag(status)
+    })
   end
 
   # --- Spans inside one function (provider and tool calls) ---
@@ -103,16 +106,26 @@ defmodule SuperPi.Telemetry do
     model = to_string(model)
     started = System.monotonic_time()
 
-    Tracer.with_span "chat #{model}", %{attributes: %{"gen_ai.request.model" => model, "gen_ai.operation.name" => "chat"}} do
+    Tracer.with_span "chat #{model}", %{
+      attributes: %{"gen_ai.request.model" => model, "gen_ai.operation.name" => "chat"}
+    } do
       result = fun.()
       {status, in_tok, out_tok} = describe_llm(result)
 
-      Tracer.set_attributes(%{"gen_ai.usage.input_tokens" => in_tok, "gen_ai.usage.output_tokens" => out_tok})
+      Tracer.set_attributes(%{
+        "gen_ai.usage.input_tokens" => in_tok,
+        "gen_ai.usage.output_tokens" => out_tok
+      })
+
       mark(status)
 
       :telemetry.execute(
         [:super_pi, :llm, :stop],
-        %{duration: System.monotonic_time() - started, input_tokens: in_tok, output_tokens: out_tok},
+        %{
+          duration: System.monotonic_time() - started,
+          input_tokens: in_tok,
+          output_tokens: out_tok
+        },
         %{model: model_label(model), status: status_tag(status)}
       )
 
@@ -125,7 +138,9 @@ defmodule SuperPi.Telemetry do
     tool = to_string(tool_name)
     started = System.monotonic_time()
 
-    Tracer.with_span "execute_tool #{tool}", %{attributes: %{"gen_ai.tool.name" => tool, "gen_ai.operation.name" => "execute_tool"}} do
+    Tracer.with_span "execute_tool #{tool}", %{
+      attributes: %{"gen_ai.tool.name" => tool, "gen_ai.operation.name" => "execute_tool"}
+    } do
       result = fun.()
       error? = is_map(result) and Map.get(result, "is_error") == true
       Tracer.set_attributes(%{"super_pi.tool.error" => error?})
@@ -144,9 +159,10 @@ defmodule SuperPi.Telemetry do
   # Metric labels come from fixed sets, so a client or a model cannot create new series by
   # inventing names. The span attributes keep the real value.
   defp tool_label(tool) do
-    if :ets.whereis(:super_pi_tool_catalog) != :undefined and :ets.member(:super_pi_tool_catalog, tool),
-      do: tool,
-      else: "other"
+    if :ets.whereis(:super_pi_tool_catalog) != :undefined and
+         :ets.member(:super_pi_tool_catalog, tool),
+       do: tool,
+       else: "other"
   end
 
   defp model_label(model) do
@@ -188,7 +204,11 @@ defmodule SuperPi.Telemetry do
     hist = [buckets: @duration_buckets]
 
     [
-      counter("super_pi.turn.total", event_name: [:super_pi, :turn, :stop], measurement: :duration, tags: [:status]),
+      counter("super_pi.turn.total",
+        event_name: [:super_pi, :turn, :stop],
+        measurement: :duration,
+        tags: [:status]
+      ),
       distribution("super_pi.turn.duration.milliseconds",
         event_name: [:super_pi, :turn, :stop],
         measurement: :duration,
@@ -196,7 +216,11 @@ defmodule SuperPi.Telemetry do
         tags: [:status],
         reporter_options: hist
       ),
-      counter("super_pi.llm.requests.total", event_name: [:super_pi, :llm, :stop], measurement: :duration, tags: [:model, :status]),
+      counter("super_pi.llm.requests.total",
+        event_name: [:super_pi, :llm, :stop],
+        measurement: :duration,
+        tags: [:model, :status]
+      ),
       distribution("super_pi.llm.duration.milliseconds",
         event_name: [:super_pi, :llm, :stop],
         measurement: :duration,
@@ -204,9 +228,21 @@ defmodule SuperPi.Telemetry do
         tags: [:model],
         reporter_options: hist
       ),
-      sum("super_pi.llm.input.tokens", event_name: [:super_pi, :llm, :stop], measurement: :input_tokens, tags: [:model]),
-      sum("super_pi.llm.output.tokens", event_name: [:super_pi, :llm, :stop], measurement: :output_tokens, tags: [:model]),
-      counter("super_pi.tool.calls.total", event_name: [:super_pi, :tool, :stop], measurement: :duration, tags: [:tool, :status]),
+      sum("super_pi.llm.input.tokens",
+        event_name: [:super_pi, :llm, :stop],
+        measurement: :input_tokens,
+        tags: [:model]
+      ),
+      sum("super_pi.llm.output.tokens",
+        event_name: [:super_pi, :llm, :stop],
+        measurement: :output_tokens,
+        tags: [:model]
+      ),
+      counter("super_pi.tool.calls.total",
+        event_name: [:super_pi, :tool, :stop],
+        measurement: :duration,
+        tags: [:tool, :status]
+      ),
       distribution("super_pi.tool.duration.milliseconds",
         event_name: [:super_pi, :tool, :stop],
         measurement: :duration,

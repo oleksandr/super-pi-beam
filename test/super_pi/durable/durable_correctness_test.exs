@@ -26,7 +26,10 @@ defmodule SuperPi.Durable.DurableCorrectnessTest do
 
     test "the drained revision keeps an earlier seq than the caller's write" do
       conv = Storage.create_conversation!()
-      DeferredFlusher.stage_deferred("conversation", conv.id, "pi.live", %{"status" => "streaming"})
+
+      DeferredFlusher.stage_deferred("conversation", conv.id, "pi.live", %{
+        "status" => "streaming"
+      })
 
       Storage.commit(fn seq ->
         Doc.put_doc("conversation", conv.id, "pi.live", %{"status" => "idle"}, seq)
@@ -97,7 +100,10 @@ defmodule SuperPi.Durable.DurableCorrectnessTest do
 
       results =
         1..6
-        |> Task.async_stream(fn _ -> TaskEngine.start_task(task.id) end, max_concurrency: 6, timeout: 10_000)
+        |> Task.async_stream(fn _ -> TaskEngine.start_task(task.id) end,
+          max_concurrency: 6,
+          timeout: 10_000
+        )
         |> Enum.map(fn {:ok, r} -> r end)
 
       assert Enum.count(results, &match?({:ok, _}, &1)) == 1
@@ -108,17 +114,22 @@ defmodule SuperPi.Durable.DurableCorrectnessTest do
       assert {:error, :not_found} = TaskEngine.start_task(-1)
     end
 
-    test "wait_for_children returns the parent unchanged when every child already settled", %{conv: conv} do
+    test "wait_for_children returns the parent unchanged when every child already settled", %{
+      conv: conv
+    } do
       {:ok, parent} = TaskEngine.create_task(conv.id, "parent")
       {:ok, child} = TaskEngine.create_task(conv.id, "child", %{}, owner_task_id: parent.id)
       {:ok, _} = TaskEngine.start_task(parent.id)
       {:ok, _} = TaskEngine.start_task(child.id)
       {:ok, _} = TaskEngine.complete_task(child.id, %{})
 
-      assert {:ok, %TaskSchema{status: "running"}} = TaskEngine.wait_for_children(parent.id, [child.id])
+      assert {:ok, %TaskSchema{status: "running"}} =
+               TaskEngine.wait_for_children(parent.id, [child.id])
     end
 
-    test "a child that settles while the parent waits wakes the parent, with no lost wakeup", %{conv: conv} do
+    test "a child that settles while the parent waits wakes the parent, with no lost wakeup", %{
+      conv: conv
+    } do
       for _ <- 1..25 do
         {:ok, parent} = TaskEngine.create_task(conv.id, "parent")
         {:ok, child} = TaskEngine.create_task(conv.id, "child", %{}, owner_task_id: parent.id)

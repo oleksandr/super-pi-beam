@@ -28,11 +28,14 @@ defmodule SuperPi.RuntimeConfigTest do
 
   describe "postgres" do
     test "DATABASE_URL is required" do
-      assert_raise RuntimeError, ~r/DATABASE_URL/, fn -> read(:prod, %{"SUPER_PI_STORAGE_BACKEND" => "postgres"}) end
+      assert_raise RuntimeError, ~r/DATABASE_URL/, fn ->
+        read(:prod, %{"SUPER_PI_STORAGE_BACKEND" => "postgres"})
+      end
     end
 
     test "defaults: no TLS, pool 10, queue target 50" do
-      opts = read(:prod, %{"SUPER_PI_STORAGE_BACKEND" => "postgres", "DATABASE_URL" => @url}) |> pg()
+      opts =
+        read(:prod, %{"SUPER_PI_STORAGE_BACKEND" => "postgres", "DATABASE_URL" => @url}) |> pg()
 
       assert opts[:url] == @url
       assert opts[:ssl] == false
@@ -43,7 +46,14 @@ defmodule SuperPi.RuntimeConfigTest do
     end
 
     test "require encrypts without verifying" do
-      opts = read(:prod, %{"SUPER_PI_STORAGE_BACKEND" => "postgres", "DATABASE_URL" => @url, "SUPER_PI_DB_SSL" => "require"}) |> pg()
+      opts =
+        read(:prod, %{
+          "SUPER_PI_STORAGE_BACKEND" => "postgres",
+          "DATABASE_URL" => @url,
+          "SUPER_PI_DB_SSL" => "require"
+        })
+        |> pg()
+
       assert opts[:ssl][:verify] == :verify_none
     end
 
@@ -65,7 +75,14 @@ defmodule SuperPi.RuntimeConfigTest do
     end
 
     test "verify-full without a CA file uses the system store" do
-      opts = read(:prod, %{"SUPER_PI_STORAGE_BACKEND" => "postgres", "DATABASE_URL" => @url, "SUPER_PI_DB_SSL" => "verify-full"}) |> pg()
+      opts =
+        read(:prod, %{
+          "SUPER_PI_STORAGE_BACKEND" => "postgres",
+          "DATABASE_URL" => @url,
+          "SUPER_PI_DB_SSL" => "verify-full"
+        })
+        |> pg()
+
       assert [_ | _] = opts[:ssl][:cacerts]
     end
 
@@ -87,20 +104,37 @@ defmodule SuperPi.RuntimeConfigTest do
     end
 
     test "sslmode in the URL is read, and removed from the URL given to the driver" do
-      opts = read(:prod, %{"SUPER_PI_STORAGE_BACKEND" => "postgres", "DATABASE_URL" => @url <> "?sslmode=verify-full&timeout=5000"}) |> pg()
+      opts =
+        read(:prod, %{
+          "SUPER_PI_STORAGE_BACKEND" => "postgres",
+          "DATABASE_URL" => @url <> "?sslmode=verify-full&timeout=5000"
+        })
+        |> pg()
+
       assert opts[:ssl][:verify] == :verify_peer
       assert opts[:url] =~ "timeout=5000"
       refute opts[:url] =~ "sslmode"
     end
 
     test "SUPER_PI_DB_SSL wins over sslmode in the URL" do
-      opts = read(:prod, %{"SUPER_PI_STORAGE_BACKEND" => "postgres", "DATABASE_URL" => @url <> "?sslmode=require", "SUPER_PI_DB_SSL" => "disable"}) |> pg()
+      opts =
+        read(:prod, %{
+          "SUPER_PI_STORAGE_BACKEND" => "postgres",
+          "DATABASE_URL" => @url <> "?sslmode=require",
+          "SUPER_PI_DB_SSL" => "disable"
+        })
+        |> pg()
+
       assert opts[:ssl] == false
     end
 
     test "an unknown mode is an error" do
       assert_raise RuntimeError, ~r/SUPER_PI_DB_SSL/, fn ->
-        read(:prod, %{"SUPER_PI_STORAGE_BACKEND" => "postgres", "DATABASE_URL" => @url, "SUPER_PI_DB_SSL" => "yes please"})
+        read(:prod, %{
+          "SUPER_PI_STORAGE_BACKEND" => "postgres",
+          "DATABASE_URL" => @url,
+          "SUPER_PI_DB_SSL" => "yes please"
+        })
       end
     end
 

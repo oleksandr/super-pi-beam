@@ -38,12 +38,21 @@ defmodule SuperPi.ReviewDefectsTest do
 
       parent =
         Storage.create_conversation!(
-          agent: %{"model" => "m", "executionMode" => "plan", "workspacePaths" => ["/srv/ws"], "settingsOverride" => settings}
+          agent: %{
+            "model" => "m",
+            "executionMode" => "plan",
+            "workspacePaths" => ["/srv/ws"],
+            "settingsOverride" => settings
+          }
         )
 
       Auth.claim!(parent.id, "alice")
 
-      res = Handoff.wrap_tool("handoff", %{"goal" => "g", "summary" => "s"}, fn _ -> %{} end, %{conversation_id: parent.id})
+      res =
+        Handoff.wrap_tool("handoff", %{"goal" => "g", "summary" => "s"}, fn _ -> %{} end, %{
+          conversation_id: parent.id
+        })
+
       child_id = res["structured_output"]["child_conversation_id"]
       agent = Doc.snapshot("conversation", child_id, "pi.agent")
 
@@ -56,8 +65,19 @@ defmodule SuperPi.ReviewDefectsTest do
 
     test "a parent without a mode gives a child in accept-edits, never auto" do
       parent = Storage.create_conversation!(agent: %{})
-      res = Handoff.wrap_tool("handoff", %{"goal" => "g", "summary" => "s"}, fn _ -> %{} end, %{conversation_id: parent.id})
-      agent = Doc.snapshot("conversation", res["structured_output"]["child_conversation_id"], "pi.agent")
+
+      res =
+        Handoff.wrap_tool("handoff", %{"goal" => "g", "summary" => "s"}, fn _ -> %{} end, %{
+          conversation_id: parent.id
+        })
+
+      agent =
+        Doc.snapshot(
+          "conversation",
+          res["structured_output"]["child_conversation_id"],
+          "pi.agent"
+        )
+
       assert agent["executionMode"] == "accept-edits"
     end
   end
@@ -75,7 +95,11 @@ defmodule SuperPi.ReviewDefectsTest do
 
     test "remote_extensions drops InlineBash, and the harness itself has it" do
       assert SuperPi.Plugins.InlineBash in Enum.map(WithInlineBash.extensions([]), &module_of/1)
-      refute SuperPi.Plugins.InlineBash in Enum.map(SuperPi.Harness.remote_extensions(WithInlineBash), &module_of/1)
+
+      refute SuperPi.Plugins.InlineBash in Enum.map(
+               SuperPi.Harness.remote_extensions(WithInlineBash),
+               &module_of/1
+             )
     end
 
     test "no built-in harness carries InlineBash" do
@@ -85,10 +109,23 @@ defmodule SuperPi.ReviewDefectsTest do
     end
 
     test "an RPC session on the assistant harness runs without InlineBash" do
-      payload = Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "method" => "session.open", "params" => %{"harness" => "super-pi-assistant"}})
-      {%{"result" => %{"conversation_id" => conv_id}}, _, _} = RPC.handle_rpc_payload(payload, RPC.new_client_state())
+      payload =
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "session.open",
+          "params" => %{"harness" => "super-pi-assistant"}
+        })
 
-      [{pid, _}] = Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv_id})
+      {%{"result" => %{"conversation_id" => conv_id}}, _, _} =
+        RPC.handle_rpc_payload(payload, RPC.new_client_state())
+
+      [{pid, _}] =
+        Horde.Registry.lookup(
+          SuperPi.Conversation.Locator.registry(),
+          {:conversation_machine, conv_id}
+        )
+
       {_state, data} = :gen_statem.call(pid, :get_state)
       refute SuperPi.Plugins.InlineBash in Enum.map(data.extensions, &module_of/1)
       on_exit(fn -> Process.exit(pid, :kill) end)
@@ -98,11 +135,22 @@ defmodule SuperPi.ReviewDefectsTest do
   describe "MCP harness_task (high 3)" do
     test "a turn that exceeds the timeout returns an error and the server keeps running" do
       put_env(:mcp_harness_task_timeout_ms, 300)
-      put_env(:mcp_harness_task_opts, llm_responder: fn _p, _c -> Process.sleep(3_000) && {:ok, Faults.text_msg("late")} end)
+
+      put_env(:mcp_harness_task_opts,
+        llm_responder: fn _p, _c -> Process.sleep(3_000) && {:ok, Faults.text_msg("late")} end
+      )
+
       SuperPi.Tools.ensure_catalog_ets!()
 
-      req = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/call", "params" => %{"name" => "harness_task", "arguments" => %{"prompt" => "slow"}}}
-      assert {:reply, %{"result" => result}, _state} = SuperPi.MCP.Server.handle_mcp_line(Jason.encode!(req), %{})
+      req = %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "tools/call",
+        "params" => %{"name" => "harness_task", "arguments" => %{"prompt" => "slow"}}
+      }
+
+      assert {:reply, %{"result" => result}, _state} =
+               SuperPi.MCP.Server.handle_mcp_line(Jason.encode!(req), %{})
 
       assert result["isError"] == true
       assert [%{"text" => text}] = result["content"]
@@ -113,8 +161,15 @@ defmodule SuperPi.ReviewDefectsTest do
       put_env(:mcp_harness_task_opts, llm_responder: fn _p, _c -> exit(:boom) end)
       SuperPi.Tools.ensure_catalog_ets!()
 
-      req = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/call", "params" => %{"name" => "harness_task", "arguments" => %{"prompt" => "x"}}}
-      assert {:reply, %{"result" => %{"isError" => true}}, _} = SuperPi.MCP.Server.handle_mcp_line(Jason.encode!(req), %{})
+      req = %{
+        "jsonrpc" => "2.0",
+        "id" => 1,
+        "method" => "tools/call",
+        "params" => %{"name" => "harness_task", "arguments" => %{"prompt" => "x"}}
+      }
+
+      assert {:reply, %{"result" => %{"isError" => true}}, _} =
+               SuperPi.MCP.Server.handle_mcp_line(Jason.encode!(req), %{})
     end
   end
 
@@ -135,7 +190,15 @@ defmodule SuperPi.ReviewDefectsTest do
 
       File.write!(
         Path.join(dir, "mcp_config.json"),
-        Jason.encode!(%{"mcpServers" => %{"stuck" => %{"command" => "elixir", "args" => [@script, marker], "env" => %{"FAKE_MCP_MODE" => "hang"}}}})
+        Jason.encode!(%{
+          "mcpServers" => %{
+            "stuck" => %{
+              "command" => "elixir",
+              "args" => [@script, marker],
+              "env" => %{"FAKE_MCP_MODE" => "hang"}
+            }
+          }
+        })
       )
 
       assert [%{status: {:error, :timeout}}] = Manager.ensure_started(global_config_dir: dir)
@@ -153,9 +216,19 @@ defmodule SuperPi.ReviewDefectsTest do
     end
 
     test "two callers launch one server", %{dir: dir} do
-      File.write!(Path.join(dir, "mcp_config.json"), Jason.encode!(%{"mcpServers" => %{"fake" => %{"command" => "elixir", "args" => [@script]}}}))
+      File.write!(
+        Path.join(dir, "mcp_config.json"),
+        Jason.encode!(%{
+          "mcpServers" => %{"fake" => %{"command" => "elixir", "args" => [@script]}}
+        })
+      )
 
-      results = 1..4 |> Task.async_stream(fn _ -> Manager.ensure_started(global_config_dir: dir) end, timeout: 30_000) |> Enum.flat_map(fn {:ok, r} -> r end)
+      results =
+        1..4
+        |> Task.async_stream(fn _ -> Manager.ensure_started(global_config_dir: dir) end,
+          timeout: 30_000
+        )
+        |> Enum.flat_map(fn {:ok, r} -> r end)
 
       assert Enum.count(results, &(&1.status == :started)) == 1
       assert length(DynamicSupervisor.which_children(SuperPi.MCPClientSupervisor)) == 1
@@ -173,10 +246,22 @@ defmodule SuperPi.ReviewDefectsTest do
 
       File.write!(
         Path.join(dir, "mcp_config.json"),
-        Jason.encode!(%{"mcpServers" => %{"stuck" => %{"command" => "elixir", "args" => [@script], "env" => %{"FAKE_MCP_MODE" => "hang"}}}})
+        Jason.encode!(%{
+          "mcpServers" => %{
+            "stuck" => %{
+              "command" => "elixir",
+              "args" => [@script],
+              "env" => %{"FAKE_MCP_MODE" => "hang"}
+            }
+          }
+        })
       )
 
-      parent = Storage.create_conversation!(agent: %{"model" => "m", "executionMode" => "accept-edits", "globalConfigDir" => dir})
+      parent =
+        Storage.create_conversation!(
+          agent: %{"model" => "m", "executionMode" => "accept-edits", "globalConfigDir" => dir}
+        )
+
       {:ok, task} = TaskEngine.create_task(parent.id, "pi.generation")
       {:ok, running} = TaskEngine.start_task(task.id)
 
@@ -194,7 +279,9 @@ defmodule SuperPi.ReviewDefectsTest do
       # The child's machine hangs while it starts its MCP servers, so it never answers.
       Oban.drain_queue(queue: :subagents)
 
-      assert [%{status: "failed"}] = Repo.all(from t in TaskSchema, where: t.kind == "pi.subagent")
+      assert [%{status: "failed"}] =
+               Repo.all(from(t in TaskSchema, where: t.kind == "pi.subagent"))
+
       # The failure woke the parent, and no live child holds it in `completing`.
       assert TaskEngine.get_task(running.id).status == "pending"
       {:ok, _} = TaskEngine.start_task(running.id)
@@ -205,16 +292,25 @@ defmodule SuperPi.ReviewDefectsTest do
   describe "subagent timeout cap (medium)" do
     test "the model cannot raise the timeout above the configured limit" do
       put_env(:subagent_timeout_ms, 300)
-      put_env(:subagent_machine_opts, llm_responder: fn _p, _c -> Process.sleep(3_000) && {:ok, Faults.text_msg("late")} end)
+
+      put_env(:subagent_machine_opts,
+        llm_responder: fn _p, _c -> Process.sleep(3_000) && {:ok, Faults.text_msg("late")} end
+      )
+
       parent = Storage.create_conversation!(agent: %{"model" => "m"})
       {:ok, task} = TaskEngine.create_task(parent.id, "pi.generation")
       {:ok, running} = TaskEngine.start_task(task.id)
 
       res =
-        Subagent.wrap_tool("delegate_subagent", %{"role" => "scout", "prompt" => "x", "timeout_ms" => 1_000_000}, fn _ -> %{} end, %{
-          conversation_id: parent.id,
-          active_task_id: running.id
-        })
+        Subagent.wrap_tool(
+          "delegate_subagent",
+          %{"role" => "scout", "prompt" => "x", "timeout_ms" => 1_000_000},
+          fn _ -> %{} end,
+          %{
+            conversation_id: parent.id,
+            active_task_id: running.id
+          }
+        )
 
       assert [%{"task_id" => task_id}] = res["structured_output"]["subagents"]
       {micros, _} = :timer.tc(fn -> Oban.drain_queue(queue: :subagents) end)
@@ -230,7 +326,9 @@ defmodule SuperPi.ReviewDefectsTest do
     defp connect do
       path = Path.join("/tmp", "rd_#{System.unique_integer([:positive])}.sock")
       {:ok, server} = RPC.start_link(socket_path: path)
-      {:ok, sock} = :gen_tcp.connect({:local, to_charlist(path)}, 0, [:binary, packet: :line, active: false])
+
+      {:ok, sock} =
+        :gen_tcp.connect({:local, to_charlist(path)}, 0, [:binary, packet: :line, active: false])
 
       on_exit(fn ->
         :gen_tcp.close(sock)
@@ -242,7 +340,13 @@ defmodule SuperPi.ReviewDefectsTest do
     end
 
     defp call(sock, id, method, params) do
-      :ok = :gen_tcp.send(sock, Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}) <> "\n")
+      :ok =
+        :gen_tcp.send(
+          sock,
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}) <>
+            "\n"
+        )
+
       recv_reply(sock, id)
     end
 
@@ -261,14 +365,21 @@ defmodule SuperPi.ReviewDefectsTest do
       %{"result" => %{"conversation_id" => b}} = call(sock, 2, "session.open", %{})
       entry = Storage.append_entry!(b, "pi.message", %{"role" => "user", "content" => "x"})
 
-      assert %{"error" => %{"code" => -32602}} = call(sock, 3, "session.fork", %{"conversation_id" => a, "at_entry_id" => entry.id})
-      assert %{"error" => %{"code" => -32602}} = call(sock, 4, "session.fork", %{"conversation_id" => a, "at_entry_id" => 999_999})
+      assert %{"error" => %{"code" => -32602}} =
+               call(sock, 3, "session.fork", %{"conversation_id" => a, "at_entry_id" => entry.id})
+
+      assert %{"error" => %{"code" => -32602}} =
+               call(sock, 4, "session.fork", %{"conversation_id" => a, "at_entry_id" => 999_999})
+
       assert %{"result" => _} = call(sock, 5, "session.open", %{})
     end
 
     test "opening a conversation that does not exist is an error reply" do
       sock = connect()
-      assert %{"error" => %{"code" => -32004}} = call(sock, 1, "session.open", %{"conversation_id" => 888_888})
+
+      assert %{"error" => %{"code" => -32004}} =
+               call(sock, 1, "session.open", %{"conversation_id" => 888_888})
+
       assert %{"result" => _} = call(sock, 2, "session.open", %{})
     end
 
@@ -277,7 +388,9 @@ defmodule SuperPi.ReviewDefectsTest do
       %{"result" => %{"conversation_id" => conv}} = call(sock, 1, "session.open", %{})
       call(sock, 2, "session.watch", %{"conversation_id" => conv})
 
-      for i <- 1..3, do: call(sock, 10 + i, "session.submit", %{"conversation_id" => conv, "text" => "hi #{i}"})
+      for i <- 1..3,
+          do:
+            call(sock, 10 + i, "session.submit", %{"conversation_id" => conv, "text" => "hi #{i}"})
 
       frames =
         Stream.repeatedly(fn -> :gen_tcp.recv(sock, 0, 500) end)
@@ -301,7 +414,12 @@ defmodule SuperPi.ReviewDefectsTest do
         end)
 
       Process.sleep(50)
-      task = Task.async(fn -> SuperPi.UI.Broker.ask(conv.id, %{"kind" => "questionnaire", "questions" => []}, 30_000) end)
+
+      task =
+        Task.async(fn ->
+          SuperPi.UI.Broker.ask(conv.id, %{"kind" => "questionnaire", "questions" => []}, 30_000)
+        end)
+
       assert_receive {:conversation_event, _, %{"type" => "ui_request"}}, 5_000
 
       {micros, result} =
@@ -320,7 +438,10 @@ defmodule SuperPi.ReviewDefectsTest do
     @opts SuperPi.Gateway.Router.init([])
 
     defp chat_session(sid) do
-      body = %{"model" => "super-pi-workspace", "messages" => [%{"role" => "user", "content" => "hi"}]}
+      body = %{
+        "model" => "super-pi-workspace",
+        "messages" => [%{"role" => "user", "content" => "hi"}]
+      }
 
       Plug.Test.conn(:post, "/v1/chat/completions", Jason.encode!(body))
       |> Plug.Conn.put_req_header("content-type", "application/json")
@@ -331,7 +452,11 @@ defmodule SuperPi.ReviewDefectsTest do
     test "the session table is bounded" do
       put_env(:gateway_session_limit, 3)
 
-      for i <- 1..6, do: assert(chat_session("bounded-#{i}-#{System.unique_integer([:positive])}").status == 200)
+      for i <- 1..6,
+          do:
+            assert(
+              chat_session("bounded-#{i}-#{System.unique_integer([:positive])}").status == 200
+            )
 
       assert SuperPi.Gateway.Sessions.count() == 3
     end
@@ -353,7 +478,15 @@ defmodule SuperPi.ReviewDefectsTest do
 
       File.write!(
         Path.join(dir, "mcp_config.json"),
-        Jason.encode!(%{"mcpServers" => %{"stuck" => %{"command" => "elixir", "args" => [@script], "env" => %{"FAKE_MCP_MODE" => "hang"}}}})
+        Jason.encode!(%{
+          "mcpServers" => %{
+            "stuck" => %{
+              "command" => "elixir",
+              "args" => [@script],
+              "env" => %{"FAKE_MCP_MODE" => "hang"}
+            }
+          }
+        })
       )
 
       put_env(:mcp_clients, true)
@@ -364,7 +497,14 @@ defmodule SuperPi.ReviewDefectsTest do
 
       {micros, {:ok, pid}} =
         :timer.tc(fn ->
-          spec = %{id: {:rd, conv.id}, start: {SuperPi.Conversation.Machine, :start_link, [[conversation_id: conv.id, extensions: []]]}, restart: :temporary}
+          spec = %{
+            id: {:rd, conv.id},
+            start:
+              {SuperPi.Conversation.Machine, :start_link,
+               [[conversation_id: conv.id, extensions: []]]},
+            restart: :temporary
+          }
+
           Horde.DynamicSupervisor.start_child(SuperPi.MachineSupervisor, spec)
         end)
 
@@ -381,7 +521,8 @@ defmodule SuperPi.ReviewDefectsTest do
       {:ok, _} = TaskEngine.start_task(owner.id)
       {:ok, _} = TaskEngine.complete_task(owner.id, %{})
 
-      assert {:error, :invalid_owner_state} = TaskEngine.create_task(conv.id, "c", %{}, owner_task_id: owner.id)
+      assert {:error, :invalid_owner_state} =
+               TaskEngine.create_task(conv.id, "c", %{}, owner_task_id: owner.id)
     end
   end
 
@@ -404,9 +545,15 @@ defmodule SuperPi.ReviewDefectsTest do
       SuperPi.Tools.ensure_catalog_ets!()
       before = SuperPi.Telemetry.scrape()
 
-      SuperPi.Telemetry.tool_span("made-up-tool-#{System.unique_integer([:positive])}", fn -> %{"output" => "x"} end)
+      SuperPi.Telemetry.tool_span("made-up-tool-#{System.unique_integer([:positive])}", fn ->
+        %{"output" => "x"}
+      end)
+
       SuperPi.Telemetry.tool_span("read", fn -> %{"output" => "x"} end)
-      SuperPi.Telemetry.llm_span("invented-model-#{System.unique_integer([:positive])}", fn -> {:ok, %{"usage" => %{}}} end)
+
+      SuperPi.Telemetry.llm_span("invented-model-#{System.unique_integer([:positive])}", fn ->
+        {:ok, %{"usage" => %{}}}
+      end)
 
       text = SuperPi.Telemetry.scrape()
       assert text =~ ~s(tool="other")
@@ -428,9 +575,19 @@ defmodule SuperPi.ReviewDefectsTest do
         {:ok, Faults.text_msg("late")}
       end
 
-      {:ok, pid} = SuperPi.Conversation.Machine.start_link(conversation_id: conv.id, extensions: [], llm_responder: responder)
+      {:ok, pid} =
+        SuperPi.Conversation.Machine.start_link(
+          conversation_id: conv.id,
+          extensions: [],
+          llm_responder: responder
+        )
+
       Process.unlink(pid)
-      Task.start(fn -> catch_exit(SuperPi.Conversation.Machine.submit(pid, "hi", timeout: 10_000)) end)
+
+      Task.start(fn ->
+        catch_exit(SuperPi.Conversation.Machine.submit(pid, "hi", timeout: 10_000))
+      end)
+
       assert_receive :in_turn, 5_000
 
       :gen_statem.stop(pid)
@@ -463,7 +620,10 @@ defmodule SuperPi.ReviewDefectsTest do
     end
 
     test "a plain user message that starts with 'generate a title' runs the agent" do
-      body = %{"model" => "super-pi-workspace", "messages" => [%{"role" => "user", "content" => "Generate a title for my blog post"}]}
+      body = %{
+        "model" => "super-pi-workspace",
+        "messages" => [%{"role" => "user", "content" => "Generate a title for my blog post"}]
+      }
 
       conn =
         Plug.Test.conn(:post, "/v1/chat/completions", Jason.encode!(body))

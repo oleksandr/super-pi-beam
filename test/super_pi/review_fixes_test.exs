@@ -25,8 +25,12 @@ defmodule SuperPi.ReviewFixesTest do
 
   defp eventually(fun, tries \\ 300) do
     cond do
-      fun.() -> :ok
-      tries == 0 -> flunk("condition never held")
+      fun.() ->
+        :ok
+
+      tries == 0 ->
+        flunk("condition never held")
+
       true ->
         Process.sleep(10)
         eventually(fun, tries - 1)
@@ -36,7 +40,12 @@ defmodule SuperPi.ReviewFixesTest do
   defp machine_state(pid), do: pid |> Machine.get_state() |> elem(0)
 
   defp generation_tasks(conv_id) do
-    Repo.all(from t in TaskSchema, where: t.conversation_id == ^conv_id and t.kind == "pi.generation", order_by: t.id)
+    Repo.all(
+      from(t in TaskSchema,
+        where: t.conversation_id == ^conv_id and t.kind == "pi.generation",
+        order_by: t.id
+      )
+    )
   end
 
   # The rule both providers enforce: each assistant tool call has one result, and the results come
@@ -49,7 +58,8 @@ defmodule SuperPi.ReviewFixesTest do
         ids = for %{"type" => "tool_call", "id" => id} <- content, do: id
         following = messages |> Enum.drop(i + 1) |> Enum.take(length(ids))
 
-        assert Enum.map(following, &{&1["role"], &1["tool_call_id"]}) == Enum.map(ids, &{"tool", &1}),
+        assert Enum.map(following, &{&1["role"], &1["tool_call_id"]}) ==
+                 Enum.map(ids, &{"tool", &1}),
                "tool calls #{inspect(ids)} not followed by their results: #{inspect(Enum.map(following, &Map.take(&1, ["role", "tool_call_id"])))}"
 
       _ ->
@@ -67,7 +77,8 @@ defmodule SuperPi.ReviewFixesTest do
     }
   end
 
-  defp user_texts(messages), do: for(%{"role" => "user", "content" => [%{"text" => t} | _]} <- messages, do: t)
+  defp user_texts(messages),
+    do: for(%{"role" => "user", "content" => [%{"text" => t} | _]} <- messages, do: t)
 
   @todo_schema %{
     "type" => "object",
@@ -88,7 +99,11 @@ defmodule SuperPi.ReviewFixesTest do
 
       mcp =
         SuperPi.Tools.register_tool!(
-          %{"name" => "mcp__weather__forecast", "description" => "Forecast", "input_schema" => @mcp_schema},
+          %{
+            "name" => "mcp__weather__forecast",
+            "description" => "Forecast",
+            "input_schema" => @mcp_schema
+          },
           :hidden
         )
 
@@ -110,13 +125,25 @@ defmodule SuperPi.ReviewFixesTest do
       assert by_name["mcp__weather__old"]["parameters"] == @mcp_schema
       assert by_name["read"]["parameters"]["required"] == ["path"]
 
-      payload = %{model: "m", system_sections: derived.system_sections, messages: [], tools: derived.tools}
+      payload = %{
+        model: "m",
+        system_sections: derived.system_sections,
+        messages: [],
+        tools: derived.tools
+      }
 
-      anthropic = Map.new(Anthropic.build_body(payload)["tools"], &{&1["name"], &1["input_schema"]})
+      anthropic =
+        Map.new(Anthropic.build_body(payload)["tools"], &{&1["name"], &1["input_schema"]})
+
       assert anthropic["todo"] == @todo_schema
       assert anthropic["mcp__weather__old"] == @mcp_schema
 
-      openai = Map.new(OpenAI.build_body(payload)["tools"], &{&1["function"]["name"], &1["function"]["parameters"]})
+      openai =
+        Map.new(
+          OpenAI.build_body(payload)["tools"],
+          &{&1["function"]["name"], &1["function"]["parameters"]}
+        )
+
       assert openai["todo"] == @todo_schema
       assert openai["mcp__weather__old"] == @mcp_schema
 
@@ -164,7 +191,13 @@ defmodule SuperPi.ReviewFixesTest do
         send(test_pid, :tool_ran)
         %{"output" => "ran"}
       end
-      {:ok, pid} = Machine.start_link(conversation_id: conv.id, llm_responder: responder, tool_executor: executor)
+
+      {:ok, pid} =
+        Machine.start_link(
+          conversation_id: conv.id,
+          llm_responder: responder,
+          tool_executor: executor
+        )
 
       turn = Task.async(fn -> submit(pid, "start") end)
       assert_receive {:streaming, llm}, 5_000
@@ -176,7 +209,12 @@ defmodule SuperPi.ReviewFixesTest do
       messages = Context.derive(conv.id).messages
       assert_tool_pairs(messages)
       assert user_texts(messages) == ["start", "STEER"]
-      assert messages |> Enum.find_index(&(&1["role"] == "assistant")) < Enum.find_index(messages, &(&1["content"] == [%{"type" => "text", "text" => "STEER"}]))
+
+      assert messages |> Enum.find_index(&(&1["role"] == "assistant")) <
+               Enum.find_index(
+                 messages,
+                 &(&1["content"] == [%{"type" => "text", "text" => "STEER"}])
+               )
     end
 
     test "steer during a tool batch: the skipped results come before the steer text" do
@@ -184,7 +222,9 @@ defmodule SuperPi.ReviewFixesTest do
       test_pid = self()
 
       responder = fn payload, _ctx ->
-        if Enum.any?(payload.messages, &(&1["role"] == "tool")), do: {:ok, Faults.text_msg("done")}, else: {:ok, two_tool_calls()}
+        if Enum.any?(payload.messages, &(&1["role"] == "tool")),
+          do: {:ok, Faults.text_msg("done")},
+          else: {:ok, two_tool_calls()}
       end
 
       executor = fn _name, %{"n" => n}, _ctx ->
@@ -193,7 +233,13 @@ defmodule SuperPi.ReviewFixesTest do
         %{"output" => "ok-#{n}"}
       end
 
-      {:ok, pid} = Machine.start_link(conversation_id: conv.id, llm_responder: responder, tool_executor: executor)
+      {:ok, pid} =
+        Machine.start_link(
+          conversation_id: conv.id,
+          llm_responder: responder,
+          tool_executor: executor
+        )
+
       turn = Task.async(fn -> submit(pid, "go") end)
       assert_receive {:executing, "a", tool}, 5_000
 
@@ -217,7 +263,13 @@ defmodule SuperPi.ReviewFixesTest do
         Process.sleep(30_000)
       end
 
-      {:ok, pid} = Machine.start_link(conversation_id: conv.id, llm_responder: fn _p, _c -> {:ok, two_tool_calls()} end, tool_executor: executor)
+      {:ok, pid} =
+        Machine.start_link(
+          conversation_id: conv.id,
+          llm_responder: fn _p, _c -> {:ok, two_tool_calls()} end,
+          tool_executor: executor
+        )
+
       turn = Task.async(fn -> submit(pid, "go") end)
       assert_receive {:executing, "a"}, 5_000
 
@@ -235,17 +287,49 @@ defmodule SuperPi.ReviewFixesTest do
       append = &Storage.append_entry!(conv.id, "pi.message", &1)
 
       append.(%{"role" => "user", "content" => [%{"type" => "text", "text" => "go"}]})
-      append.(two_tool_calls() |> Map.update!("content", &(&1 ++ [%{"type" => "tool_call", "id" => "call_c", "name" => "t", "arguments" => %{}}])))
+
+      append.(
+        two_tool_calls()
+        |> Map.update!(
+          "content",
+          &(&1 ++ [%{"type" => "tool_call", "id" => "call_c", "name" => "t", "arguments" => %{}}])
+        )
+      )
+
       append.(%{"role" => "tool", "tool_call_id" => "call_a", "name" => "t", "content" => "ok-a"})
-      append.(%{"role" => "user", "content" => [%{"type" => "text", "text" => "STEER"}], "steer" => true})
-      append.(%{"role" => "tool", "tool_call_id" => "call_b", "name" => "t", "content" => "skipped", "is_error" => true})
+
+      append.(%{
+        "role" => "user",
+        "content" => [%{"type" => "text", "text" => "STEER"}],
+        "steer" => true
+      })
+
+      append.(%{
+        "role" => "tool",
+        "tool_call_id" => "call_b",
+        "name" => "t",
+        "content" => "skipped",
+        "is_error" => true
+      })
 
       messages = Context.derive(conv.id).messages
       assert_tool_pairs(messages)
-      assert Enum.map(messages, &(&1["tool_call_id"] || &1["role"])) == ["user", "assistant", "call_a", "call_b", "call_c", "user"]
+
+      assert Enum.map(messages, &(&1["tool_call_id"] || &1["role"])) == [
+               "user",
+               "assistant",
+               "call_a",
+               "call_b",
+               "call_c",
+               "user"
+             ]
+
       assert %{"is_error" => true, "details" => %{"repaired" => true}} = Enum.at(messages, 4)
 
-      for body <- [Anthropic.build_body(%{model: "m", messages: messages}), OpenAI.build_body(%{model: "m", messages: messages})] do
+      for body <- [
+            Anthropic.build_body(%{model: "m", messages: messages}),
+            OpenAI.build_body(%{model: "m", messages: messages})
+          ] do
         assert is_list(body["messages"])
       end
     end
@@ -255,7 +339,10 @@ defmodule SuperPi.ReviewFixesTest do
     defp rate_limited_once(counter) do
       fn _p, _c ->
         :counters.add(counter, 1, 1)
-        if :counters.get(counter, 1) == 1, do: {:retry_after, 60_000}, else: {:ok, Faults.text_msg("answer")}
+
+        if :counters.get(counter, 1) == 1,
+          do: {:retry_after, 60_000},
+          else: {:ok, Faults.text_msg("answer")}
       end
     end
 
@@ -264,10 +351,14 @@ defmodule SuperPi.ReviewFixesTest do
       calls = :counters.get(counter, 1)
 
       # Whatever the wake job does, nothing is left to resume.
-      Repo.all(from t in TaskSchema, where: t.conversation_id == ^conv_id)
-      |> Enum.each(&SuperPi.Workers.GenerationWakeWorker.perform(%Oban.Job{args: %{"task_id" => &1.id}}))
+      Repo.all(from(t in TaskSchema, where: t.conversation_id == ^conv_id))
+      |> Enum.each(
+        &SuperPi.Workers.GenerationWakeWorker.perform(%Oban.Job{args: %{"task_id" => &1.id}})
+      )
 
-      {:ok, pid2} = Machine.start_link(conversation_id: conv_id, llm_responder: rate_limited_once(counter))
+      {:ok, pid2} =
+        Machine.start_link(conversation_id: conv_id, llm_responder: rate_limited_once(counter))
+
       eventually(fn -> machine_state(pid2) == :idle end)
       GenServer.stop(pid2)
       :counters.get(counter, 1) - calls
@@ -276,7 +367,9 @@ defmodule SuperPi.ReviewFixesTest do
     test "steer: the turn completes, the task is completed and is not replayed after a restart" do
       conv = Storage.create_conversation!()
       counter = :counters.new(1, [])
-      {:ok, pid} = Machine.start_link(conversation_id: conv.id, llm_responder: rate_limited_once(counter))
+
+      {:ok, pid} =
+        Machine.start_link(conversation_id: conv.id, llm_responder: rate_limited_once(counter))
 
       turn = Task.async(fn -> submit(pid, "hi") end)
       eventually(fn -> machine_state(pid) == :sleeping_backoff end)
@@ -290,7 +383,9 @@ defmodule SuperPi.ReviewFixesTest do
     test "cancel: the task is cancelled and is not replayed after a restart" do
       conv = Storage.create_conversation!()
       counter = :counters.new(1, [])
-      {:ok, pid} = Machine.start_link(conversation_id: conv.id, llm_responder: rate_limited_once(counter))
+
+      {:ok, pid} =
+        Machine.start_link(conversation_id: conv.id, llm_responder: rate_limited_once(counter))
 
       turn = Task.async(fn -> submit(pid, "hi") end)
       eventually(fn -> machine_state(pid) == :sleeping_backoff end)
@@ -322,7 +417,11 @@ defmodule SuperPi.ReviewFixesTest do
       end
 
       {:ok, pid} =
-        Machine.start_link(conversation_id: conv.id, llm_responder: Faults.tool_then_text_responder("t", %{}, "done"), tool_executor: executor)
+        Machine.start_link(
+          conversation_id: conv.id,
+          llm_responder: Faults.tool_then_text_responder("t", %{}, "done"),
+          tool_executor: executor
+        )
 
       turn = Task.async(fn -> submit(pid, "go") end)
       assert_receive :tool_started, 5_000
@@ -332,19 +431,30 @@ defmodule SuperPi.ReviewFixesTest do
     end
 
     @tag :tmp_dir
-    test "cancel stops a running shell command and its child processes within a second", %{tmp_dir: dir} do
+    test "cancel stops a running shell command and its child processes within a second", %{
+      tmp_dir: dir
+    } do
       conv = Storage.create_conversation!()
       pid_file = Path.join(dir, "child.pid")
       test_pid = self()
 
       executor = fn _n, _a, _c ->
         send(test_pid, :tool_started)
-        SuperPi.Env.SandboxRunner.exec_command("sh", ["-c", "sleep 30 & echo $! > #{pid_file}; wait"])
+
+        SuperPi.Env.SandboxRunner.exec_command("sh", [
+          "-c",
+          "sleep 30 & echo $! > #{pid_file}; wait"
+        ])
+
         %{"output" => "finished"}
       end
 
       {:ok, pid} =
-        Machine.start_link(conversation_id: conv.id, llm_responder: Faults.tool_then_text_responder("t", %{}, "done"), tool_executor: executor)
+        Machine.start_link(
+          conversation_id: conv.id,
+          llm_responder: Faults.tool_then_text_responder("t", %{}, "done"),
+          tool_executor: executor
+        )
 
       turn = Task.async(fn -> submit(pid, "go") end)
       assert_receive :tool_started, 5_000
@@ -355,7 +465,11 @@ defmodule SuperPi.ReviewFixesTest do
         :timer.tc(fn ->
           Machine.cancel(pid)
           assert {:error, :cancelled} = Task.await(turn, 5_000)
-          eventually(fn -> match?({_, 1}, System.cmd("kill", ["-0", child], stderr_to_stdout: true)) end, 100)
+
+          eventually(
+            fn -> match?({_, 1}, System.cmd("kill", ["-0", child], stderr_to_stdout: true)) end,
+            100
+          )
         end)
 
       assert micros < 1_000_000 + 100_000
@@ -369,7 +483,10 @@ defmodule SuperPi.ReviewFixesTest do
 
       @impl true
       def after_response(msg, _ctx) do
-        {:ok, Map.update!(msg, "content", fn content -> Enum.reject(content, &(&1["id"] == "call_b")) end)}
+        {:ok,
+         Map.update!(msg, "content", fn content ->
+           Enum.reject(content, &(&1["id"] == "call_b"))
+         end)}
       end
     end
 
@@ -378,7 +495,9 @@ defmodule SuperPi.ReviewFixesTest do
       test_pid = self()
 
       responder = fn payload, _ctx ->
-        if Enum.any?(payload.messages, &(&1["role"] == "tool")), do: {:ok, Faults.text_msg("done")}, else: {:ok, two_tool_calls()}
+        if Enum.any?(payload.messages, &(&1["role"] == "tool")),
+          do: {:ok, Faults.text_msg("done")},
+          else: {:ok, two_tool_calls()}
       end
 
       executor = fn _name, %{"n" => n}, _ctx ->
@@ -387,7 +506,12 @@ defmodule SuperPi.ReviewFixesTest do
       end
 
       {:ok, pid} =
-        Machine.start_link(conversation_id: conv.id, llm_responder: responder, tool_executor: executor, extensions: [DropSecondCall])
+        Machine.start_link(
+          conversation_id: conv.id,
+          llm_responder: responder,
+          tool_executor: executor,
+          extensions: [DropSecondCall]
+        )
 
       assert {:ok, _} = submit(pid, "go")
       assert_received {:ran, "a"}
@@ -418,7 +542,13 @@ defmodule SuperPi.ReviewFixesTest do
         %{
           "role" => "assistant",
           "content" => nil,
-          "tool_calls" => [%{"id" => "call_1", "type" => "function", "function" => %{"name" => "read", "arguments" => arguments}}]
+          "tool_calls" => [
+            %{
+              "id" => "call_1",
+              "type" => "function",
+              "function" => %{"name" => "read", "arguments" => arguments}
+            }
+          ]
         },
         %{"role" => "tool", "tool_call_id" => "call_1", "content" => "defmodule X"},
         %{"role" => "user", "content" => "thanks"}
@@ -430,14 +560,16 @@ defmodule SuperPi.ReviewFixesTest do
       conn = chat(history(~s({"path":"mix.exs"})))
       assert conn.status == 200
 
-      conv_id = Repo.one(from c in SuperPi.Durable.Schemas.Conversation, select: max(c.id))
+      conv_id = Repo.one(from(c in SuperPi.Durable.Schemas.Conversation, select: max(c.id)))
       messages = Context.derive(conv_id).messages
 
       assert [%{"type" => "tool_call", "arguments" => %{"path" => "mix.exs"}}] =
                Enum.find_value(messages, &(&1["role"] == "assistant" && &1["content"]))
 
       anthropic = Anthropic.build_body(%{model: "m", messages: messages})["messages"]
-      assert %{"type" => "tool_use", "input" => %{"path" => "mix.exs"}} = anthropic |> Enum.at(1) |> Map.get("content") |> List.last()
+
+      assert %{"type" => "tool_use", "input" => %{"path" => "mix.exs"}} =
+               anthropic |> Enum.at(1) |> Map.get("content") |> List.last()
 
       openai = OpenAI.build_body(%{model: "m", messages: messages})["messages"]
       [%{"function" => %{"arguments" => encoded}}] = Enum.find_value(openai, & &1["tool_calls"])
@@ -455,14 +587,27 @@ defmodule SuperPi.ReviewFixesTest do
 
   describe "Task 55: session.compact runs through the machine" do
     defp rpc_compact(conv_id) do
-      payload = Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "method" => "session.compact", "params" => %{"conversation_id" => conv_id}})
-      {reply, _state, _notifs} = SuperPi.RPC.Server.handle_rpc_payload(payload, SuperPi.RPC.Server.new_client_state())
+      payload =
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => 1,
+          "method" => "session.compact",
+          "params" => %{"conversation_id" => conv_id}
+        })
+
+      {reply, _state, _notifs} =
+        SuperPi.RPC.Server.handle_rpc_payload(payload, SuperPi.RPC.Server.new_client_state())
+
       reply
     end
 
     test "nothing to compact is a result, not an internal error" do
       conv = Storage.create_conversation!()
-      Storage.append_entry!(conv.id, "pi.message", %{"role" => "user", "content" => [%{"type" => "text", "text" => "hi"}]})
+
+      Storage.append_entry!(conv.id, "pi.message", %{
+        "role" => "user",
+        "content" => [%{"type" => "text", "text" => "hi"}]
+      })
 
       assert %{"result" => %{"compacted" => false, "reason" => "noop"}} = rpc_compact(conv.id)
     end
@@ -472,8 +617,15 @@ defmodule SuperPi.ReviewFixesTest do
       test_pid = self()
 
       for i <- 1..6 do
-        Storage.append_entry!(conv.id, "pi.message", %{"role" => "user", "content" => [%{"type" => "text", "text" => String.duplicate("old #{i} ", 2_000)}]})
-        Storage.append_entry!(conv.id, "pi.message", %{"role" => "assistant", "content" => [%{"type" => "text", "text" => String.duplicate("reply ", 2_000)}]})
+        Storage.append_entry!(conv.id, "pi.message", %{
+          "role" => "user",
+          "content" => [%{"type" => "text", "text" => String.duplicate("old #{i} ", 2_000)}]
+        })
+
+        Storage.append_entry!(conv.id, "pi.message", %{
+          "role" => "assistant",
+          "content" => [%{"type" => "text", "text" => String.duplicate("reply ", 2_000)}]
+        })
       end
 
       responder = fn _p, _c ->
@@ -490,9 +642,18 @@ defmodule SuperPi.ReviewFixesTest do
 
       send(llm, :release)
       assert {:ok, _} = Task.await(turn, 5_000)
-      assert %{"result" => %{"compacted" => true, "entry_id" => entry_id}} = Task.await(compact, 10_000)
 
-      last_message = Repo.one(from e in SuperPi.Durable.Schemas.Entry, where: e.conversation_id == ^conv.id and e.kind == "pi.message", select: max(e.id))
+      assert %{"result" => %{"compacted" => true, "entry_id" => entry_id}} =
+               Task.await(compact, 10_000)
+
+      last_message =
+        Repo.one(
+          from(e in SuperPi.Durable.Schemas.Entry,
+            where: e.conversation_id == ^conv.id and e.kind == "pi.message",
+            select: max(e.id)
+          )
+        )
+
       assert entry_id > last_message
     end
   end

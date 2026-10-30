@@ -214,8 +214,12 @@ defmodule SuperPi.Tools do
   Supports common tool name aliases and argument variations with defensive parameter extraction.
   """
   def execute(tool_name, args, ctx \\ %{})
+
   def execute(tool_name, args, _ctx) when not is_binary(tool_name) or not is_map(args) do
-    error_result(to_string(tool_name), "Invalid tool execution arguments: tool_name must be a string and args must be a map")
+    error_result(
+      to_string(tool_name),
+      "Invalid tool execution arguments: tool_name must be a string and args must be a map"
+    )
   end
 
   def execute(tool_name, args, ctx) when is_binary(tool_name) and is_map(args) do
@@ -226,8 +230,14 @@ defmodule SuperPi.Tools do
            true <- :net in ws.capabilities do
         SuperPi.MCP.Manager.call_tool(tool_name, args)
       else
-        false -> error_result(tool_name, "#{tool_name} needs network access, which this workspace does not allow")
-        {:error, message} -> error_result(tool_name, message)
+        false ->
+          error_result(
+            tool_name,
+            "#{tool_name} needs network access, which this workspace does not allow"
+          )
+
+        {:error, message} ->
+          error_result(tool_name, message)
       end
     else
       # The workspace (`SuperPi.Env.Workspace`) decides where file and command tools act, and
@@ -250,10 +260,13 @@ defmodule SuperPi.Tools do
     end
   end
 
-  defp agent_cfg(%{conversation_id: id}) when not is_nil(id), do: SuperPi.Durable.Doc.snapshot("conversation", id, "pi.agent")
+  defp agent_cfg(%{conversation_id: id}) when not is_nil(id),
+    do: SuperPi.Durable.Doc.snapshot("conversation", id, "pi.agent")
+
   defp agent_cfg(_ctx), do: nil
 
-  defp add_notice(%{"output" => out} = result, %{notice: notice}) when is_binary(notice) and is_binary(out) do
+  defp add_notice(%{"output" => out} = result, %{notice: notice})
+       when is_binary(notice) and is_binary(out) do
     Map.put(result, "output", notice <> "\n" <> out)
   end
 
@@ -266,14 +279,15 @@ defmodule SuperPi.Tools do
   defp ws_dir(%{confined?: true} = ws, value), do: Workspace.contain!(ws, value || ".")
   defp ws_dir(ws, value), do: value || default_dir(ws)
 
-  defp ws_path(%{confined?: true} = ws, path, args), do: Workspace.contain!(ws, path, fetch_arg(args, [:cd, "cd", :dir, "dir", :cwd, "cwd"]))
+  defp ws_path(%{confined?: true} = ws, path, args),
+    do: Workspace.contain!(ws, path, fetch_arg(args, [:cd, "cd", :dir, "dir", :cwd, "cwd"]))
+
   defp ws_path(_ws, path, args), do: resolve_path(path, args)
 
   defp run(tool_name, args, ws, ctx) do
     env = ws.env
 
     case tool_name do
-
       name when name in ["read", "read_file"] ->
         case fetch_arg(args, [:path, "path", :file_path, "file_path"]) do
           nil ->
@@ -341,8 +355,30 @@ defmodule SuperPi.Tools do
 
       name when name in ["edit", "edit_file"] ->
         path = fetch_arg(args, [:path, "path", :file_path, "file_path"])
-        old_text = fetch_arg(args, [:old_text, "old_text", :oldText, "oldText", :old_string, "old_string", :target, "target"])
-        new_text = fetch_arg(args, [:new_text, "new_text", :newText, "newText", :new_string, "new_string", :replacement, "replacement"])
+
+        old_text =
+          fetch_arg(args, [
+            :old_text,
+            "old_text",
+            :oldText,
+            "oldText",
+            :old_string,
+            "old_string",
+            :target,
+            "target"
+          ])
+
+        new_text =
+          fetch_arg(args, [
+            :new_text,
+            "new_text",
+            :newText,
+            "newText",
+            :new_string,
+            "new_string",
+            :replacement,
+            "replacement"
+          ])
 
         cond do
           is_nil(path) ->
@@ -544,14 +580,26 @@ defmodule SuperPi.Tools do
 
   defp seed_builtin_tools! do
     builtins = [
-      {%{"name" => "read", "description" => "Read file contents with optional line offset and limit"}, :direct},
-      {%{"name" => "write", "description" => "Write full contents to a file under FileLock"}, :direct},
-      {%{"name" => "edit", "description" => "Replace exact text in a file under FileLock"}, :direct},
-      {%{"name" => "bash", "description" => "Execute shell command safely with 4 MiB spill protection"}, :direct},
+      {%{
+         "name" => "read",
+         "description" => "Read file contents with optional line offset and limit"
+       }, :direct},
+      {%{"name" => "write", "description" => "Write full contents to a file under FileLock"},
+       :direct},
+      {%{"name" => "edit", "description" => "Replace exact text in a file under FileLock"},
+       :direct},
+      {%{
+         "name" => "bash",
+         "description" => "Execute shell command safely with 4 MiB spill protection"
+       }, :direct},
       {%{"name" => "grep", "description" => "Search files by regex pattern"}, :direct},
-      {%{"name" => "find", "description" => "List non-ignored files in a directory tree"}, :direct},
+      {%{"name" => "find", "description" => "List non-ignored files in a directory tree"},
+       :direct},
       {%{"name" => "ls", "description" => "List immediate directory entries"}, :direct},
-      {%{"name" => "tool_search", "description" => "Search and activate deferred tools by keyword"}, :model_only}
+      {%{
+         "name" => "tool_search",
+         "description" => "Search and activate deferred tools by keyword"
+       }, :model_only}
     ]
 
     Enum.each(builtins, fn {spec, exp} ->

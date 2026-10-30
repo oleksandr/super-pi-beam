@@ -84,7 +84,10 @@ defmodule SuperPi.AI.GeminiClient do
                 resp
                 |> Req.Response.put_private(:normalizer, next_st)
                 |> Req.Response.put_private(:events_rev, events_rev)
-                |> Req.Response.put_private(:raw_chunks, Req.Response.get_private(resp, :raw_chunks, "") <> chunk)
+                |> Req.Response.put_private(
+                  :raw_chunks,
+                  Req.Response.get_private(resp, :raw_chunks, "") <> chunk
+                )
 
               {:cont, {req, resp}}
             end
@@ -97,8 +100,17 @@ defmodule SuperPi.AI.GeminiClient do
             Enum.each(flush_evs, on_delta)
             events = Enum.reverse(Req.Response.get_private(resp, :events_rev, []), flush_evs)
 
-            error = Enum.find_value(events, fn {:error, err} -> err; _ -> nil end)
-            done = Enum.find_value(Enum.reverse(events), fn {:done, d} -> d; _ -> nil end)
+            error =
+              Enum.find_value(events, fn
+                {:error, err} -> err
+                _ -> nil
+              end)
+
+            done =
+              Enum.find_value(Enum.reverse(events), fn
+                {:done, d} -> d
+                _ -> nil
+              end)
 
             case {error, done} do
               {%{retryable: true}, _} ->
@@ -192,7 +204,10 @@ defmodule SuperPi.AI.GeminiClient do
       case to_string(role) do
         "tool" ->
           call_id = Map.get(msg, "tool_call_id") || Map.get(msg, :tool_call_id)
-          name = Map.get(msg, "name") || Map.get(msg, :name) || Map.get(tool_name_map, call_id, "tool")
+
+          name =
+            Map.get(msg, "name") || Map.get(msg, :name) || Map.get(tool_name_map, call_id, "tool")
+
           output = Map.get(msg, "content") || Map.get(msg, :content, "")
           formatted = format_tool_result(output)
           resp_body = if is_map(output), do: output, else: %{"result" => formatted}
@@ -293,11 +308,17 @@ defmodule SuperPi.AI.GeminiClient do
 
         %{"type" => "text", "text" => t} = b ->
           base = %{"text" => t}
-          if b["thoughtSignature"], do: Map.put(base, "thoughtSignature", b["thoughtSignature"]), else: base
+
+          if b["thoughtSignature"],
+            do: Map.put(base, "thoughtSignature", b["thoughtSignature"]),
+            else: base
 
         %{"type" => "tool_call", "name" => name, "arguments" => args} = b ->
           base = %{"functionCall" => %{"name" => name, "args" => args || %{}}}
-          if b["thoughtSignature"], do: Map.put(base, "thoughtSignature", b["thoughtSignature"]), else: base
+
+          if b["thoughtSignature"],
+            do: Map.put(base, "thoughtSignature", b["thoughtSignature"]),
+            else: base
 
         _ ->
           nil
@@ -333,7 +354,10 @@ defmodule SuperPi.AI.GeminiClient do
     |> then(&if(nullable?, do: Map.put(&1, "nullable", true), else: &1))
     |> put_present("properties", map_values(Map.get(schema, "properties"), &to_gemini_schema/1))
     |> put_present("items", if(is_map(schema["items"]), do: to_gemini_schema(schema["items"])))
-    |> put_present("anyOf", if(is_list(schema["anyOf"]), do: Enum.map(schema["anyOf"], &to_gemini_schema/1)))
+    |> put_present(
+      "anyOf",
+      if(is_list(schema["anyOf"]), do: Enum.map(schema["anyOf"], &to_gemini_schema/1))
+    )
   end
 
   def to_gemini_schema(_other), do: %{"type" => "OBJECT", "properties" => %{}}

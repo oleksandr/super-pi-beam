@@ -53,7 +53,8 @@ defmodule SuperPi.Schedule.CronTest do
     end
 
     test "an unknown zone is an error" do
-      assert {:error, :invalid_timezone} = Cron.next_after("* * * * *", ~U[2026-01-01 00:00:00Z], "Mars/Olympus")
+      assert {:error, :invalid_timezone} =
+               Cron.next_after("* * * * *", ~U[2026-01-01 00:00:00Z], "Mars/Olympus")
     end
   end
 
@@ -66,15 +67,21 @@ defmodule SuperPi.Schedule.CronTest do
 
     test "a fixed time inside the spring-forward gap fires right after the gap, once" do
       # New York, 2026-03-08: 02:00 EST jumps to 03:00 EDT (07:00Z). 02:30 does not exist.
-      assert next!("30 2 * * *", "2026-03-07T12:00:00Z", "America/New_York") == "2026-03-08T07:00:00Z"
+      assert next!("30 2 * * *", "2026-03-07T12:00:00Z", "America/New_York") ==
+               "2026-03-08T07:00:00Z"
+
       # The next day fires at 02:30 EDT as usual.
-      assert next!("30 2 * * *", "2026-03-08T07:00:00Z", "America/New_York") == "2026-03-09T06:30:00Z"
+      assert next!("30 2 * * *", "2026-03-08T07:00:00Z", "America/New_York") ==
+               "2026-03-09T06:30:00Z"
     end
 
     test "a fixed time that occurs twice on fall-back fires on the first occurrence only" do
       # New York, 2026-11-01: 02:00 EDT falls back to 01:00 EST. 01:30 happens at 05:30Z and 06:30Z.
-      assert next!("30 1 * * *", "2026-10-31T12:00:00Z", "America/New_York") == "2026-11-01T05:30:00Z"
-      assert next!("30 1 * * *", "2026-11-01T05:30:00Z", "America/New_York") == "2026-11-02T06:30:00Z"
+      assert next!("30 1 * * *", "2026-10-31T12:00:00Z", "America/New_York") ==
+               "2026-11-01T05:30:00Z"
+
+      assert next!("30 1 * * *", "2026-11-01T05:30:00Z", "America/New_York") ==
+               "2026-11-02T06:30:00Z"
     end
 
     test "an hourly expression follows the real clock across both changes" do
@@ -109,6 +116,8 @@ defmodule SuperPi.Schedule.CronTest do
         {next, next}
       end)
 
-    instants |> Enum.chunk_every(2, 1, :discard) |> Enum.map(fn [a, b] -> DateTime.diff(b, a, :minute) end)
+    instants
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.map(fn [a, b] -> DateTime.diff(b, a, :minute) end)
   end
 end

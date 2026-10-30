@@ -5,12 +5,12 @@ defmodule SuperPi.Durable.Schemas.Entry do
   @type t :: %__MODULE__{}
 
   schema "entries" do
-    field :conversation_id, :integer
-    field :seq, :integer
-    field :kind, :string
-    field :head_entry_id, :integer
-    field :edits, :map, default: %{"items" => []}
-    field :data, :map, default: %{}
+    field(:conversation_id, :integer)
+    field(:seq, :integer)
+    field(:kind, :string)
+    field(:head_entry_id, :integer)
+    field(:edits, :map, default: %{"items" => []})
+    field(:data, :map, default: %{})
 
     timestamps(type: :utc_datetime_usec)
   end

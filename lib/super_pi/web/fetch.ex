@@ -106,7 +106,12 @@ defmodule SuperPi.Web.Fetch do
 
     with {:ok, target} <- Policy.check_url(url, policy_opts),
          {:ok, resp} <- request(target, opts) do
-      hop = %{"url" => URI.to_string(target.uri), "status" => resp.status, "ip" => ip_text(target.ips)}
+      hop = %{
+        "url" => URI.to_string(target.uri),
+        "status" => resp.status,
+        "ip" => ip_text(target.ips)
+      }
+
       chain = chain ++ [hop]
 
       case redirect_location(resp) do
@@ -117,14 +122,16 @@ defmodule SuperPi.Web.Fetch do
           if redirects >= Policy.max_redirects() do
             {:error, {:too_many_redirects, Policy.max_redirects()}}
           else
-            with {:ok, next} <- Policy.redirect_url(target.uri, location), do: follow(next, opts, chain, redirects + 1)
+            with {:ok, next} <- Policy.redirect_url(target.uri, location),
+                 do: follow(next, opts, chain, redirects + 1)
           end
       end
     end
   end
 
-  defp redirect_location(%{status: status, location: location}) when status in @redirect_statuses and is_binary(location) and location != "",
-    do: location
+  defp redirect_location(%{status: status, location: location})
+       when status in @redirect_statuses and is_binary(location) and location != "",
+       do: location
 
   defp redirect_location(_resp), do: nil
 
@@ -167,7 +174,8 @@ defmodule SuperPi.Web.Fetch do
         url: uri,
         headers: [
           {"user-agent", @user_agent},
-          {"accept", "text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.5"},
+          {"accept",
+           "text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.5"},
           {"accept-encoding", "gzip, deflate"}
         ],
         redirect: false,
@@ -176,7 +184,9 @@ defmodule SuperPi.Web.Fetch do
         decode_body: false,
         compressed: false,
         receive_timeout: 15_000,
-        into: fn {:data, chunk}, {req, resp} -> stream_chunk(chunk, req, resp, max_bytes, accept_binary?) end
+        into: fn {:data, chunk}, {req, resp} ->
+          stream_chunk(chunk, req, resp, max_bytes, accept_binary?)
+        end
       ] ++ transport ++ Keyword.get(opts, :req_options, [])
 
     try do
@@ -193,7 +203,8 @@ defmodule SuperPi.Web.Fetch do
 
   # The state lives in the response's private map: the `into` function is called once per chunk.
   defp stream_chunk(chunk, req, resp, max_bytes, accept_binary?) do
-    state = Req.Response.get_private(resp, :web_state) || init_state(resp, max_bytes, accept_binary?)
+    state =
+      Req.Response.get_private(resp, :web_state) || init_state(resp, max_bytes, accept_binary?)
 
     {action, state} =
       case state do
@@ -208,15 +219,25 @@ defmodule SuperPi.Web.Fetch do
   defp init_state(resp, max_bytes, accept_binary?) do
     status = resp.status
     type = header(resp, "content-type")
-    encoding = resp |> header("content-encoding") |> to_string() |> String.downcase() |> String.trim()
+
+    encoding =
+      resp |> header("content-encoding") |> to_string() |> String.downcase() |> String.trim()
+
     cap = if status in 200..299, do: max_bytes, else: min(max_bytes, @error_body_bytes)
 
     stop =
       cond do
-        status in @redirect_statuses and header(resp, "location") not in [nil, ""] -> :redirect
-        status in 200..299 and not accept_binary? and Extract.kind(type, nil) in [:pdf, :binary] -> {:content_type, type || "unknown"}
-        encoding not in ["", "identity", "gzip", "x-gzip", "deflate"] -> {:encoding, "Unsupported Content-Encoding `#{encoding}`."}
-        true -> nil
+        status in @redirect_statuses and header(resp, "location") not in [nil, ""] ->
+          :redirect
+
+        status in 200..299 and not accept_binary? and Extract.kind(type, nil) in [:pdf, :binary] ->
+          {:content_type, type || "unknown"}
+
+        encoding not in ["", "identity", "gzip", "x-gzip", "deflate"] ->
+          {:encoding, "Unsupported Content-Encoding `#{encoding}`."}
+
+        true ->
+          nil
       end
 
     %{
@@ -237,7 +258,9 @@ defmodule SuperPi.Web.Fetch do
     state = %{state | zlib: z}
     inflate(state, z, chunk)
   rescue
-    e in ErlangError -> {:halt, %{state | stop: {:encoding, "Cannot decode the response body: #{inspect(e.original)}."}}}
+    e in ErlangError ->
+      {:halt,
+       %{state | stop: {:encoding, "Cannot decode the response body: #{inspect(e.original)}."}}}
   end
 
   # One `safeInflate` call yields at most 16 KiB, so the loop checks the cap after
@@ -273,7 +296,9 @@ defmodule SuperPi.Web.Fetch do
 
       room > 0 ->
         kept = binary_part(IO.iodata_to_binary(data), 0, room)
-        {:halt, %{state | chunks: [kept | state.chunks], count: state.cap, truncated: true, stop: :cap}}
+
+        {:halt,
+         %{state | chunks: [kept | state.chunks], count: state.cap, truncated: true, stop: :cap}}
 
       true ->
         {:halt, %{state | truncated: true, stop: :cap}}
@@ -291,12 +316,25 @@ defmodule SuperPi.Web.Fetch do
   end
 
   defp build(resp, nil) do
-    %{status: resp.status, content_type: header(resp, "content-type"), location: header(resp, "location"), body: "", truncated: false}
+    %{
+      status: resp.status,
+      content_type: header(resp, "content-type"),
+      location: header(resp, "location"),
+      body: "",
+      truncated: false
+    }
   end
 
   defp build(resp, state) do
     body = state.chunks |> Enum.reverse() |> IO.iodata_to_binary()
-    %{status: resp.status, content_type: header(resp, "content-type"), location: header(resp, "location"), body: body, truncated: state.truncated}
+
+    %{
+      status: resp.status,
+      content_type: header(resp, "content-type"),
+      location: header(resp, "location"),
+      body: body,
+      truncated: state.truncated
+    }
   end
 
   defp header(resp, name) do

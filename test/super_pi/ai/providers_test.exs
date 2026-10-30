@@ -47,10 +47,18 @@ defmodule SuperPi.AI.ProvidersTest do
     test "a configured key makes them resolvable" do
       Application.put_env(:super_pi, :anthropic_api_key, "k")
       Application.put_env(:super_pi, :openai_api_key, "k")
-      on_exit(fn -> Application.delete_env(:super_pi, :anthropic_api_key) && Application.delete_env(:super_pi, :openai_api_key) end)
 
-      assert {:ok, SuperPi.AI.Providers.Anthropic, "claude-sonnet-5-5"} = Providers.resolve("claude-sonnet-5-5")
-      assert {:ok, SuperPi.AI.Providers.Anthropic, "claude-opus-5-5"} = Providers.resolve("anthropic/claude-opus-5-5")
+      on_exit(fn ->
+        Application.delete_env(:super_pi, :anthropic_api_key) &&
+          Application.delete_env(:super_pi, :openai_api_key)
+      end)
+
+      assert {:ok, SuperPi.AI.Providers.Anthropic, "claude-sonnet-5-5"} =
+               Providers.resolve("claude-sonnet-5-5")
+
+      assert {:ok, SuperPi.AI.Providers.Anthropic, "claude-opus-5-5"} =
+               Providers.resolve("anthropic/claude-opus-5-5")
+
       assert {:ok, SuperPi.AI.Providers.OpenAI, "gpt-5"} = Providers.resolve("openai/gpt-5")
       assert {:ok, SuperPi.AI.Providers.OpenAI, "o3-mini"} = Providers.resolve("o3-mini")
     end
@@ -71,9 +79,13 @@ defmodule SuperPi.AI.ProvidersTest do
     end
 
     test "maps harness aliases and prefixes to Gemini models" do
-      assert {:ok, SuperPi.AI.Providers.Gemini, "gemini-3-flash-preview"} = Providers.resolve("super-pi-fast")
+      assert {:ok, SuperPi.AI.Providers.Gemini, "gemini-3-flash-preview"} =
+               Providers.resolve("super-pi-fast")
+
       assert {:ok, _, "gemini-3.1-pro-preview"} = Providers.resolve("super-pi-planner")
-      assert {:ok, _, "gemini-3-flash-preview"} = Providers.resolve("google/gemini-3-flash-preview")
+
+      assert {:ok, _, "gemini-3-flash-preview"} =
+               Providers.resolve("google/gemini-3-flash-preview")
     end
 
     test "still rejects models that no provider handles" do
@@ -104,19 +116,27 @@ defmodule SuperPi.AI.ProvidersTest do
       Application.put_env(:super_pi, :providers, [Custom, SuperPi.AI.Providers.Gemini])
       catalog = Providers.catalog()
 
-      assert %{"provider" => "custom", "available" => true} = Enum.find(catalog, &(&1["id"] == "acme-1"))
+      assert %{"provider" => "custom", "available" => true} =
+               Enum.find(catalog, &(&1["id"] == "acme-1"))
+
       assert %{"available" => false} = Enum.find(catalog, &(&1["id"] == "gemini-3-flash-preview"))
-      refute Enum.any?(catalog, &String.starts_with?(&1["id"], "claude-"))  # Anthropic is not in this list
+      # Anthropic is not in this list
+      refute Enum.any?(catalog, &String.starts_with?(&1["id"], "claude-"))
     end
   end
 
   describe "mock mode" do
     test "serves every model through the mock provider only when enabled" do
       Application.put_env(:super_pi, :mock_llm, true)
-      assert {:ok, SuperPi.AI.Providers.Mock, "claude-sonnet-5-5"} = Providers.resolve("claude-sonnet-5-5")
+
+      assert {:ok, SuperPi.AI.Providers.Mock, "claude-sonnet-5-5"} =
+               Providers.resolve("claude-sonnet-5-5")
 
       {:ok, msg} =
-        SuperPi.AI.Providers.Mock.generate(%{messages: [%{"role" => "user", "content" => "hi"}]}, [])
+        SuperPi.AI.Providers.Mock.generate(
+          %{messages: [%{"role" => "user", "content" => "hi"}]},
+          []
+        )
 
       assert [%{"text" => "Echo: hi"}] = msg["content"]
     end

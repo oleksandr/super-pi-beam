@@ -100,7 +100,12 @@ defmodule SuperPi.CLIInteractiveTest do
       fn payload, _ctx ->
         case Agent.get_and_update(calls, &{&1, &1 + 1}) do
           0 ->
-            args = %{"questions" => [%{"question" => "Which backend?", "options" => ["SQLite", "PostgreSQL"]}]}
+            args = %{
+              "questions" => [
+                %{"question" => "Which backend?", "options" => ["SQLite", "PostgreSQL"]}
+              ]
+            }
+
             {:ok, Faults.tool_call_msg("q1", "ask_question", args)}
 
           _ ->
@@ -111,7 +116,11 @@ defmodule SuperPi.CLIInteractiveTest do
     end
 
     test "a numbered answer reaches the model", %{opts: opts} do
-      opts = Keyword.merge(opts, extensions: [SuperPi.Plugins.Questionnaire], llm_responder: question_responder(self()))
+      opts =
+        Keyword.merge(opts,
+          extensions: [SuperPi.Plugins.Questionnaire],
+          llm_responder: question_responder(self())
+        )
 
       {{0, ""}, out} = chat(opts, ["go", "2", "/exit"])
 
@@ -123,7 +132,12 @@ defmodule SuperPi.CLIInteractiveTest do
     end
 
     test "free text is passed through, and end of input cancels the question", %{opts: opts} do
-      opts = Keyword.merge(opts, extensions: [SuperPi.Plugins.Questionnaire], llm_responder: question_responder(self()))
+      opts =
+        Keyword.merge(opts,
+          extensions: [SuperPi.Plugins.Questionnaire],
+          llm_responder: question_responder(self())
+        )
+
       {{0, ""}, _out} = chat(opts, ["go", "MySQL", "/exit"])
       assert_received {:history, history}
       assert history =~ "Answer: MySQL"
@@ -146,7 +160,10 @@ defmodule SuperPi.CLIInteractiveTest do
       conv = Storage.create_conversation!()
 
       assert {0, "pong"} =
-               CLI.run(["--harness", "super-pi-planner", "--conversation", "#{conv.id}", "-p", "hi"], Keyword.delete(opts, :extensions))
+               CLI.run(
+                 ["--harness", "super-pi-planner", "--conversation", "#{conv.id}", "-p", "hi"],
+                 Keyword.delete(opts, :extensions)
+               )
 
       assert mod.id() == "super-pi-planner"
     end
@@ -171,7 +188,11 @@ defmodule SuperPi.CLIInteractiveTest do
 
       if before == nil,
         do: assert(latest != nil, "no conversation was created"),
-        else: assert(latest.id == before.id, "--continue should have used the existing latest conversation")
+        else:
+          assert(
+            latest.id == before.id,
+            "--continue should have used the existing latest conversation"
+          )
     end
 
     test "latest_conversation ignores forks" do

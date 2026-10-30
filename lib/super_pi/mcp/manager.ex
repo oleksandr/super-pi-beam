@@ -175,12 +175,17 @@ defmodule SuperPi.MCP.Manager do
     case client_opts(name, spec) do
       {:ok, client_opts} ->
         # One launch per server at a time. A concurrent caller waits, then finds it running.
-        :global.trans({{:mcp_launch, name}, self()}, fn ->
-          case lookup_client(name) do
-            {:ok, _pid} -> %{server: name, status: :running, tools: count_tools(name)}
-            :error -> launch(name, client_opts, timeout)
-          end
-        end, [node()], :infinity)
+        :global.trans(
+          {{:mcp_launch, name}, self()},
+          fn ->
+            case lookup_client(name) do
+              {:ok, _pid} -> %{server: name, status: :running, tools: count_tools(name)}
+              :error -> launch(name, client_opts, timeout)
+            end
+          end,
+          [node()],
+          :infinity
+        )
 
       :error ->
         Logger.warning("[MCP] server #{name} has neither a `command` nor a `url`; skipped")
@@ -192,7 +197,13 @@ defmodule SuperPi.MCP.Manager do
   defp client_opts(name, spec) do
     case {Map.get(spec, "command"), Map.get(spec, "url") || Map.get(spec, "serverUrl")} do
       {command, _url} when is_binary(command) and command != "" ->
-        {:ok, [name: name, command: command, args: List.wrap(Map.get(spec, "args")), env: Map.get(spec, "env") || %{}]}
+        {:ok,
+         [
+           name: name,
+           command: command,
+           args: List.wrap(Map.get(spec, "args")),
+           env: Map.get(spec, "env") || %{}
+         ]}
 
       {_none, url} when is_binary(url) and url != "" ->
         {:ok, [name: name, url: url, headers: Map.get(spec, "headers") || %{}]}
@@ -292,9 +303,14 @@ defmodule SuperPi.MCP.Manager do
       |> Map.get("content", [])
       |> List.wrap()
       |> Enum.map_join("\n", fn
-        %{"type" => "text", "text" => t} -> to_string(t)
-        %{"type" => type} = block -> "[#{type} content omitted] " <> Jason.encode!(Map.drop(block, ["data"]))
-        other -> inspect(other)
+        %{"type" => "text", "text" => t} ->
+          to_string(t)
+
+        %{"type" => type} = block ->
+          "[#{type} content omitted] " <> Jason.encode!(Map.drop(block, ["data"]))
+
+        other ->
+          inspect(other)
       end)
 
     %{
@@ -306,7 +322,12 @@ defmodule SuperPi.MCP.Manager do
   end
 
   defp error(message) do
-    %{"output" => message, "structured_output" => %{"error" => message}, "details" => %{}, "is_error" => true}
+    %{
+      "output" => message,
+      "structured_output" => %{"error" => message},
+      "details" => %{},
+      "is_error" => true
+    }
   end
 
   defp format_reason({:protocol_error, %{"message" => message}}), do: message

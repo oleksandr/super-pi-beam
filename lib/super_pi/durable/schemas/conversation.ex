@@ -5,11 +5,11 @@ defmodule SuperPi.Durable.Schemas.Conversation do
   @type t :: %__MODULE__{}
 
   schema "conversations" do
-    field :parent_conversation_id, :integer
-    field :parent_entry_id, :integer
-    field :owner_kind, :string, default: "ownerless"
-    field :owner_task_id, :integer
-    field :created_seq, :integer
+    field(:parent_conversation_id, :integer)
+    field(:parent_entry_id, :integer)
+    field(:owner_kind, :string, default: "ownerless")
+    field(:owner_task_id, :integer)
+    field(:created_seq, :integer)
 
     timestamps(type: :utc_datetime_usec)
   end

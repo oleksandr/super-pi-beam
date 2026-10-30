@@ -49,13 +49,14 @@ defmodule SuperPi.Durable.Context do
     entries =
       Enum.flat_map(chain, fn {conv_id, _parent_id, max_entry_id} ->
         query =
-          from e in Entry,
+          from(e in Entry,
             where: e.conversation_id == ^conv_id,
             order_by: [asc: e.id]
+          )
 
         query =
           if is_integer(max_entry_id) do
-            from e in query, where: e.id <= ^max_entry_id
+            from(e in query, where: e.id <= ^max_entry_id)
           else
             query
           end
@@ -106,7 +107,8 @@ defmodule SuperPi.Durable.Context do
   state. Appends a `"full"` baseline on first request, a `"delta"` entry only when a section or tool
   changed, or nothing when unchanged (preserving LLM prompt cache prefixes).
   """
-  @spec ensure_system_state!(integer(), [map()], [map()], [Entry.t()] | nil) :: {:unchanged | :full | :delta, Entry.t() | nil}
+  @spec ensure_system_state!(integer(), [map()], [map()], [Entry.t()] | nil) ::
+          {:unchanged | :full | :delta, Entry.t() | nil}
   def ensure_system_state!(conversation_id, desired_sections, desired_tools, visible \\ nil) do
     all_visible = visible || conversation_id |> visible_entries_with_graph() |> elem(0)
     system_entries = Enum.filter(all_visible, &(&1.kind == "pi.system"))
@@ -155,7 +157,9 @@ defmodule SuperPi.Durable.Context do
         [{conv_id, nil, cutoff_entry_id} | acc]
 
       %Conversation{parent_conversation_id: parent_id, parent_entry_id: parent_entry_id} ->
-        build_ancestry_chain(parent_id, parent_entry_id, [{conv_id, parent_id, cutoff_entry_id} | acc])
+        build_ancestry_chain(parent_id, parent_entry_id, [
+          {conv_id, parent_id, cutoff_entry_id} | acc
+        ])
     end
   end
 
@@ -169,7 +173,14 @@ defmodule SuperPi.Durable.Context do
 
         "delta" ->
           next_sections = apply_section_deltas(sections, entry.data["sectionsChanged"] || [])
-          next_tools = apply_tool_deltas(tools, entry.data["toolsAdded"] || [], entry.data["toolsRemoved"] || [])
+
+          next_tools =
+            apply_tool_deltas(
+              tools,
+              entry.data["toolsAdded"] || [],
+              entry.data["toolsRemoved"] || []
+            )
+
           {next_sections, next_tools}
 
         _ ->
@@ -185,7 +196,9 @@ defmodule SuperPi.Durable.Context do
 
       %{"id" => id, "content" => content}, acc ->
         if Enum.any?(acc, &(&1["id"] == id)) do
-          Enum.map(acc, fn s -> if s["id"] == id, do: %{"id" => id, "content" => content}, else: s end)
+          Enum.map(acc, fn s ->
+            if s["id"] == id, do: %{"id" => id, "content" => content}, else: s
+          end)
         else
           acc ++ [%{"id" => id, "content" => content}]
         end
@@ -260,7 +273,8 @@ defmodule SuperPi.Durable.Context do
   # of each assistant entry move right after it, in call order, and a missing one is added.
   defp repair_tool_pairs([]), do: []
 
-  defp repair_tool_pairs([%{"role" => "assistant", "content" => content} = msg | rest]) when is_list(content) do
+  defp repair_tool_pairs([%{"role" => "assistant", "content" => content} = msg | rest])
+       when is_list(content) do
     case for(%{"type" => "tool_call", "id" => id} <- content, do: id) do
       [] ->
         [msg | repair_tool_pairs(rest)]
@@ -268,7 +282,13 @@ defmodule SuperPi.Durable.Context do
       call_ids ->
         {segment, later} = Enum.split_while(rest, &(&1["role"] != "assistant"))
         id_set = MapSet.new(call_ids)
-        {results, others} = Enum.split_with(segment, &(&1["role"] == "tool" and MapSet.member?(id_set, &1["tool_call_id"])))
+
+        {results, others} =
+          Enum.split_with(
+            segment,
+            &(&1["role"] == "tool" and MapSet.member?(id_set, &1["tool_call_id"]))
+          )
+
         by_id = results |> Enum.reverse() |> Map.new(&{&1["tool_call_id"], &1})
 
         ordered =

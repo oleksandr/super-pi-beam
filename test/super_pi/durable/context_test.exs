@@ -14,7 +14,8 @@ defmodule SuperPi.Durable.ContextTest do
                     git: member_of(["branch: main", "branch: feat/beam", "branch: fix/cache"]),
                     tools:
                       map(
-                        list_of(member_of(["read", "write", "edit", "bash", "grep", "tool_search"]),
+                        list_of(
+                          member_of(["read", "write", "edit", "bash", "grep", "tool_search"]),
                           min_length: 1,
                           max_length: 5
                         ),
@@ -36,11 +37,20 @@ defmodule SuperPi.Durable.ContextTest do
 
           # Each tool keeps its parameter schema; a built-in without one gets the built-in schema.
           tools =
-            Enum.map(step.tools, &%{"name" => &1, "description" => "Tool #{&1}", "parameters" => SuperPi.AI.ToolSchemas.for_tool(&1)})
+            Enum.map(
+              step.tools,
+              &%{
+                "name" => &1,
+                "description" => "Tool #{&1}",
+                "parameters" => SuperPi.AI.ToolSchemas.for_tool(&1)
+              }
+            )
 
           {mode, _entry} = Context.ensure_system_state!(conv.id, sections, tools)
 
-          same_sections = prev_step != nil and prev_step.base == step.base and prev_step.git == step.git
+          same_sections =
+            prev_step != nil and prev_step.base == step.base and prev_step.git == step.git
+
           same_tools = prev_step != nil and MapSet.new(prev_step.tools) == MapSet.new(step.tools)
 
           cond do
@@ -65,9 +75,21 @@ defmodule SuperPi.Durable.ContextTest do
 
     property "head markers (pi.compaction and pi.reset) exclude all preceding messages while preserving system state" do
       check all(
-              pre_msgs <- list_of(string(:alphanumeric, min_length: 1, max_length: 20), min_length: 2, max_length: 6),
-              kept_msgs <- list_of(string(:alphanumeric, min_length: 1, max_length: 20), min_length: 1, max_length: 5),
-              post_msgs <- list_of(string(:alphanumeric, min_length: 1, max_length: 20), min_length: 1, max_length: 5),
+              pre_msgs <-
+                list_of(string(:alphanumeric, min_length: 1, max_length: 20),
+                  min_length: 2,
+                  max_length: 6
+                ),
+              kept_msgs <-
+                list_of(string(:alphanumeric, min_length: 1, max_length: 20),
+                  min_length: 1,
+                  max_length: 5
+                ),
+              post_msgs <-
+                list_of(string(:alphanumeric, min_length: 1, max_length: 20),
+                  min_length: 1,
+                  max_length: 5
+                ),
               max_runs: 25
             ) do
         conv = Storage.create_conversation!()
@@ -85,7 +107,10 @@ defmodule SuperPi.Durable.ContextTest do
 
         kept_entries =
           Enum.map(kept_msgs, fn text ->
-            Storage.append_entry!(conv.id, "pi.message", %{"role" => "assistant", "content" => text})
+            Storage.append_entry!(conv.id, "pi.message", %{
+              "role" => "assistant",
+              "content" => text
+            })
           end)
 
         first_kept_id = hd(kept_entries).id
@@ -113,7 +138,11 @@ defmodule SuperPi.Durable.ContextTest do
 
     property "non-destructive ContextEdits (omit and replace) transform derived messages without mutating stored Ecto rows" do
       check all(
-              texts <- uniq_list_of(string(:alphanumeric, min_length: 3, max_length: 20), min_length: 3, max_length: 8),
+              texts <-
+                uniq_list_of(string(:alphanumeric, min_length: 3, max_length: 20),
+                  min_length: 3,
+                  max_length: 8
+                ),
               max_runs: 25
             ) do
         conv = Storage.create_conversation!()
@@ -151,8 +180,11 @@ defmodule SuperPi.Durable.ContextTest do
         assert contents == expected
 
         # Verify original database rows remain untouched in Ecto
-        assert Repo.get!(SuperPi.Durable.Schemas.Entry, first_entry.id).data["content"] == hd(texts)
-        assert Repo.get!(SuperPi.Durable.Schemas.Entry, second_entry.id).data["content"] == Enum.at(texts, 1)
+        assert Repo.get!(SuperPi.Durable.Schemas.Entry, first_entry.id).data["content"] ==
+                 hd(texts)
+
+        assert Repo.get!(SuperPi.Durable.Schemas.Entry, second_entry.id).data["content"] ==
+                 Enum.at(texts, 1)
       end
     end
 
@@ -167,7 +199,10 @@ defmodule SuperPi.Durable.ContextTest do
 
         root_entries =
           for i <- 1..root_count do
-            Storage.append_entry!(root.id, "pi.message", %{"role" => "user", "content" => "root_#{i}"})
+            Storage.append_entry!(root.id, "pi.message", %{
+              "role" => "user",
+              "content" => "root_#{i}"
+            })
           end
 
         fork_target = Enum.at(root_entries, fork_idx)
@@ -175,10 +210,16 @@ defmodule SuperPi.Durable.ContextTest do
 
         # Append extra entries to root AFTER the fork; child must never see them
         _late_root =
-          Storage.append_entry!(root.id, "pi.message", %{"role" => "user", "content" => "root_after_fork"})
+          Storage.append_entry!(root.id, "pi.message", %{
+            "role" => "user",
+            "content" => "root_after_fork"
+          })
 
         for j <- 1..child_count do
-          Storage.append_entry!(child.id, "pi.message", %{"role" => "assistant", "content" => "child_#{j}"})
+          Storage.append_entry!(child.id, "pi.message", %{
+            "role" => "assistant",
+            "content" => "child_#{j}"
+          })
         end
 
         derived = Context.derive(child.id)
@@ -188,7 +229,9 @@ defmodule SuperPi.Durable.ContextTest do
         expected_child_suffix = for j <- 1..child_count, do: "child_#{j}"
 
         assert contents == expected_root_prefix ++ expected_child_suffix
-        assert Graph.vertices(derived.ancestry_graph) |> Enum.sort() == Enum.sort([root.id, child.id])
+
+        assert Graph.vertices(derived.ancestry_graph) |> Enum.sort() ==
+                 Enum.sort([root.id, child.id])
       end
     end
   end

@@ -21,7 +21,8 @@ defmodule SuperPi.Durable.TaskEngineTest do
       ]
 
       check all(
-              attempted_transitions <- list_of(member_of(all_statuses), min_length: 3, max_length: 12),
+              attempted_transitions <-
+                list_of(member_of(all_statuses), min_length: 3, max_length: 12),
               max_runs: 30
             ) do
         conv = Storage.create_conversation!()
@@ -101,7 +102,8 @@ defmodule SuperPi.Durable.TaskEngineTest do
     property "parent waiting tasks wake according to all_settled vs fail_fast policies" do
       check all(
               policy <- member_of(["all_settled", "fail_fast"]),
-              child_outcomes <- list_of(member_of([:complete, :fail]), min_length: 2, max_length: 5),
+              child_outcomes <-
+                list_of(member_of([:complete, :fail]), min_length: 2, max_length: 5),
               max_runs: 25
             ) do
         conv = Storage.create_conversation!()
@@ -110,7 +112,11 @@ defmodule SuperPi.Durable.TaskEngineTest do
 
         children =
           for {outcome, idx} <- Enum.with_index(child_outcomes, 1) do
-            {:ok, child} = TaskEngine.create_task(conv.id, "pi.tool", %{"idx" => idx}, owner_task_id: parent.id)
+            {:ok, child} =
+              TaskEngine.create_task(conv.id, "pi.tool", %{"idx" => idx},
+                owner_task_id: parent.id
+              )
+
             {:ok, child} = TaskEngine.start_task(child.id)
             {child, outcome}
           end
@@ -158,7 +164,10 @@ defmodule SuperPi.Durable.TaskEngineTest do
       # Bottom-up subtree abort test
       {:ok, root_task} = TaskEngine.create_task(conv.id, "pi.generation")
       {:ok, root_task} = TaskEngine.start_task(root_task.id)
-      {:ok, sub_task} = TaskEngine.create_task(conv.id, "pi.tool", %{}, owner_task_id: root_task.id)
+
+      {:ok, sub_task} =
+        TaskEngine.create_task(conv.id, "pi.tool", %{}, owner_task_id: root_task.id)
+
       {:ok, _sub_task} = TaskEngine.start_task(sub_task.id)
 
       aborted_root = TaskEngine.abort_task!(root_task.id)
@@ -173,7 +182,9 @@ defmodule SuperPi.Durable.TaskEngineTest do
       {:ok, task} = TaskEngine.start_task(task.id)
 
       wake_at = DateTime.add(DateTime.utc_now(), 30, :second)
-      {:ok, sleeping} = TaskEngine.sleep_until(task.id, wake_at, %{"phase" => "retry_wait", "attempt" => 2})
+
+      {:ok, sleeping} =
+        TaskEngine.sleep_until(task.id, wake_at, %{"phase" => "retry_wait", "attempt" => 2})
 
       assert sleeping.status == "sleeping"
       assert sleeping.phase == "retry_wait"

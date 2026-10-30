@@ -15,7 +15,9 @@ defmodule SuperPi.LoggingTest do
       {:ok, Faults.text_msg("ok")}
     end
 
-    {:ok, pid} = Machine.start_link(conversation_id: conv.id, extensions: [], llm_responder: responder)
+    {:ok, pid} =
+      Machine.start_link(conversation_id: conv.id, extensions: [], llm_responder: responder)
+
     assert {:ok, _} = Machine.submit(pid, "hi", timeout: 10_000)
 
     assert_received {:metadata, metadata}
@@ -32,8 +34,16 @@ defmodule SuperPi.LoggingTest do
   test "library code does not print to stdout (the MCP and ACP protocol streams are the only exceptions)" do
     offenders =
       Path.wildcard("lib/**/*.ex")
-      |> Enum.reject(&(&1 in ["lib/super_pi/cli.ex", "lib/super_pi/mcp/server.ex", "lib/super_pi/acp/server.ex"]))
-      |> Enum.filter(fn file -> File.read!(file) =~ ~r/^\s*(?!#)[^#\n]*\bIO\.(puts|inspect|write)\(/m end)
+      |> Enum.reject(
+        &(&1 in [
+            "lib/super_pi/cli.ex",
+            "lib/super_pi/mcp/server.ex",
+            "lib/super_pi/acp/server.ex"
+          ])
+      )
+      |> Enum.filter(fn file ->
+        File.read!(file) =~ ~r/^\s*(?!#)[^#\n]*\bIO\.(puts|inspect|write)\(/m
+      end)
 
     assert offenders == [], "use Logger instead of IO in: #{inspect(offenders)}"
   end

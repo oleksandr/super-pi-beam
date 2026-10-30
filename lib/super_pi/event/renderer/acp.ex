@@ -43,10 +43,16 @@ defmodule SuperPi.Event.Renderer.ACP do
   def init(opts), do: %{session_id: Keyword.get(opts, :session_id), calls: %{}, permissions: %{}}
 
   @impl true
-  def render(%Event{type: "text_delta", data: %{"delta" => d}}, st), do: {[{:update, chunk("agent_message_chunk", d)}], st}
-  def render(%Event{type: "thinking_delta", data: %{"delta" => d}}, st), do: {[{:update, chunk("agent_thought_chunk", d)}], st}
+  def render(%Event{type: "text_delta", data: %{"delta" => d}}, st),
+    do: {[{:update, chunk("agent_message_chunk", d)}], st}
 
-  def render(%Event{type: "tool_started", data: %{"tool_call_id" => id, "name" => name} = data}, st) do
+  def render(%Event{type: "thinking_delta", data: %{"delta" => d}}, st),
+    do: {[{:update, chunk("agent_thought_chunk", d)}], st}
+
+  def render(
+        %Event{type: "tool_started", data: %{"tool_call_id" => id, "name" => name} = data},
+        st
+      ) do
     args = Map.get(data, "arguments") || %{}
 
     call = %{
@@ -75,7 +81,11 @@ defmodule SuperPi.Event.Renderer.ACP do
         "status" => Map.get(known, :status, "pending"),
         "rawInput" => data["arguments"] || %{}
       },
-      "options" => Enum.map(data["options"] || [], &%{"optionId" => &1["option_id"], "name" => &1["name"], "kind" => &1["kind"]}),
+      "options" =>
+        Enum.map(
+          data["options"] || [],
+          &%{"optionId" => &1["option_id"], "name" => &1["name"], "kind" => &1["kind"]}
+        ),
       "_meta" => %{"reason" => data["reason"], "risk" => data["risk"]}
     }
 
@@ -84,14 +94,18 @@ defmodule SuperPi.Event.Renderer.ACP do
 
   # An approved call starts to run. A refusal ends in `tool_completed` (a failed result), so only
   # an approval needs an update here.
-  def render(%Event{type: "ui_resolved", data: %{"request_id" => rid, "outcome" => "answered"}}, st) do
+  def render(
+        %Event{type: "ui_resolved", data: %{"request_id" => rid, "outcome" => "answered"}},
+        st
+      ) do
     case Map.pop(st.permissions, rid) do
       {nil, _} -> {[], st}
       {id, rest} -> {[], %{st | permissions: rest}} |> in_progress(id)
     end
   end
 
-  def render(%Event{type: "ui_resolved", data: %{"request_id" => rid}}, st), do: {[], %{st | permissions: Map.delete(st.permissions, rid)}}
+  def render(%Event{type: "ui_resolved", data: %{"request_id" => rid}}, st),
+    do: {[], %{st | permissions: Map.delete(st.permissions, rid)}}
 
   def render(%Event{type: "tool_completed", data: %{"tool_call_id" => id} = data}, st) do
     output = data["output"]
@@ -100,16 +114,34 @@ defmodule SuperPi.Event.Renderer.ACP do
       "sessionUpdate" => "tool_call_update",
       "toolCallId" => id,
       "status" => if(data["is_error"], do: "failed", else: "completed"),
-      "content" => [%{"type" => "content", "content" => %{"type" => "text", "text" => text(output)}}],
+      "content" => [
+        %{"type" => "content", "content" => %{"type" => "text", "text" => text(output)}}
+      ],
       "rawOutput" => output
     }
 
     {[{:update, update}], %{st | calls: Map.delete(st.calls, id)}}
   end
 
-  def render(%Event{type: "tool_blocked", data: %{"tool_call_id" => id, "name" => name, "reason" => reason}}, st) do
-    {[{:update, %{"sessionUpdate" => "tool_call_update", "toolCallId" => id, "status" => "failed", "title" => "#{name} (blocked)", "content" => [%{"type" => "content", "content" => %{"type" => "text", "text" => reason}}]}}],
-     %{st | calls: Map.delete(st.calls, id)}}
+  def render(
+        %Event{
+          type: "tool_blocked",
+          data: %{"tool_call_id" => id, "name" => name, "reason" => reason}
+        },
+        st
+      ) do
+    {[
+       {:update,
+        %{
+          "sessionUpdate" => "tool_call_update",
+          "toolCallId" => id,
+          "status" => "failed",
+          "title" => "#{name} (blocked)",
+          "content" => [
+            %{"type" => "content", "content" => %{"type" => "text", "text" => reason}}
+          ]
+        }}
+     ], %{st | calls: Map.delete(st.calls, id)}}
   end
 
   # A child conversation shows as a tool call of its own, so the editor lists it while it runs.
@@ -131,18 +163,34 @@ defmodule SuperPi.Event.Renderer.ACP do
       "sessionUpdate" => "tool_call_update",
       "toolCallId" => "subagent-#{data["child_conversation_id"]}",
       "status" => if(data["status"] == "completed", do: "completed", else: "failed"),
-      "content" => [%{"type" => "content", "content" => %{"type" => "text", "text" => to_string(data["summary"] || "")}}]
+      "content" => [
+        %{
+          "type" => "content",
+          "content" => %{"type" => "text", "text" => to_string(data["summary"] || "")}
+        }
+      ]
     }
 
     {[{:update, update}], st}
   end
 
   def render(%Event{type: "plan_updated", data: %{"entries" => entries}}, st) do
-    plan = Enum.map(entries, &%{"content" => &1["text"], "priority" => "medium", "status" => if(&1["completed"], do: "completed", else: "pending")})
+    plan =
+      Enum.map(
+        entries,
+        &%{
+          "content" => &1["text"],
+          "priority" => "medium",
+          "status" => if(&1["completed"], do: "completed", else: "pending")
+        }
+      )
+
     {[{:update, %{"sessionUpdate" => "plan", "entries" => plan}}], st}
   end
 
-  def render(%Event{type: "mode_changed", data: %{"mode" => mode}}, st), do: {[{:update, %{"sessionUpdate" => "current_mode_update", "currentModeId" => mode}}], st}
+  def render(%Event{type: "mode_changed", data: %{"mode" => mode}}, st),
+    do: {[{:update, %{"sessionUpdate" => "current_mode_update", "currentModeId" => mode}}], st}
+
   def render(%Event{}, st), do: {[], st}
 
   @impl true
@@ -150,24 +198,53 @@ defmodule SuperPi.Event.Renderer.ACP do
 
   @doc "ACP `kind` of a tool: `read`, `edit`, `search`, `execute`, `fetch` or `other`."
   @spec kind(String.t()) :: String.t()
-  def kind(name) when name in ["read", "read_file", "ls", "list_dir", "list_directory"], do: "read"
+  def kind(name) when name in ["read", "read_file", "ls", "list_dir", "list_directory"],
+    do: "read"
+
   def kind(name) when name in ["write", "write_file", "edit", "edit_file"], do: "edit"
-  def kind(name) when name in ["grep", "find", "find_files", "search_files", "tool_search", "web_search", "memory_search"], do: "search"
+
+  def kind(name)
+      when name in [
+             "grep",
+             "find",
+             "find_files",
+             "search_files",
+             "tool_search",
+             "web_search",
+             "memory_search"
+           ],
+      do: "search"
+
   def kind(name) when name in ["bash", "sh", "terminal", "run_command", "exec"], do: "execute"
   def kind(name) when name in ["web_fetch"], do: "fetch"
   def kind(_), do: "other"
 
   defp in_progress({[], st}, id) do
     case Map.get(st.calls, id) do
-      nil -> {[], st}
-      call -> {[{:update, %{"sessionUpdate" => "tool_call_update", "toolCallId" => id, "status" => "in_progress"}}], put_in(st.calls[id], %{call | status: "in_progress"})}
+      nil ->
+        {[], st}
+
+      call ->
+        {[
+           {:update,
+            %{
+              "sessionUpdate" => "tool_call_update",
+              "toolCallId" => id,
+              "status" => "in_progress"
+            }}
+         ], put_in(st.calls[id], %{call | status: "in_progress"})}
     end
   end
 
-  defp chunk(kind, text), do: %{"sessionUpdate" => kind, "content" => %{"type" => "text", "text" => text}}
+  defp chunk(kind, text),
+    do: %{"sessionUpdate" => kind, "content" => %{"type" => "text", "text" => text}}
 
-  defp title(name, %{"command" => cmd}) when is_binary(cmd), do: "#{name}: #{String.slice(cmd, 0, 80)}"
-  defp title(name, %{"url" => url}) when is_binary(url), do: "#{name}: #{String.slice(url, 0, 80)}"
+  defp title(name, %{"command" => cmd}) when is_binary(cmd),
+    do: "#{name}: #{String.slice(cmd, 0, 80)}"
+
+  defp title(name, %{"url" => url}) when is_binary(url),
+    do: "#{name}: #{String.slice(url, 0, 80)}"
+
   defp title(name, %{"query" => q}) when is_binary(q), do: "#{name}: #{String.slice(q, 0, 80)}"
 
   defp title(name, args) do

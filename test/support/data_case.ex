@@ -36,8 +36,10 @@ defmodule SuperPi.DataCase do
     # Terminate through the supervisors. Killing a supervised machine would make Horde restart it
     # (restart: :transient) after the test, when its sandbox connection is gone.
     Enum.each(SuperPi.Conversation.Locator.all(), fn {_id, pid} ->
-      with {:error, :not_found} <- Horde.DynamicSupervisor.terminate_child(SuperPi.MachineSupervisor, pid),
-           {:error, :not_found} <- DynamicSupervisor.terminate_child(SuperPi.LocalMachineSupervisor, pid) do
+      with {:error, :not_found} <-
+             Horde.DynamicSupervisor.terminate_child(SuperPi.MachineSupervisor, pid),
+           {:error, :not_found} <-
+             DynamicSupervisor.terminate_child(SuperPi.LocalMachineSupervisor, pid) do
         Process.exit(pid, :kill)
       end
     end)

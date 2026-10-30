@@ -46,7 +46,12 @@ defmodule SuperPi.AI.StreamNormalizerTest do
           |> Enum.join("")
 
         # Reference single-shot feed
-        {ref_events, ref_state} = StreamNormalizer.feed_chunk(StreamNormalizer.new(:anthropic, "claude-sonnet-4-5"), sse_stream)
+        {ref_events, ref_state} =
+          StreamNormalizer.feed_chunk(
+            StreamNormalizer.new(:anthropic, "claude-sonnet-4-5"),
+            sse_stream
+          )
+
         {ref_flush, _} = StreamNormalizer.flush(ref_state)
         all_ref = ref_events ++ ref_flush
 
@@ -54,7 +59,9 @@ defmodule SuperPi.AI.StreamNormalizerTest do
         chunks = split_binary_by_sizes(sse_stream, chunk_sizes)
 
         {chunked_events, final_state} =
-          Enum.reduce(chunks, {[], StreamNormalizer.new(:anthropic, "claude-sonnet-4-5")}, fn ch, {ev_acc, st} ->
+          Enum.reduce(chunks, {[], StreamNormalizer.new(:anthropic, "claude-sonnet-4-5")}, fn ch,
+                                                                                              {ev_acc,
+                                                                                               st} ->
             {evs, st2} = StreamNormalizer.feed_chunk(st, ch)
             {ev_acc ++ evs, st2}
           end)
@@ -66,12 +73,29 @@ defmodule SuperPi.AI.StreamNormalizerTest do
 
         {:done, done_payload} = List.last(all_chunked)
         assert done_payload.stop_reason == "tool_use"
-        assert done_payload.usage == %{"input_tokens" => 120, "output_tokens" => 45, "cache_read_tokens" => 80}
+
+        assert done_payload.usage == %{
+                 "input_tokens" => 120,
+                 "output_tokens" => 45,
+                 "cache_read_tokens" => 80
+               }
 
         [thinking_block, text_block, tool_block] = done_payload.content
-        assert thinking_block == %{"type" => "thinking", "thinking" => thinking_part, "signature" => sig_part}
+
+        assert thinking_block == %{
+                 "type" => "thinking",
+                 "thinking" => thinking_part,
+                 "signature" => sig_part
+               }
+
         assert text_block == %{"type" => "text", "text" => text_part}
-        assert tool_block == %{"type" => "tool_call", "id" => "toolu_01", "name" => tool_name, "arguments" => tool_args}
+
+        assert tool_block == %{
+                 "type" => "tool_call",
+                 "id" => "toolu_01",
+                 "name" => tool_name,
+                 "arguments" => tool_args
+               }
       end
     end
 
@@ -106,7 +130,11 @@ defmodule SuperPi.AI.StreamNormalizerTest do
               max_runs: 50
             ) do
         origin_model = "model-#{origin_provider}"
-        target_model = if origin_provider == target_provider, do: origin_model, else: "model-#{target_provider}"
+
+        target_model =
+          if origin_provider == target_provider,
+            do: origin_model,
+            else: "model-#{target_provider}"
 
         messages = [
           %{
@@ -115,17 +143,27 @@ defmodule SuperPi.AI.StreamNormalizerTest do
             "model" => origin_model,
             "thinkingSignature" => signature,
             "content" => [
-              %{"type" => "thinking", "thinking" => thought_text, "signature" => signature, "thinkingSignature" => signature},
+              %{
+                "type" => "thinking",
+                "thinking" => thought_text,
+                "signature" => signature,
+                "thinkingSignature" => signature
+              },
               %{"type" => "redacted_thinking", "data" => "encrypted_blob"},
               %{"type" => "text", "text" => reply_text}
             ]
           }
         ]
 
-        [sanitized] = StreamNormalizer.sanitize_messages_for_target(messages, target_provider, target_model)
+        [sanitized] =
+          StreamNormalizer.sanitize_messages_for_target(messages, target_provider, target_model)
 
         if origin_provider == target_provider do
-          assert Enum.any?(sanitized["content"], &(&1["type"] == "thinking" and &1["signature"] == signature))
+          assert Enum.any?(
+                   sanitized["content"],
+                   &(&1["type"] == "thinking" and &1["signature"] == signature)
+                 )
+
           assert Enum.any?(sanitized["content"], &(&1["type"] == "redacted_thinking"))
         else
           refute Map.has_key?(sanitized, "thinkingSignature")
@@ -156,7 +194,10 @@ defmodule SuperPi.AI.StreamNormalizerTest do
 
       e1 = Storage.append_entry!(conv.id, "pi.message", %{"role" => "user", "content" => "hi"})
       fork_conv = Storage.fork_conversation!(conv.id, e1.id)
-      fork_p = VirtualModel.ensure_provider_session!(fork_conv.id, :anthropic, "claude-sonnet-4-5")
+
+      fork_p =
+        VirtualModel.ensure_provider_session!(fork_conv.id, :anthropic, "claude-sonnet-4-5")
+
       assert fork_p["sessionId"] != p1["sessionId"]
     end
 

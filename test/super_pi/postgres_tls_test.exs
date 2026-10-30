@@ -16,7 +16,8 @@ defmodule SuperPi.PostgresTLSTest do
   @wrong_ca System.get_env("SUPER_PI_TLS_TEST_WRONG_CA")
 
   if is_nil(@url) or is_nil(@ca) or is_nil(@wrong_ca) do
-    @moduletag skip: "set SUPER_PI_TLS_TEST_URL, SUPER_PI_TLS_TEST_CA and SUPER_PI_TLS_TEST_WRONG_CA"
+    @moduletag skip:
+                 "set SUPER_PI_TLS_TEST_URL, SUPER_PI_TLS_TEST_CA and SUPER_PI_TLS_TEST_WRONG_CA"
   end
 
   @vars ~w(SUPER_PI_STORAGE_BACKEND DATABASE_URL SUPER_PI_DB_SSL SUPER_PI_DB_SSL_CA SUPER_PI_DB_SSL_SNI)
@@ -37,12 +38,26 @@ defmodule SuperPi.PostgresTLSTest do
     System.put_env("SUPER_PI_STORAGE_BACKEND", "postgres")
     # Read at run time: when the variable is unset at compile time the module is skipped.
     System.put_env("DATABASE_URL", System.fetch_env!("SUPER_PI_TLS_TEST_URL"))
-    Enum.each(["SUPER_PI_DB_SSL", "SUPER_PI_DB_SSL_CA", "SUPER_PI_DB_SSL_SNI"], &System.delete_env/1)
+
+    Enum.each(
+      ["SUPER_PI_DB_SSL", "SUPER_PI_DB_SSL_CA", "SUPER_PI_DB_SSL_SNI"],
+      &System.delete_env/1
+    )
+
     Enum.each(env, fn {k, v} -> System.put_env(k, v) end)
 
     opts =
-      Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)[:super_pi][SuperPi.Repo.Postgres]
-      |> Keyword.merge(pool_size: 1, name: nil, timeout: 3_000, connect_timeout: 3_000, backoff_type: :stop, pool: DBConnection.ConnectionPool)
+      Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)[:super_pi][
+        SuperPi.Repo.Postgres
+      ]
+      |> Keyword.merge(
+        pool_size: 1,
+        name: nil,
+        timeout: 3_000,
+        connect_timeout: 3_000,
+        backoff_type: :stop,
+        pool: DBConnection.ConnectionPool
+      )
 
     Process.flag(:trap_exit, true)
 
@@ -51,7 +66,10 @@ defmodule SuperPi.PostgresTLSTest do
         SuperPi.Repo.Postgres.put_dynamic_repo(pid)
 
         try do
-          case SuperPi.Repo.Postgres.query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()", []) do
+          case SuperPi.Repo.Postgres.query(
+                 "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+                 []
+               ) do
             {:ok, %{rows: [[ssl]]}} -> {:ok, ssl}
             {:error, error} -> {:error, error}
           end
@@ -77,18 +95,26 @@ defmodule SuperPi.PostgresTLSTest do
   end
 
   test "verify-full connects when the CA signed the server certificate" do
-    assert {:ok, true} = connect(%{"SUPER_PI_DB_SSL" => "verify-full", "SUPER_PI_DB_SSL_CA" => @ca})
+    assert {:ok, true} =
+             connect(%{"SUPER_PI_DB_SSL" => "verify-full", "SUPER_PI_DB_SSL_CA" => @ca})
   end
 
   test "verify-full refuses a server whose certificate a different CA signed" do
-    assert {:error, _} = connect(%{"SUPER_PI_DB_SSL" => "verify-full", "SUPER_PI_DB_SSL_CA" => @wrong_ca})
+    assert {:error, _} =
+             connect(%{"SUPER_PI_DB_SSL" => "verify-full", "SUPER_PI_DB_SSL_CA" => @wrong_ca})
   end
 
   test "verify-full refuses a host name that is not in the certificate" do
-    assert {:error, _} = connect(%{"SUPER_PI_DB_SSL" => "verify-full", "SUPER_PI_DB_SSL_CA" => @ca, "SUPER_PI_DB_SSL_SNI" => "evil.example.com"})
+    assert {:error, _} =
+             connect(%{
+               "SUPER_PI_DB_SSL" => "verify-full",
+               "SUPER_PI_DB_SSL_CA" => @ca,
+               "SUPER_PI_DB_SSL_SNI" => "evil.example.com"
+             })
   end
 
   test "require does not check the certificate, so a wrong CA is no obstacle" do
-    assert {:ok, true} = connect(%{"SUPER_PI_DB_SSL" => "require", "SUPER_PI_DB_SSL_CA" => @wrong_ca})
+    assert {:ok, true} =
+             connect(%{"SUPER_PI_DB_SSL" => "require", "SUPER_PI_DB_SSL_CA" => @wrong_ca})
   end
 end

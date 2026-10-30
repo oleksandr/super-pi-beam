@@ -138,7 +138,9 @@ defmodule SuperPi.AI.StreamNormalizer do
     Enum.map(messages, fn msg ->
       msg_provider = Map.get(msg, "provider") || Map.get(msg, :provider)
       msg_model = Map.get(msg, "model") || Map.get(msg, :model)
-      same_origin? = to_string(msg_provider) == to_string(target_provider) and msg_model == target_model
+
+      same_origin? =
+        to_string(msg_provider) == to_string(target_provider) and msg_model == target_model
 
       case Map.get(msg, "content") do
         blocks when is_list(blocks) ->
@@ -300,7 +302,9 @@ defmodule SuperPi.AI.StreamNormalizer do
       "message_delta" ->
         stop_reason = get_in(event, ["delta", "stop_reason"]) || state.stop_reason
         usage = Map.get(event, "usage", %{})
-        {start_events, %__MODULE__{state | stop_reason: stop_reason, usage: merge_usage(state.usage, usage)}}
+
+        {start_events,
+         %__MODULE__{state | stop_reason: stop_reason, usage: merge_usage(state.usage, usage)}}
 
       "message_stop" ->
         {done_events, final_state} = finalize_stream(state)
@@ -319,7 +323,11 @@ defmodule SuperPi.AI.StreamNormalizer do
     {start_events, state} = ensure_started(state)
 
     usage = Map.get(event, "usage")
-    state = if is_map(usage), do: %__MODULE__{state | usage: merge_usage(state.usage, usage)}, else: state
+
+    state =
+      if is_map(usage),
+        do: %__MODULE__{state | usage: merge_usage(state.usage, usage)},
+        else: state
 
     # Support both OpenAI Chat Completions deltas and Responses API events
     cond do
@@ -338,7 +346,12 @@ defmodule SuperPi.AI.StreamNormalizer do
 
       Map.get(event, "type") == "response.completed" ->
         resp_usage = get_in(event, ["response", "usage"])
-        st = if is_map(resp_usage), do: %__MODULE__{state | usage: merge_usage(state.usage, resp_usage)}, else: state
+
+        st =
+          if is_map(resp_usage),
+            do: %__MODULE__{state | usage: merge_usage(state.usage, resp_usage)},
+            else: state
+
         {done_events, final_st} = finalize_stream(st)
         {start_events ++ done_events, final_st}
 
@@ -358,7 +371,15 @@ defmodule SuperPi.AI.StreamNormalizer do
           "function_call" ->
             id = Map.get(item, "call_id") || "call_#{output_idx}"
             name = Map.get(item, "name", "")
-            block = %{"type" => "tool_call", "id" => id, "name" => name, "raw_json" => "", "arguments" => %{}}
+
+            block = %{
+              "type" => "tool_call",
+              "id" => id,
+              "name" => name,
+              "raw_json" => "",
+              "arguments" => %{}
+            }
+
             {start_events, %__MODULE__{state | blocks: Map.put(state.blocks, output_idx, block)}}
 
           _ ->
@@ -368,12 +389,32 @@ defmodule SuperPi.AI.StreamNormalizer do
       Map.get(event, "type") == "response.function_call_arguments.delta" ->
         output_idx = Map.get(event, "output_index", 0)
         delta = Map.get(event, "delta") || ""
-        block = Map.get(state.blocks, output_idx, %{"type" => "tool_call", "id" => "call_#{output_idx}", "name" => "", "raw_json" => "", "arguments" => %{}})
+
+        block =
+          Map.get(state.blocks, output_idx, %{
+            "type" => "tool_call",
+            "id" => "call_#{output_idx}",
+            "name" => "",
+            "raw_json" => "",
+            "arguments" => %{}
+          })
+
         new_raw = (block["raw_json"] || "") <> delta
         partial = parse_partial_json(new_raw)
         updated = Map.merge(block, %{"raw_json" => new_raw, "arguments" => partial})
-        ev = {:toolcall_delta, %{index: output_idx, id: updated["id"], name: updated["name"], raw_json_delta: delta, partial_args: partial}}
-        {start_events ++ [ev], %__MODULE__{state | blocks: Map.put(state.blocks, output_idx, updated)}}
+
+        ev =
+          {:toolcall_delta,
+           %{
+             index: output_idx,
+             id: updated["id"],
+             name: updated["name"],
+             raw_json_delta: delta,
+             partial_args: partial
+           }}
+
+        {start_events ++ [ev],
+         %__MODULE__{state | blocks: Map.put(state.blocks, output_idx, updated)}}
 
       true ->
         {start_events, state}
@@ -394,123 +435,160 @@ defmodule SuperPi.AI.StreamNormalizer do
 
       true ->
         usage = Map.get(event, "usageMetadata")
-        state = if is_map(usage), do: %__MODULE__{state | usage: merge_usage(state.usage, usage)}, else: state
+
+        state =
+          if is_map(usage),
+            do: %__MODULE__{state | usage: merge_usage(state.usage, usage)},
+            else: state
 
         candidates = Map.get(event, "candidates", [])
 
-    case List.first(candidates) do
-      nil ->
-        {start_events, state}
+        case List.first(candidates) do
+          nil ->
+            {start_events, state}
 
-      cand ->
-        parts = get_in(cand, ["content", "parts"]) || []
+          cand ->
+            parts = get_in(cand, ["content", "parts"]) || []
 
-        {part_events, %__MODULE__{} = st} =
-          Enum.reduce(parts, {[], state}, fn part, {ev_acc, %__MODULE__{} = s_acc} ->
-            cond do
-              Map.get(part, "thought") == true ->
-                text = Map.get(part, "text", "")
-                sig = Map.get(part, "thoughtSignature")
+            {part_events, %__MODULE__{} = st} =
+              Enum.reduce(parts, {[], state}, fn part, {ev_acc, %__MODULE__{} = s_acc} ->
+                cond do
+                  Map.get(part, "thought") == true ->
+                    text = Map.get(part, "text", "")
+                    sig = Map.get(part, "thoughtSignature")
 
-                if s_acc.active_block_idx != nil and
-                     get_in(s_acc.blocks, [s_acc.active_block_idx, "type"]) == "thinking" do
-                  idx = s_acc.active_block_idx
-                  block = s_acc.blocks[idx]
-                  prev_thinking = block["thinking"] || ""
-                  updated = %{block | "thinking" => prev_thinking <> text, "signature" => sig || block["signature"]}
-                  s_next = %__MODULE__{s_acc | blocks: Map.put(s_acc.blocks, idx, updated)}
-                  {ev_acc ++ [{:thinking_delta, %{index: idx, delta: text, signature: updated["signature"]}}], s_next}
-                else
-                  idx = s_acc.block_counter
-                  block = %{"type" => "thinking", "thinking" => text, "signature" => sig}
-                  s_next = %__MODULE__{
-                    s_acc
-                    | blocks: Map.put(s_acc.blocks, idx, block),
-                      block_counter: idx + 1,
-                      active_block_idx: idx
-                  }
-                  {ev_acc ++ [{:thinking_delta, %{index: idx, delta: text, signature: sig}}], s_next}
+                    if s_acc.active_block_idx != nil and
+                         get_in(s_acc.blocks, [s_acc.active_block_idx, "type"]) == "thinking" do
+                      idx = s_acc.active_block_idx
+                      block = s_acc.blocks[idx]
+                      prev_thinking = block["thinking"] || ""
+
+                      updated = %{
+                        block
+                        | "thinking" => prev_thinking <> text,
+                          "signature" => sig || block["signature"]
+                      }
+
+                      s_next = %__MODULE__{s_acc | blocks: Map.put(s_acc.blocks, idx, updated)}
+
+                      {ev_acc ++
+                         [
+                           {:thinking_delta,
+                            %{index: idx, delta: text, signature: updated["signature"]}}
+                         ], s_next}
+                    else
+                      idx = s_acc.block_counter
+                      block = %{"type" => "thinking", "thinking" => text, "signature" => sig}
+
+                      s_next = %__MODULE__{
+                        s_acc
+                        | blocks: Map.put(s_acc.blocks, idx, block),
+                          block_counter: idx + 1,
+                          active_block_idx: idx
+                      }
+
+                      {ev_acc ++ [{:thinking_delta, %{index: idx, delta: text, signature: sig}}],
+                       s_next}
+                    end
+
+                  is_binary(Map.get(part, "text")) ->
+                    text = part["text"]
+                    sig = Map.get(part, "thoughtSignature")
+
+                    if s_acc.active_block_idx != nil and
+                         get_in(s_acc.blocks, [s_acc.active_block_idx, "type"]) == "text" do
+                      idx = s_acc.active_block_idx
+                      block = s_acc.blocks[idx]
+                      prev_text = block["text"] || ""
+                      updated = %{block | "text" => prev_text <> text}
+
+                      updated =
+                        if sig, do: Map.put(updated, "thoughtSignature", sig), else: updated
+
+                      s_next = %__MODULE__{s_acc | blocks: Map.put(s_acc.blocks, idx, updated)}
+                      {ev_acc ++ [{:text_delta, %{index: idx, delta: text}}], s_next}
+                    else
+                      idx = s_acc.block_counter
+                      block = %{"type" => "text", "text" => text}
+                      block = if sig, do: Map.put(block, "thoughtSignature", sig), else: block
+
+                      s_next = %__MODULE__{
+                        s_acc
+                        | blocks: Map.put(s_acc.blocks, idx, block),
+                          block_counter: idx + 1,
+                          active_block_idx: idx
+                      }
+
+                      {ev_acc ++ [{:text_delta, %{index: idx, delta: text}}], s_next}
+                    end
+
+                  is_map(Map.get(part, "functionCall")) ->
+                    fc = part["functionCall"]
+                    name = Map.get(fc, "name", "tool")
+
+                    tool_count =
+                      Enum.count(s_acc.blocks, fn {_k, b} -> b["type"] == "tool_call" end) + 1
+
+                    id = Map.get(fc, "id") || "fc_#{tool_count}"
+                    args = Map.get(fc, "args", %{})
+                    sig = Map.get(part, "thoughtSignature") || Map.get(fc, "thoughtSignature")
+                    raw_json = Jason.encode!(args)
+
+                    idx = s_acc.block_counter
+
+                    block = %{
+                      "type" => "tool_call",
+                      "id" => id,
+                      "name" => name,
+                      "raw_json" => raw_json,
+                      "arguments" => args
+                    }
+
+                    block = if sig, do: Map.put(block, "thoughtSignature", sig), else: block
+
+                    s_next = %__MODULE__{
+                      s_acc
+                      | blocks: Map.put(s_acc.blocks, idx, block),
+                        block_counter: idx + 1,
+                        active_block_idx: idx
+                    }
+
+                    ev =
+                      {:toolcall_delta,
+                       %{
+                         index: idx,
+                         id: id,
+                         name: name,
+                         raw_json_delta: raw_json,
+                         partial_args: args
+                       }}
+
+                    {ev_acc ++ [ev], s_next}
+
+                  true ->
+                    {ev_acc, s_acc}
                 end
+              end)
 
-              is_binary(Map.get(part, "text")) ->
-                text = part["text"]
-                sig = Map.get(part, "thoughtSignature")
+            finish = Map.get(cand, "finishReason")
 
-                if s_acc.active_block_idx != nil and
-                     get_in(s_acc.blocks, [s_acc.active_block_idx, "type"]) == "text" do
-                  idx = s_acc.active_block_idx
-                  block = s_acc.blocks[idx]
-                  prev_text = block["text"] || ""
-                  updated = %{block | "text" => prev_text <> text}
-                  updated = if sig, do: Map.put(updated, "thoughtSignature", sig), else: updated
-                  s_next = %__MODULE__{s_acc | blocks: Map.put(s_acc.blocks, idx, updated)}
-                  {ev_acc ++ [{:text_delta, %{index: idx, delta: text}}], s_next}
-                else
-                  idx = s_acc.block_counter
-                  block = %{"type" => "text", "text" => text}
-                  block = if sig, do: Map.put(block, "thoughtSignature", sig), else: block
-                  s_next = %__MODULE__{
-                    s_acc
-                    | blocks: Map.put(s_acc.blocks, idx, block),
-                      block_counter: idx + 1,
-                      active_block_idx: idx
-                  }
-                  {ev_acc ++ [{:text_delta, %{index: idx, delta: text}}], s_next}
-                end
+            if finish in ["STOP", "MAX_TOKENS"] do
+              {done_events, final_st} =
+                finalize_stream(%__MODULE__{st | stop_reason: String.downcase(finish)})
 
-              is_map(Map.get(part, "functionCall")) ->
-                fc = part["functionCall"]
-                name = Map.get(fc, "name", "tool")
-                tool_count = Enum.count(s_acc.blocks, fn {_k, b} -> b["type"] == "tool_call" end) + 1
-                id = Map.get(fc, "id") || "fc_#{tool_count}"
-                args = Map.get(fc, "args", %{})
-                sig = Map.get(part, "thoughtSignature") || Map.get(fc, "thoughtSignature")
-                raw_json = Jason.encode!(args)
-
-                idx = s_acc.block_counter
-                block = %{
-                  "type" => "tool_call",
-                  "id" => id,
-                  "name" => name,
-                  "raw_json" => raw_json,
-                  "arguments" => args
-                }
-                block = if sig, do: Map.put(block, "thoughtSignature", sig), else: block
-
-                s_next = %__MODULE__{
-                  s_acc
-                  | blocks: Map.put(s_acc.blocks, idx, block),
-                    block_counter: idx + 1,
-                    active_block_idx: idx
-                }
-
-                ev =
-                  {:toolcall_delta,
-                   %{index: idx, id: id, name: name, raw_json_delta: raw_json, partial_args: args}}
-
-                {ev_acc ++ [ev], s_next}
-
-              true ->
-                {ev_acc, s_acc}
+              {start_events ++ part_events ++ done_events, final_st}
+            else
+              {start_events ++ part_events, st}
             end
-          end)
-
-        finish = Map.get(cand, "finishReason")
-
-        if finish in ["STOP", "MAX_TOKENS"] do
-          {done_events, final_st} = finalize_stream(%__MODULE__{st | stop_reason: String.downcase(finish)})
-          {start_events ++ part_events ++ done_events, final_st}
-        else
-          {start_events ++ part_events, st}
         end
     end
-  end
   end
 
   defp ensure_started(%__MODULE__{started?: true} = state), do: {[], state}
 
   defp ensure_started(%__MODULE__{started?: false} = state) do
-    {[{:start, %{provider: state.provider, model: state.model}}], %__MODULE__{state | started?: true}}
+    {[{:start, %{provider: state.provider, model: state.model}}],
+     %__MODULE__{state | started?: true}}
   end
 
   defp init_block_from_anthropic(%{"type" => "thinking"}) do
@@ -533,29 +611,50 @@ defmodule SuperPi.AI.StreamNormalizer do
     other
   end
 
-  defp apply_anthropic_delta(%__MODULE__{} = state, start_events, idx, %{"type" => "text_delta", "text" => chunk}) do
+  defp apply_anthropic_delta(%__MODULE__{} = state, start_events, idx, %{
+         "type" => "text_delta",
+         "text" => chunk
+       }) do
     block = Map.get(state.blocks, idx, %{"type" => "text", "text" => ""})
     updated = Map.put(block, "text", block["text"] <> chunk)
     next_state = %__MODULE__{state | blocks: Map.put(state.blocks, idx, updated)}
     {start_events ++ [{:text_delta, %{index: idx, delta: chunk}}], next_state}
   end
 
-  defp apply_anthropic_delta(%__MODULE__{} = state, start_events, idx, %{"type" => "thinking_delta", "thinking" => chunk}) do
-    block = Map.get(state.blocks, idx, %{"type" => "thinking", "thinking" => "", "signature" => nil})
+  defp apply_anthropic_delta(%__MODULE__{} = state, start_events, idx, %{
+         "type" => "thinking_delta",
+         "thinking" => chunk
+       }) do
+    block =
+      Map.get(state.blocks, idx, %{"type" => "thinking", "thinking" => "", "signature" => nil})
+
     updated = Map.put(block, "thinking", block["thinking"] <> chunk)
     next_state = %__MODULE__{state | blocks: Map.put(state.blocks, idx, updated)}
-    {start_events ++ [{:thinking_delta, %{index: idx, delta: chunk, signature: updated["signature"]}}], next_state}
+
+    {start_events ++
+       [{:thinking_delta, %{index: idx, delta: chunk, signature: updated["signature"]}}],
+     next_state}
   end
 
-  defp apply_anthropic_delta(%__MODULE__{} = state, start_events, idx, %{"type" => "signature_delta", "signature" => sig_chunk}) do
-    block = Map.get(state.blocks, idx, %{"type" => "thinking", "thinking" => "", "signature" => ""})
+  defp apply_anthropic_delta(%__MODULE__{} = state, start_events, idx, %{
+         "type" => "signature_delta",
+         "signature" => sig_chunk
+       }) do
+    block =
+      Map.get(state.blocks, idx, %{"type" => "thinking", "thinking" => "", "signature" => ""})
+
     prev_sig = block["signature"] || ""
     updated = Map.put(block, "signature", prev_sig <> sig_chunk)
     next_state = %__MODULE__{state | blocks: Map.put(state.blocks, idx, updated)}
-    {start_events ++ [{:thinking_delta, %{index: idx, delta: "", signature: updated["signature"]}}], next_state}
+
+    {start_events ++
+       [{:thinking_delta, %{index: idx, delta: "", signature: updated["signature"]}}], next_state}
   end
 
-  defp apply_anthropic_delta(%__MODULE__{} = state, start_events, idx, %{"type" => "input_json_delta", "partial_json" => json_chunk}) do
+  defp apply_anthropic_delta(%__MODULE__{} = state, start_events, idx, %{
+         "type" => "input_json_delta",
+         "partial_json" => json_chunk
+       }) do
     block =
       Map.get(state.blocks, idx, %{
         "type" => "tool_call",
@@ -567,7 +666,15 @@ defmodule SuperPi.AI.StreamNormalizer do
 
     new_raw = block["raw_json"] <> json_chunk
     partial = parse_partial_json(new_raw)
-    updated = %{"type" => "tool_call", "id" => block["id"], "name" => block["name"], "raw_json" => new_raw, "arguments" => partial}
+
+    updated = %{
+      "type" => "tool_call",
+      "id" => block["id"],
+      "name" => block["name"],
+      "raw_json" => new_raw,
+      "arguments" => partial
+    }
+
     next_state = %__MODULE__{state | blocks: Map.put(state.blocks, idx, updated)}
 
     ev =
@@ -583,7 +690,8 @@ defmodule SuperPi.AI.StreamNormalizer do
     {start_events ++ [ev], next_state}
   end
 
-  defp apply_anthropic_delta(%__MODULE__{} = state, start_events, _idx, _unknown_delta), do: {start_events, state}
+  defp apply_anthropic_delta(%__MODULE__{} = state, start_events, _idx, _unknown_delta),
+    do: {start_events, state}
 
   defp apply_openai_choice_delta(%__MODULE__{} = state, delta) do
     delta = delta || %{}
@@ -593,7 +701,9 @@ defmodule SuperPi.AI.StreamNormalizer do
         text when is_binary(text) and text != "" ->
           block = Map.get(state.blocks, 0, %{"type" => "text", "text" => ""})
           updated = Map.put(block, "text", (block["text"] || "") <> text)
-          {[{:text_delta, %{index: 0, delta: text}}], %__MODULE__{state | blocks: Map.put(state.blocks, 0, updated)}}
+
+          {[{:text_delta, %{index: 0, delta: text}}],
+           %__MODULE__{state | blocks: Map.put(state.blocks, 0, updated)}}
 
         _ ->
           {[], state}
@@ -603,7 +713,16 @@ defmodule SuperPi.AI.StreamNormalizer do
       tc_list when is_list(tc_list) ->
         Enum.reduce(tc_list, {events, state}, fn tc, {ev_acc, %__MODULE__{} = st_acc} ->
           idx = Map.get(tc, "index", 0) + 1
-          existing = Map.get(st_acc.blocks, idx, %{"type" => "tool_call", "id" => "call_#{idx}", "name" => "", "raw_json" => "", "arguments" => %{}})
+
+          existing =
+            Map.get(st_acc.blocks, idx, %{
+              "type" => "tool_call",
+              "id" => "call_#{idx}",
+              "name" => "",
+              "raw_json" => "",
+              "arguments" => %{}
+            })
+
           id = Map.get(tc, "id") || existing["id"]
           fn_map = Map.get(tc, "function") || %{}
           name = Map.get(fn_map, "name") || existing["name"]
@@ -619,7 +738,10 @@ defmodule SuperPi.AI.StreamNormalizer do
             "arguments" => partial
           }
 
-          ev = {:toolcall_delta, %{index: idx, id: id, name: name, raw_json_delta: arg_chunk, partial_args: partial}}
+          ev =
+            {:toolcall_delta,
+             %{index: idx, id: id, name: name, raw_json_delta: arg_chunk, partial_args: partial}}
+
           {ev_acc ++ [ev], %__MODULE__{st_acc | blocks: Map.put(st_acc.blocks, idx, updated)}}
         end)
 
@@ -649,8 +771,12 @@ defmodule SuperPi.AI.StreamNormalizer do
       end)
 
     case for({:invalid, id} <- ordered_content, do: id) do
-      [] -> finalize_valid(state, ordered_content)
-      ids -> {[{:error, %{reason: {:invalid_tool_arguments, ids}, retryable: true}}], %__MODULE__{state | done?: true}}
+      [] ->
+        finalize_valid(state, ordered_content)
+
+      ids ->
+        {[{:error, %{reason: {:invalid_tool_arguments, ids}, retryable: true}}],
+         %__MODULE__{state | done?: true}}
     end
   end
 
@@ -668,7 +794,9 @@ defmodule SuperPi.AI.StreamNormalizer do
   # Overload, rate limit and internal errors pass; the request can be sent again.
   @retryable_errors ~w(overloaded_error rate_limit_error api_error server_error rate_limit_exceeded)
 
-  defp retryable_error?(%{} = err), do: err["type"] in @retryable_errors or err["code"] in @retryable_errors
+  defp retryable_error?(%{} = err),
+    do: err["type"] in @retryable_errors or err["code"] in @retryable_errors
+
   defp retryable_error?(_), do: false
 
   defp finalize_valid(%__MODULE__{} = state, ordered_content) do

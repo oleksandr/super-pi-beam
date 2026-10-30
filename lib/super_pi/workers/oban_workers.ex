@@ -119,11 +119,15 @@ defmodule SuperPi.Workers.SubagentWorker do
 
   # Oban kills a job that outlives the child's own deadline by this much (`:subagent_kill_slack_ms`).
   @impl Oban.Worker
-  def timeout(%Oban.Job{args: %{"timeout_ms" => ms}}) when is_integer(ms), do: ms + Application.get_env(:super_pi, :subagent_kill_slack_ms, 30_000)
+  def timeout(%Oban.Job{args: %{"timeout_ms" => ms}}) when is_integer(ms),
+    do: ms + Application.get_env(:super_pi, :subagent_kill_slack_ms, 30_000)
+
   def timeout(_job), do: :infinity
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"task_id" => task_id, "child_conversation_id" => child_id} = args}) do
+  def perform(%Oban.Job{
+        args: %{"task_id" => task_id, "child_conversation_id" => child_id} = args
+      }) do
     case TaskEngine.start_task(task_id) do
       {:ok, task} ->
         run(task, child_id, args)
@@ -137,7 +141,9 @@ defmodule SuperPi.Workers.SubagentWorker do
   end
 
   defp run(task, child_id, %{"role" => role, "prompt" => prompt, "timeout_ms" => timeout_ms}) do
-    Event.publish(Event.subagent_started(task.conversation_id, task.owner_task_id, child_id, role, prompt))
+    Event.publish(
+      Event.subagent_started(task.conversation_id, task.owner_task_id, child_id, role, prompt)
+    )
 
     outcome =
       try do
@@ -165,11 +171,18 @@ defmodule SuperPi.Workers.SubagentWorker do
         {:error, "aborted"}
       else
         case Machine.safe_submit(pid, prompt, timeout: max(deadline - now(), 1)) do
-          {:ok, msg} -> {:ok, final_text(msg)}
-          {:error, {:timeout, {:gen_statem, :call, _}}} -> {:timeout, "timed out after #{timeout_ms} ms"}
+          {:ok, msg} ->
+            {:ok, final_text(msg)}
+
+          {:error, {:timeout, {:gen_statem, :call, _}}} ->
+            {:timeout, "timed out after #{timeout_ms} ms"}
+
           # The machine is gone (its node stopped, say). Horde restarts it and the turn resumes.
-          {:error, {_reason, {:gen_statem, :call, _}}} -> take_over(task.id, child_id, opts, deadline, timeout_ms)
-          {:error, reason} -> {:error, format_reason(reason)}
+          {:error, {_reason, {:gen_statem, :call, _}}} ->
+            take_over(task.id, child_id, opts, deadline, timeout_ms)
+
+          {:error, reason} ->
+            {:error, format_reason(reason)}
         end
       end
     end
@@ -258,18 +271,31 @@ defmodule SuperPi.Workers.SubagentWorker do
     result = task.result || %{}
 
     Event.publish(
-      Event.subagent_finished(task.conversation_id, task.owner_task_id, task.input["child_conversation_id"], task.status, result["summary"] || result["error"])
+      Event.subagent_finished(
+        task.conversation_id,
+        task.owner_task_id,
+        task.input["child_conversation_id"],
+        task.status,
+        result["summary"] || result["error"]
+      )
     )
   end
 
   @doc "Machine options of a child with this role: its extensions, plus the test hook."
   @spec machine_opts(String.t()) :: keyword()
-  def machine_opts(role), do: [extensions: Subagent.child_extensions(role)] ++ Application.get_env(:super_pi, :subagent_machine_opts, [])
+  def machine_opts(role),
+    do:
+      [extensions: Subagent.child_extensions(role)] ++
+        Application.get_env(:super_pi, :subagent_machine_opts, [])
 
   @doc "The text of an assistant message."
   @spec final_text(term()) :: String.t()
   def final_text(%{"content" => blocks}) when is_list(blocks) do
-    blocks |> Enum.map(&Map.get(&1, "text")) |> Enum.reject(&is_nil/1) |> Enum.join("\n") |> String.trim()
+    blocks
+    |> Enum.map(&Map.get(&1, "text"))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+    |> String.trim()
   end
 
   def final_text(_), do: ""
@@ -278,10 +304,13 @@ defmodule SuperPi.Workers.SubagentWorker do
   defp format_reason(:cancelled), do: "cancelled"
   defp format_reason(reason), do: inspect(reason)
 
-  defp truncate(text) when byte_size(text) > @max_summary_chars, do: binary_part(text, 0, @max_summary_chars) <> "\n[truncated]"
+  defp truncate(text) when byte_size(text) > @max_summary_chars,
+    do: binary_part(text, 0, @max_summary_chars) <> "\n[truncated]"
+
   defp truncate(text), do: text
 
-  defp aborted?(task_id), do: match?(%TaskSchema{abort_requested: true}, TaskEngine.get_task(task_id))
+  defp aborted?(task_id),
+    do: match?(%TaskSchema{abort_requested: true}, TaskEngine.get_task(task_id))
 
   defp settled?(task_id) do
     case TaskEngine.get_task(task_id) do

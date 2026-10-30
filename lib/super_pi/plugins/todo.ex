@@ -28,8 +28,14 @@ defmodule SuperPi.Plugins.Todo do
           "enum" => ["list", "add", "toggle", "clear"],
           "description" => "Checklist operation to execute"
         },
-        "text" => %{"type" => "string", "description" => "Description of task to add (required for 'add')"},
-        "id" => %{"type" => "integer", "description" => "Unique item numeric ID (required for 'toggle')"}
+        "text" => %{
+          "type" => "string",
+          "description" => "Description of task to add (required for 'add')"
+        },
+        "id" => %{
+          "type" => "integer",
+          "description" => "Unique item numeric ID (required for 'toggle')"
+        }
       },
       "required" => ["action"]
     }
@@ -163,16 +169,28 @@ defmodule SuperPi.Plugins.Todo do
 
   defp save_todos(conv_id, todos) do
     case Storage.commit(fn seq ->
-      doc = Doc.snapshot("conversation", conv_id, "pi.live") || %{}
-      updated = Map.put(doc, "todos", todos)
-      Doc.put_doc("conversation", conv_id, "pi.live", updated, seq)
-    end) do
+           doc = Doc.snapshot("conversation", conv_id, "pi.live") || %{}
+           updated = Map.put(doc, "todos", todos)
+           Doc.put_doc("conversation", conv_id, "pi.live", updated, seq)
+         end) do
       {:ok, _} ->
-        SuperPi.Event.publish(SuperPi.Event.plan_updated(conv_id, Enum.map(todos, &%{"id" => &1["id"], "text" => &1["text"], "completed" => &1["done"] == true})))
+        SuperPi.Event.publish(
+          SuperPi.Event.plan_updated(
+            conv_id,
+            Enum.map(
+              todos,
+              &%{"id" => &1["id"], "text" => &1["text"], "completed" => &1["done"] == true}
+            )
+          )
+        )
+
         :ok
 
-      {:error, reason} -> {:error, reason}
-      error -> {:error, error}
+      {:error, reason} ->
+        {:error, reason}
+
+      error ->
+        {:error, error}
     end
   rescue
     e -> {:error, e}

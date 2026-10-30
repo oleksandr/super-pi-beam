@@ -38,8 +38,8 @@ defmodule SuperPi.Durable.PostgresConcurrencyTest do
     conv = Storage.create_conversation!()
 
     on_exit(fn ->
-      Repo.delete_all(from t in TaskSchema, where: t.conversation_id == ^conv.id)
-      Repo.delete_all(from c in Conversation, where: c.id == ^conv.id)
+      Repo.delete_all(from(t in TaskSchema, where: t.conversation_id == ^conv.id))
+      Repo.delete_all(from(c in Conversation, where: c.id == ^conv.id))
     end)
 
     %{conv: conv}
@@ -60,14 +60,19 @@ defmodule SuperPi.Durable.PostgresConcurrencyTest do
 
       results =
         1..8
-        |> Task.async_stream(fn _ -> TaskEngine.start_task(task.id) end, max_concurrency: 8, timeout: 30_000)
+        |> Task.async_stream(fn _ -> TaskEngine.start_task(task.id) end,
+          max_concurrency: 8,
+          timeout: 30_000
+        )
         |> Enum.map(fn {:ok, r} -> r end)
 
       assert Enum.count(results, &match?({:ok, _}, &1)) == 1, "results: #{inspect(results)}"
     end
   end
 
-  test "a child settling while the parent starts waiting never leaves the parent stuck", %{conv: conv} do
+  test "a child settling while the parent starts waiting never leaves the parent stuck", %{
+    conv: conv
+  } do
     for i <- 1..60 do
       {:ok, parent} = TaskEngine.create_task(conv.id, "parent")
       {:ok, child} = TaskEngine.create_task(conv.id, "child", %{}, owner_task_id: parent.id)
@@ -154,6 +159,8 @@ defmodule SuperPi.Durable.PostgresConcurrencyTest do
 
     lines = path |> File.read!() |> String.split("\n", trim: true)
     assert length(lines) == 20
-    assert Enum.count(lines, &String.starts_with?(&1, "done-")) == 20, "updates were lost: #{inspect(lines)}"
+
+    assert Enum.count(lines, &String.starts_with?(&1, "done-")) == 20,
+           "updates were lost: #{inspect(lines)}"
   end
 end

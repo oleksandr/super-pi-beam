@@ -159,7 +159,9 @@ defmodule SuperPi.Plugins.InlineBash do
 
   defp get_config(config, key, default) when is_map(config) do
     case Map.fetch(config, key) do
-      {:ok, val} -> val
+      {:ok, val} ->
+        val
+
       :error ->
         case Map.fetch(config, to_string(key)) do
           {:ok, val} -> val

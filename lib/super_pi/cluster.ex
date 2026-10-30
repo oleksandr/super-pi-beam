@@ -85,7 +85,8 @@ defmodule SuperPi.Cluster do
       machine_count: length(machines),
       machine_supervision: Application.get_env(:super_pi, :machine_supervision, :horde),
       accepting?: SuperPi.Drain.accepting?(),
-      cluster_ready?: enabled?() and SuperPi.Repo.active_repo() == SuperPi.Repo.Postgres and Node.list() != []
+      cluster_ready?:
+        enabled?() and SuperPi.Repo.active_repo() == SuperPi.Repo.Postgres and Node.list() != []
     }
   end
 

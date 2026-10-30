@@ -28,10 +28,14 @@ defmodule SuperPi.Plugins.PermissionsTest do
     app = Path.join(System.tmp_dir!(), "perm_#{System.unique_integer([:positive])}")
     File.mkdir_p!(app)
     on_exit(fn -> File.rm_rf(app) end)
-    Storage.create_conversation!(agent: Map.merge(%{"workspacePaths" => [File.cwd!()], "appDataDir" => app}, extra))
+
+    Storage.create_conversation!(
+      agent: Map.merge(%{"workspacePaths" => [File.cwd!()], "appDataDir" => app}, extra)
+    )
   end
 
-  defp check(conv, tool, args), do: Permissions.before_tool(tool, args, %{conversation_id: conv.id})
+  defp check(conv, tool, args),
+    do: Permissions.before_tool(tool, args, %{conversation_id: conv.id})
 
   describe "remote_mode/1" do
     test "defaults to accept-edits" do
@@ -116,7 +120,8 @@ defmodule SuperPi.Plugins.PermissionsTest do
     end
 
     test "blocks a denied command after a shell operator", %{conv: conv} do
-      assert {:block, _} = check(conv, "bash", %{"command" => "echo hi && curl http://example.com"})
+      assert {:block, _} =
+               check(conv, "bash", %{"command" => "echo hi && curl http://example.com"})
     end
 
     test "allows other commands in auto mode", %{conv: conv} do
@@ -149,12 +154,22 @@ defmodule SuperPi.Plugins.PermissionsTest do
     @opts Router.init([])
 
     defp chat(model, headers, extra \\ %{}) do
-      payload = Map.merge(%{"model" => model, "messages" => [%{"role" => "user", "content" => "hi"}], "stream" => false}, extra)
+      payload =
+        Map.merge(
+          %{
+            "model" => model,
+            "messages" => [%{"role" => "user", "content" => "hi"}],
+            "stream" => false
+          },
+          extra
+        )
 
       conn(:post, "/v1/chat/completions", Jason.encode!(payload))
       |> put_req_header("content-type", "application/json")
       |> put_req_header("x-session-id", "perm-#{System.unique_integer([:positive])}")
-      |> then(fn c -> Enum.reduce(headers, c, fn {k, v}, acc -> put_req_header(acc, k, v) end) end)
+      |> then(fn c ->
+        Enum.reduce(headers, c, fn {k, v}, acc -> put_req_header(acc, k, v) end)
+      end)
       |> Router.call(@opts)
     end
 
@@ -190,7 +205,9 @@ defmodule SuperPi.Plugins.PermissionsTest do
     alias SuperPi.RPC.Server
 
     defp rpc(method, params) do
-      payload = Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params})
+      payload =
+        Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params})
+
       {reply, _st, _} = Server.handle_rpc_payload(payload, Server.new_client_state())
       reply
     end
@@ -220,7 +237,13 @@ defmodule SuperPi.Plugins.PermissionsTest do
 
     test "session.configure is limited the same way" do
       conv_id = rpc("session.open", %{})["result"]["conversation_id"]
-      reply = rpc("session.configure", %{"conversation_id" => conv_id, "agent" => %{"executionMode" => "auto", "dangerouslySkipPermissions" => true}})
+
+      reply =
+        rpc("session.configure", %{
+          "conversation_id" => conv_id,
+          "agent" => %{"executionMode" => "auto", "dangerouslySkipPermissions" => true}
+        })
+
       assert reply["result"]["agent"]["executionMode"] == "accept-edits"
       refute reply["result"]["agent"]["dangerouslySkipPermissions"]
     end

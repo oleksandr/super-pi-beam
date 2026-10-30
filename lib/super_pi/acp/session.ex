@@ -20,8 +20,16 @@ defmodule SuperPi.ACP.Session do
   @type t :: %__MODULE__{}
 
   @modes [
-    %{"id" => "plan", "name" => "Plan", "description" => "Read-only. Inspect and plan, change nothing."},
-    %{"id" => "accept-edits", "name" => "Accept edits", "description" => "Edit files. Other tools ask first."},
+    %{
+      "id" => "plan",
+      "name" => "Plan",
+      "description" => "Read-only. Inspect and plan, change nothing."
+    },
+    %{
+      "id" => "accept-edits",
+      "name" => "Accept edits",
+      "description" => "Edit files. Other tools ask first."
+    },
     %{"id" => "auto", "name" => "Auto", "description" => "Run every tool without asking."}
   ]
 
@@ -36,7 +44,9 @@ defmodule SuperPi.ACP.Session do
       |> Map.put("harness", harness.id())
 
     {conv_id, true} =
-      Sessions.fetch_or_create(principal, session_id, fn -> Storage.create_conversation!(agent: agent, owner: principal) end)
+      Sessions.fetch_or_create(principal, session_id, fn ->
+        Storage.create_conversation!(agent: agent, owner: principal)
+      end)
 
     build(session_id, conv_id, cwd)
   end
@@ -51,7 +61,12 @@ defmodule SuperPi.ACP.Session do
   end
 
   defp build(session_id, conv_id, cwd) do
-    %__MODULE__{id: session_id, conversation_id: conv_id, cwd: cwd, renderer: Renderer.ACP.init(session_id: session_id)}
+    %__MODULE__{
+      id: session_id,
+      conversation_id: conv_id,
+      cwd: cwd,
+      renderer: Renderer.ACP.init(session_id: session_id)
+    }
   end
 
   @doc """
@@ -60,14 +75,17 @@ defmodule SuperPi.ACP.Session do
   """
   @spec fork(String.t(), t()) :: {:ok, t()} | {:error, term()}
   def fork(principal, %__MODULE__{} = session) do
-    {visible, _graph} = SuperPi.Durable.Context.visible_entries_with_graph(session.conversation_id)
+    {visible, _graph} =
+      SuperPi.Durable.Context.visible_entries_with_graph(session.conversation_id)
 
     case List.last(visible) do
       nil ->
         {:error, :empty_conversation}
 
       %{id: entry_id} ->
-        fork_conv = Storage.fork_conversation!(session.conversation_id, entry_id, owner: principal)
+        fork_conv =
+          Storage.fork_conversation!(session.conversation_id, entry_id, owner: principal)
+
         session_id = "acp_" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
         {conv_id, true} = Sessions.fetch_or_create(principal, session_id, fn -> fork_conv end)
         {:ok, build(session_id, conv_id, session.cwd)}
@@ -110,19 +128,36 @@ defmodule SuperPi.ACP.Session do
 
         calls =
           for c <- m["tool_calls"] || [],
-              do: %{"sessionUpdate" => "tool_call", "toolCallId" => c["id"], "title" => to_string(c["name"]), "kind" => Renderer.ACP.kind(c["name"]), "status" => "completed", "rawInput" => c["arguments"] || %{}}
+              do: %{
+                "sessionUpdate" => "tool_call",
+                "toolCallId" => c["id"],
+                "title" => to_string(c["name"]),
+                "kind" => Renderer.ACP.kind(c["name"]),
+                "status" => "completed",
+                "rawInput" => c["arguments"] || %{}
+              }
 
         text ++ calls
 
       %{"role" => "tool"} = m ->
-        [%{"sessionUpdate" => "tool_call_update", "toolCallId" => m["tool_call_id"], "status" => if(m["is_error"], do: "failed", else: "completed"), "content" => [%{"type" => "content", "content" => %{"type" => "text", "text" => m["text"]}}]}]
+        [
+          %{
+            "sessionUpdate" => "tool_call_update",
+            "toolCallId" => m["tool_call_id"],
+            "status" => if(m["is_error"], do: "failed", else: "completed"),
+            "content" => [
+              %{"type" => "content", "content" => %{"type" => "text", "text" => m["text"]}}
+            ]
+          }
+        ]
 
       _ ->
         []
     end)
   end
 
-  defp chunk(kind, text), do: %{"sessionUpdate" => kind, "content" => %{"type" => "text", "text" => text}}
+  defp chunk(kind, text),
+    do: %{"sessionUpdate" => kind, "content" => %{"type" => "text", "text" => text}}
 
   @doc "Cancels the turn. The order is load-bearing: pending prompts first, then the machine."
   @spec cancel(t()) :: :ok

@@ -15,7 +15,8 @@ defmodule SuperPi.MCP.ServerNegotiationTest do
 
   for version <- ["2025-06-18", "2025-03-26", "2024-11-05"] do
     test "answers the client's supported version #{version}" do
-      assert {unquote(version), %{protocol_version: unquote(version)}} = initialize(%{"protocolVersion" => unquote(version)})
+      assert {unquote(version), %{protocol_version: unquote(version)}} =
+               initialize(%{"protocolVersion" => unquote(version)})
     end
   end
 
@@ -39,7 +40,11 @@ defmodule SuperPi.MCP.ServerNegotiationTest do
     Logger.configure(level: :debug)
     on_exit(fn -> Logger.configure(level: previous) end)
 
-    log = capture_log([level: :debug], fn -> initialize(%{"protocolVersion" => "2026-07-28", "clientInfo" => %{"name" => "zed"}}) end)
+    log =
+      capture_log([level: :debug], fn ->
+        initialize(%{"protocolVersion" => "2026-07-28", "clientInfo" => %{"name" => "zed"}})
+      end)
+
     assert log =~ ~s(requested "2026-07-28")
     assert log =~ "answering 2025-06-18"
     assert log =~ ~s("zed")

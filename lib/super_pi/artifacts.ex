@@ -33,7 +33,8 @@ defmodule SuperPi.Artifacts do
   @doc "Validates an artifact name."
   @spec valid_name?(term()) :: boolean()
   def valid_name?(name) when is_binary(name) do
-    byte_size(name) in 1..200 and Regex.match?(@name_rule, name) and not Enum.member?(String.split(name, "/"), "..") and
+    byte_size(name) in 1..200 and Regex.match?(@name_rule, name) and
+      not Enum.member?(String.split(name, "/"), "..") and
       not Enum.member?(String.split(name, "/"), ".")
   end
 
@@ -70,9 +71,15 @@ defmodule SuperPi.Artifacts do
         "parameters" => %{
           "type" => "object",
           "properties" => %{
-            "name" => %{"type" => "string", "description" => "Artifact name, for example reports/summary.md"},
+            "name" => %{
+              "type" => "string",
+              "description" => "Artifact name, for example reports/summary.md"
+            },
             "content" => %{"type" => "string", "description" => "Text to save"},
-            "path" => %{"type" => "string", "description" => "Workspace file to save instead of `content`"},
+            "path" => %{
+              "type" => "string",
+              "description" => "Workspace file to save instead of `content`"
+            },
             "content_type" => %{"type" => "string"}
           },
           "required" => ["name"]
@@ -87,7 +94,10 @@ defmodule SuperPi.Artifacts do
           "type" => "object",
           "properties" => %{
             "name" => %{"type" => "string"},
-            "to_path" => %{"type" => "string", "description" => "Write the artifact to this workspace file instead of returning it"}
+            "to_path" => %{
+              "type" => "string",
+              "description" => "Write the artifact to this workspace file instead of returning it"
+            }
           },
           "required" => ["name"]
         },

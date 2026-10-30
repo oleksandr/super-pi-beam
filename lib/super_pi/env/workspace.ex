@@ -47,7 +47,15 @@ defmodule SuperPi.Env.Workspace do
   alias SuperPi.Plugins.Permissions
 
   @enforce_keys [:kind]
-  defstruct [:kind, :root, :env, capabilities: [], artifacts?: false, notice: nil, confined?: false]
+  defstruct [
+    :kind,
+    :root,
+    :env,
+    capabilities: [],
+    artifacts?: false,
+    notice: nil,
+    confined?: false
+  ]
 
   @type t :: %__MODULE__{}
 
@@ -70,14 +78,28 @@ defmodule SuperPi.Env.Workspace do
   def build(cfg, ctx \\ %{})
 
   def build(%{"kind" => "local"} = cfg, _ctx) do
-    {:ok, %__MODULE__{kind: "local", env: SuperPi.Env.Local, capabilities: caps(cfg, [:fs, :exec]), artifacts?: cfg["artifacts"] == true}}
+    {:ok,
+     %__MODULE__{
+       kind: "local",
+       env: SuperPi.Env.Local,
+       capabilities: caps(cfg, [:fs, :exec]),
+       artifacts?: cfg["artifacts"] == true
+     }}
   end
 
   def build(%{"kind" => "shared"} = cfg, _ctx) do
     case cfg["root"] do
       root when is_binary(root) and root != "" ->
         if Path.type(root) == :absolute do
-          {:ok, %__MODULE__{kind: "shared", root: root, env: SuperPi.Env.Shared, capabilities: caps(cfg, [:fs, :exec]), artifacts?: true, confined?: true}}
+          {:ok,
+           %__MODULE__{
+             kind: "shared",
+             root: root,
+             env: SuperPi.Env.Shared,
+             capabilities: caps(cfg, [:fs, :exec]),
+             artifacts?: true,
+             confined?: true
+           }}
         else
           {:error, "workspace kind shared needs an absolute root, got #{inspect(root)}"}
         end
@@ -88,14 +110,26 @@ defmodule SuperPi.Env.Workspace do
   end
 
   def build(%{"kind" => "scratch"} = cfg, ctx) do
-    base = cfg["base"] || Application.get_env(:super_pi, :scratch_dir, Path.join(System.tmp_dir!(), "super_pi_scratch"))
+    base =
+      cfg["base"] ||
+        Application.get_env(
+          :super_pi,
+          :scratch_dir,
+          Path.join(System.tmp_dir!(), "super_pi_scratch")
+        )
+
     conv = Map.get(ctx, :conversation_id) || "none"
 
     {dir, notice_if_new} =
       case {cfg["lifetime"], Map.get(ctx, :active_task_id)} do
-        {"conversation", _} -> {Path.join([base, to_string(conv), "_conversation"]), nil}
-        {_, nil} -> {Path.join([base, to_string(conv), "_no_task"]), nil}
-        {_, task_id} -> {Path.join([base, to_string(conv), "task-#{task_id}"]), restart_notice(task_id)}
+        {"conversation", _} ->
+          {Path.join([base, to_string(conv), "_conversation"]), nil}
+
+        {_, nil} ->
+          {Path.join([base, to_string(conv), "_no_task"]), nil}
+
+        {_, task_id} ->
+          {Path.join([base, to_string(conv), "task-#{task_id}"]), restart_notice(task_id)}
       end
 
     fresh? = not File.dir?(dir)
@@ -103,7 +137,17 @@ defmodule SuperPi.Env.Workspace do
     case File.mkdir_p(dir) do
       :ok ->
         notice = if fresh? and notice_if_new, do: notice_if_new, else: nil
-        {:ok, %__MODULE__{kind: "scratch", root: dir, env: SuperPi.Env.Local, capabilities: caps(cfg, [:fs, :exec]), artifacts?: true, confined?: true, notice: notice}}
+
+        {:ok,
+         %__MODULE__{
+           kind: "scratch",
+           root: dir,
+           env: SuperPi.Env.Local,
+           capabilities: caps(cfg, [:fs, :exec]),
+           artifacts?: true,
+           confined?: true,
+           notice: notice
+         }}
 
       {:error, reason} ->
         {:error, "cannot create the scratch workspace #{dir}: #{:file.format_error(reason)}"}
@@ -114,8 +158,11 @@ defmodule SuperPi.Env.Workspace do
     {:ok, %__MODULE__{kind: "none", capabilities: caps(cfg, []), artifacts?: true}}
   end
 
-  def build(%{"kind" => kind}, _ctx), do: {:error, "unknown workspace kind #{inspect(kind)} (local, shared, scratch, none)"}
-  def build(other, _ctx), do: {:error, "workspace must be a map with a kind, got #{inspect(other)}"}
+  def build(%{"kind" => kind}, _ctx),
+    do: {:error, "unknown workspace kind #{inspect(kind)} (local, shared, scratch, none)"}
+
+  def build(other, _ctx),
+    do: {:error, "workspace must be a map with a kind, got #{inspect(other)}"}
 
   # `:net` is on unless the workspace says `"network" => false`.
   defp caps(%{"network" => false}, base), do: base
@@ -155,7 +202,8 @@ defmodule SuperPi.Env.Workspace do
   defp effect_capabilities(_), do: []
 
   @doc "First capability a tool needs, or `nil`. Kept for callers that ask about one capability."
-  def capability_for(tool, agent_cfg \\ nil), do: tool |> required_capabilities(agent_cfg) |> List.first()
+  def capability_for(tool, agent_cfg \\ nil),
+    do: tool |> required_capabilities(agent_cfg) |> List.first()
 
   @doc "True when the workspace can serve the tool."
   def supports?(%__MODULE__{} = ws, tool, agent_cfg \\ nil) do
@@ -175,7 +223,12 @@ defmodule SuperPi.Env.Workspace do
       {:ok, ws} ->
         kept = Enum.filter(tools, &supports?(ws, &1["name"], %{"tools" => tools}))
         have = MapSet.new(kept, & &1["name"])
-        extra = if ws.artifacts?, do: Enum.reject(SuperPi.Artifacts.tool_specs(), &MapSet.member?(have, &1["name"])), else: []
+
+        extra =
+          if ws.artifacts?,
+            do: Enum.reject(SuperPi.Artifacts.tool_specs(), &MapSet.member?(have, &1["name"])),
+            else: []
+
         kept ++ extra
 
       {:error, _} ->
@@ -207,7 +260,14 @@ defmodule SuperPi.Env.Workspace do
         :ok
 
       %{"kind" => "scratch"} = cfg ->
-        base = cfg["base"] || Application.get_env(:super_pi, :scratch_dir, Path.join(System.tmp_dir!(), "super_pi_scratch"))
+        base =
+          cfg["base"] ||
+            Application.get_env(
+              :super_pi,
+              :scratch_dir,
+              Path.join(System.tmp_dir!(), "super_pi_scratch")
+            )
+
         File.rm_rf(Path.join([base, to_string(conversation_id), "task-#{task_id}"]))
         :ok
 
@@ -224,7 +284,14 @@ defmodule SuperPi.Env.Workspace do
   of directories removed.
   """
   def sweep(base \\ nil) do
-    base = base || Application.get_env(:super_pi, :scratch_dir, Path.join(System.tmp_dir!(), "super_pi_scratch"))
+    base =
+      base ||
+        Application.get_env(
+          :super_pi,
+          :scratch_dir,
+          Path.join(System.tmp_dir!(), "super_pi_scratch")
+        )
+
     ttl = Application.get_env(:super_pi, :scratch_ttl_hours, 24) * 3600
     now = System.os_time(:second)
 

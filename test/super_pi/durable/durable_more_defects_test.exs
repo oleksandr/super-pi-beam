@@ -19,7 +19,6 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
   alias SuperPi.Durable.Schemas.Task, as: TaskSchema
   alias SuperPi.Workers.GenerationWakeWorker
 
-
   defp running_task(conv, opts \\ []) do
     {:ok, task} = TaskEngine.create_task(conv.id, "pi.generation", %{}, opts)
     {:ok, task} = TaskEngine.start_task(task.id)
@@ -44,6 +43,7 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
   describe "deferred_flusher.ex" do
     test "a failing periodic flush is logged, not silently swallowed (:61-69)" do
       conv = Storage.create_conversation!()
+
       DeferredFlusher.stage_deferred("conversation", conv.id, "pi.live", %{"bad" => {:not, :json}})
 
       log =
@@ -52,7 +52,8 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
           :sys.get_state(DeferredFlusher)
         end)
 
-      assert log =~ "flush", "periodic flush failed (staged value is not JSON) but nothing was logged"
+      assert log =~ "flush",
+             "periodic flush failed (staged value is not JSON) but nothing was logged"
     end
 
     test "stage_deferred does not query the database (:24-30)" do
@@ -70,13 +71,15 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
 
       DeferredFlusher.stage_deferred("conversation", 1, "pi.live", %{"a" => 1})
 
-      refute_received {:repo_query, _}, "stage_deferred hits the DB on every call (Storage.current_seq)"
+      refute_received {:repo_query, _},
+                      "stage_deferred hits the DB on every call (Storage.current_seq)"
     end
   end
 
   describe "task_engine.ex create_task / wait_for_children" do
     test "create_task for a non-existent conversation returns {:error, _} instead of raising (:26-64)" do
-      assert {:ok, {:error, _}} = attempt(fn -> TaskEngine.create_task(999_999, "pi.generation") end)
+      assert {:ok, {:error, _}} =
+               attempt(fn -> TaskEngine.create_task(999_999, "pi.generation") end)
     end
 
     test "wait_for_children rejects unknown child ids instead of treating them as terminal (:396-401)" do
@@ -189,7 +192,13 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
 
       rev = fn ->
         %DocumentRevision{}
-        |> DocumentRevision.changeset(%{document_id: doc.id, seq: 5, version: 1, is_checkpoint_base: true, value: %{}})
+        |> DocumentRevision.changeset(%{
+          document_id: doc.id,
+          seq: 5,
+          version: 1,
+          is_checkpoint_base: true,
+          value: %{}
+        })
         |> Repo.insert!()
       end
 
@@ -216,7 +225,13 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
       assert :rejected ==
                insert_outcome(fn ->
                  %Entry{}
-                 |> Entry.changeset(%{conversation_id: conv.id, seq: 9_001, kind: "k", head_entry_id: 999_999, data: %{}})
+                 |> Entry.changeset(%{
+                   conversation_id: conv.id,
+                   seq: 9_001,
+                   kind: "k",
+                   head_entry_id: 999_999,
+                   data: %{}
+                 })
                  |> Repo.insert!()
                end)
     end
@@ -225,7 +240,11 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
       assert :rejected ==
                insert_outcome(fn ->
                  %Conversation{}
-                 |> Conversation.changeset(%{parent_entry_id: 999_999, owner_kind: "ownerless", created_seq: 1})
+                 |> Conversation.changeset(%{
+                   parent_entry_id: 999_999,
+                   owner_kind: "ownerless",
+                   created_seq: 1
+                 })
                  |> Repo.insert!()
                end)
     end
@@ -234,7 +253,11 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
       assert :rejected ==
                insert_outcome(fn ->
                  %Conversation{}
-                 |> Conversation.changeset(%{owner_task_id: 999_999, owner_kind: "task", created_seq: 1})
+                 |> Conversation.changeset(%{
+                   owner_task_id: 999_999,
+                   owner_kind: "task",
+                   created_seq: 1
+                 })
                  |> Repo.insert!()
                end)
     end
@@ -245,9 +268,11 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
       conv = Storage.create_conversation!()
       opts = [history_policy: "rewindable", checkpoint_every: 100]
 
-      Storage.commit(fn seq -> Doc.put_doc("conversation", conv.id, "x.rewind", %{"a" => 1}, seq, opts) end)
+      Storage.commit(fn seq ->
+        Doc.put_doc("conversation", conv.id, "x.rewind", %{"a" => 1}, seq, opts)
+      end)
 
-      doc = Repo.one!(from d in Document, where: d.scope_id == ^conv.id and d.kind == "x.rewind")
+      doc = Repo.one!(from(d in Document, where: d.scope_id == ^conv.id and d.kind == "x.rewind"))
 
       Repo.insert!(%DocumentRevision{
         document_id: doc.id,
@@ -269,11 +294,13 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
       conv = Storage.create_conversation!()
 
       for i <- 1..30 do
-        Storage.commit(fn seq -> Doc.put_doc("conversation", conv.id, "pi.live", %{"status" => "s#{i}"}, seq) end)
+        Storage.commit(fn seq ->
+          Doc.put_doc("conversation", conv.id, "pi.live", %{"status" => "s#{i}"}, seq)
+        end)
       end
 
-      doc = Repo.one!(from d in Document, where: d.scope_id == ^conv.id and d.kind == "pi.live")
-      count = length(Repo.all(from r in DocumentRevision, where: r.document_id == ^doc.id))
+      doc = Repo.one!(from(d in Document, where: d.scope_id == ^conv.id and d.kind == "pi.live"))
+      count = length(Repo.all(from(r in DocumentRevision, where: r.document_id == ^doc.id)))
 
       assert count <= 3, "latest doc accumulated #{count} revisions for 30 writes"
     end
@@ -287,12 +314,12 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
 
       result = attempt(fn -> Storage.fork_conversation!(a.id, foreign.id) end)
 
-      refute match?({:ok, %Conversation{}}, result), "fork created from a foreign conversation's entry"
+      refute match?({:ok, %Conversation{}}, result),
+             "fork created from a foreign conversation's entry"
     end
   end
 
   describe "config" do
-
     test "sum of Oban queue limits does not exceed the SQLite pool size" do
       cfg = Config.Reader.read!(Path.join(config_dir(), "config.exs"), env: :dev, target: :host)
       limits = cfg |> get_in([:super_pi, Oban, :queues]) |> Keyword.values() |> Enum.sum()
@@ -304,7 +331,8 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
     test "SQLite repo defaults to immediate transactions" do
       cfg = Config.Reader.read!(Path.join(config_dir(), "config.exs"), env: :dev, target: :host)
 
-      assert get_in(cfg, [:super_pi, SuperPi.Repo.SQLite, :default_transaction_mode]) == :immediate,
+      assert get_in(cfg, [:super_pi, SuperPi.Repo.SQLite, :default_transaction_mode]) ==
+               :immediate,
              "deferred read-then-write transactions can hit SQLITE_BUSY"
     end
 

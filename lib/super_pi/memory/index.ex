@@ -65,7 +65,14 @@ defmodule SuperPi.Memory.Index do
         hash = hash(text)
 
         Storage.commit(fn seq ->
-          Doc.put_doc("memory", 0, "pi.memory_index", %{"fingerprint" => fingerprint, "hash" => hash, "section" => text}, seq, key: key)
+          Doc.put_doc(
+            "memory",
+            0,
+            "pi.memory_index",
+            %{"fingerprint" => fingerprint, "hash" => hash, "section" => text},
+            seq,
+            key: key
+          )
         end)
 
         {text, hash}
@@ -74,27 +81,40 @@ defmodule SuperPi.Memory.Index do
 
   @doc "The hash of a rendered section: 16 hexadecimal characters."
   @spec hash(String.t()) :: String.t()
-  def hash(text), do: :crypto.hash(:sha256, text) |> Base.encode16(case: :lower) |> binary_part(0, 16)
+  def hash(text),
+    do: :crypto.hash(:sha256, text) |> Base.encode16(case: :lower) |> binary_part(0, 16)
 
-  defp doc_key({kind, id}), do: kind <> ":" <> (:crypto.hash(:sha256, id) |> Base.encode16(case: :lower) |> binary_part(0, 16))
+  defp doc_key({kind, id}),
+    do:
+      kind <>
+        ":" <> (:crypto.hash(:sha256, id) |> Base.encode16(case: :lower) |> binary_part(0, 16))
 
   defp live_notes(scope) do
     Repo.all(
-      from m in M.scoped(scope),
+      from(m in M.scoped(scope),
         where: is_nil(m.superseded_by_id) and not m.pinned,
         order_by: [desc: m.updated_seq],
         limit: @max_notes,
         select: %{slug: m.slug, title: m.title, topics: m.topics, updated_at: m.updated_at}
+      )
     )
   end
 
   defp pinned_notes(scope) do
     Repo.all(
-      from m in M.scoped(scope),
+      from(m in M.scoped(scope),
         where: is_nil(m.superseded_by_id) and m.pinned,
         order_by: [desc: m.updated_seq],
         limit: 200,
-        select: %{slug: m.slug, title: m.title, body: m.body, provenance: m.provenance, confidence: m.confidence, updated_at: m.updated_at}
+        select: %{
+          slug: m.slug,
+          title: m.title,
+          body: m.body,
+          provenance: m.provenance,
+          confidence: m.confidence,
+          updated_at: m.updated_at
+        }
+      )
     )
   end
 
@@ -109,13 +129,19 @@ defmodule SuperPi.Memory.Index do
     header = "## Memory\n" <> @standing
     limit = cap - @footer_reserve
 
-    {pinned_lines, used, pinned_omitted} = pinned_lines(pinned, byte_size(header) + 1, header_share(limit, header), pinned_body_bytes)
+    {pinned_lines, used, pinned_omitted} =
+      pinned_lines(pinned, byte_size(header) + 1, header_share(limit, header), pinned_body_bytes)
+
     {topic_lines, topics_omitted} = topic_lines(notes, used, limit)
 
     footer =
       [
-        if(pinned_omitted > 0, do: "- #{pinned_omitted} more pinned notes not shown. Use memory_search."),
-        if(topics_omitted > 0, do: "- #{topics_omitted} more topics not listed. Use memory_search.")
+        if(pinned_omitted > 0,
+          do: "- #{pinned_omitted} more pinned notes not shown. Use memory_search."
+        ),
+        if(topics_omitted > 0,
+          do: "- #{topics_omitted} more topics not listed. Use memory_search."
+        )
       ]
       |> Enum.reject(&is_nil/1)
 
@@ -142,7 +168,9 @@ defmodule SuperPi.Memory.Index do
           else: {lines, used, omitted + 1}
       end)
 
-    if lines == [], do: {[], used - byte_size(heading) - 1, omitted}, else: {[heading | Enum.reverse(lines)], used, omitted}
+    if lines == [],
+      do: {[], used - byte_size(heading) - 1, omitted},
+      else: {[heading | Enum.reverse(lines)], used, omitted}
   end
 
   @doc """
@@ -169,14 +197,20 @@ defmodule SuperPi.Memory.Index do
     groups = group(notes)
 
     {lines, _used, omitted} =
-      Enum.reduce(groups, {[], used + byte_size(heading) + 1, 0}, fn {topic, members}, {lines, used, omitted} ->
+      Enum.reduce(groups, {[], used + byte_size(heading) + 1, 0}, fn {topic, members},
+                                                                     {lines, used, omitted} ->
         full = group_line(topic, members)
         pointer = pointer_line(topic, members)
 
         cond do
-          used + byte_size(full) + 1 <= limit -> {[full | lines], used + byte_size(full) + 1, omitted}
-          used + byte_size(pointer) + 1 <= limit -> {[pointer | lines], used + byte_size(pointer) + 1, omitted}
-          true -> {lines, used, omitted + 1}
+          used + byte_size(full) + 1 <= limit ->
+            {[full | lines], used + byte_size(full) + 1, omitted}
+
+          used + byte_size(pointer) + 1 <= limit ->
+            {[pointer | lines], used + byte_size(pointer) + 1, omitted}
+
+          true ->
+            {lines, used, omitted + 1}
         end
       end)
 
@@ -186,8 +220,12 @@ defmodule SuperPi.Memory.Index do
   # Notes by first topic, biggest group first. Within a group the newest note comes first.
   defp group(notes) do
     notes
-    |> Enum.group_by(fn n -> n.topics |> String.split(" ", trim: true) |> List.first() |> Kernel.||("untagged") end)
-    |> Enum.map(fn {topic, members} -> {topic, Enum.sort_by(members, &{newest_key(&1.updated_at), &1.slug}, :desc)} end)
+    |> Enum.group_by(fn n ->
+      n.topics |> String.split(" ", trim: true) |> List.first() |> Kernel.||("untagged")
+    end)
+    |> Enum.map(fn {topic, members} ->
+      {topic, Enum.sort_by(members, &{newest_key(&1.updated_at), &1.slug}, :desc)}
+    end)
     |> Enum.sort_by(fn {topic, members} -> {-length(members), topic} end)
   end
 
@@ -195,10 +233,12 @@ defmodule SuperPi.Memory.Index do
   defp newest_key(_), do: 0
 
   defp group_line(topic, members) do
-    prefix = "- #{line(topic, 40)} (#{length(members)}, updated #{date(hd(members).updated_at)}): "
+    prefix =
+      "- #{line(topic, 40)} (#{length(members)}, updated #{date(hd(members).updated_at)}): "
 
     {entries, _} =
-      Enum.reduce_while(Enum.with_index(members), {[], byte_size(prefix)}, fn {m, i}, {acc, size} ->
+      Enum.reduce_while(Enum.with_index(members), {[], byte_size(prefix)}, fn {m, i},
+                                                                              {acc, size} ->
         entry = "#{line(m.title, 80)} [#{m.slug}]"
         rest = length(members) - i
 
@@ -232,6 +272,8 @@ defmodule SuperPi.Memory.Index do
 
   # Drops a UTF-8 sequence that the cut split in half.
   defp valid_prefix(bin) do
-    if String.valid?(bin) or bin == "", do: bin, else: valid_prefix(binary_part(bin, 0, byte_size(bin) - 1))
+    if String.valid?(bin) or bin == "",
+      do: bin,
+      else: valid_prefix(binary_part(bin, 0, byte_size(bin) - 1))
   end
 end

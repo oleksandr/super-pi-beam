@@ -42,7 +42,9 @@ defmodule SuperPi.Env.EnvDefectsTest do
   end
 
   describe "Local.edit_file / write_file (env/local.ex:41-64)" do
-    test "edit_file with empty old_text returns an error and leaves the file unchanged", %{dir: dir} do
+    test "edit_file with empty old_text returns an error and leaves the file unchanged", %{
+      dir: dir
+    } do
       path = Path.join(dir, "f.txt")
       File.write!(path, "abc")
 
@@ -77,7 +79,9 @@ defmodule SuperPi.Env.EnvDefectsTest do
 
       assert "a/real.txt" in files
       looped = Enum.filter(files, &String.contains?(&1, "loop"))
-      assert looped == [], "recursed through the symlink cycle, got #{length(looped)} aliased paths"
+
+      assert looped == [],
+             "recursed through the symlink cycle, got #{length(looped)} aliased paths"
     end
   end
 
@@ -128,7 +132,9 @@ defmodule SuperPi.Env.EnvDefectsTest do
   end
 
   describe "FileLock (env/file_lock.ex:17-20,59-76)" do
-    test "with_lock timeout returns {:error, :lock_timeout} instead of exiting the caller", %{dir: dir} do
+    test "with_lock timeout returns {:error, :lock_timeout} instead of exiting the caller", %{
+      dir: dir
+    } do
       path = Path.join(dir, "locked.txt")
       hold_lock(path)
 
@@ -176,7 +182,9 @@ defmodule SuperPi.Env.EnvDefectsTest do
       res = run_spill(dir, content)
 
       md5 = fn bin -> Base.encode16(:crypto.hash(:md5, bin)) end
-      assert md5.(File.read!(res.spilled_path)) == md5.(content), "spill file content differs from command output"
+
+      assert md5.(File.read!(res.spilled_path)) == md5.(content),
+             "spill file content differs from command output"
     end
 
     test "spill file is created with mode 0600", %{dir: dir} do

@@ -24,8 +24,20 @@ defmodule SuperPi.TestSupport.FakeHTTPMCP do
   defstruct [:url, :base, :store, :server]
 
   def start(opts \\ []) do
-    {:ok, store} = Agent.start_link(fn -> %{opts: Map.new(opts), sessions: MapSet.new(), log: [], streams: %{}, next: 1} end)
-    {:ok, server} = Bandit.start_link(plug: {__MODULE__.Router, store}, scheme: :http, ip: {127, 0, 0, 1}, port: 0, startup_log: false)
+    {:ok, store} =
+      Agent.start_link(fn ->
+        %{opts: Map.new(opts), sessions: MapSet.new(), log: [], streams: %{}, next: 1}
+      end)
+
+    {:ok, server} =
+      Bandit.start_link(
+        plug: {__MODULE__.Router, store},
+        scheme: :http,
+        ip: {127, 0, 0, 1},
+        port: 0,
+        startup_log: false
+      )
+
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server)
     base = "http://127.0.0.1:#{port}"
     {:ok, %__MODULE__{url: base <> "/mcp", base: base, store: store, server: server}}
@@ -47,7 +59,8 @@ defmodule SuperPi.TestSupport.FakeHTTPMCP do
   def rpc_method(_), do: nil
 
   @doc "Forgets every session, as a server that restarted or timed a session out."
-  def expire_sessions(%__MODULE__{store: store}), do: Agent.update(store, &%{&1 | sessions: MapSet.new()})
+  def expire_sessions(%__MODULE__{store: store}),
+    do: Agent.update(store, &%{&1 | sessions: MapSet.new()})
 
   defmodule Router do
     @moduledoc false
@@ -66,7 +79,23 @@ defmodule SuperPi.TestSupport.FakeHTTPMCP do
       {:ok, raw, conn} = read_body(conn)
       body = with {:ok, decoded} <- Jason.decode(raw), do: decoded, else: (_ -> raw)
       headers = Map.new(conn.req_headers)
-      Agent.update(store, fn s -> %{s | log: [%{method: conn.method, path: conn.request_path, query: conn.query_string, headers: headers, body: body} | s.log]} end)
+
+      Agent.update(store, fn s ->
+        %{
+          s
+          | log: [
+              %{
+                method: conn.method,
+                path: conn.request_path,
+                query: conn.query_string,
+                headers: headers,
+                body: body
+              }
+              | s.log
+            ]
+        }
+      end)
+
       opts = Agent.get(store, & &1.opts)
 
       with {name, value} <- opts[:require], true <- headers[name] != value do
@@ -78,14 +107,17 @@ defmodule SuperPi.TestSupport.FakeHTTPMCP do
 
     # --- Streamable HTTP ---
 
-    defp route(conn, "POST", "/mcp", _body, _store, %{legacy: true}), do: send_resp(conn, 405, "use the SSE endpoint")
+    defp route(conn, "POST", "/mcp", _body, _store, %{legacy: true}),
+      do: send_resp(conn, 405, "use the SSE endpoint")
+
     defp route(conn, "POST", "/mcp", body, store, opts), do: post(conn, body, store, opts)
     defp route(conn, "DELETE", "/mcp", _body, store, _opts), do: end_session(conn, store)
 
     # --- HTTP+SSE ---
 
     # The stream is at the URL the client was given, as on a deployed legacy server.
-    defp route(conn, "GET", path, _body, store, %{legacy: true} = opts) when path in ["/mcp", "/sse"] do
+    defp route(conn, "GET", path, _body, store, %{legacy: true} = opts)
+         when path in ["/mcp", "/sse"] do
       id = "legacy-#{System.unique_integer([:positive])}"
       me = self()
       Agent.update(store, fn s -> %{s | streams: Map.put(s.streams, id, me)} end)
@@ -102,7 +134,10 @@ defmodule SuperPi.TestSupport.FakeHTTPMCP do
       with pid when is_pid(pid) <- Agent.get(store, &Map.get(&1.streams, id)),
            %{"id" => _} = request <- body,
            {:ok, result} <- rpc(request, store) do
-        send(pid, {:push, Jason.encode!(%{"jsonrpc" => "2.0", "id" => request["id"], "result" => result})})
+        send(
+          pid,
+          {:push, Jason.encode!(%{"jsonrpc" => "2.0", "id" => request["id"], "result" => result})}
+        )
       end
 
       send_resp(conn, 202, "")
@@ -136,7 +171,9 @@ defmodule SuperPi.TestSupport.FakeHTTPMCP do
         "serverInfo" => %{"name" => "fake-http", "version" => "1.0.0"}
       }
 
-      conn |> put_resp_header("mcp-session-id", session) |> reply(%{"jsonrpc" => "2.0", "id" => id, "result" => result}, opts)
+      conn
+      |> put_resp_header("mcp-session-id", session)
+      |> reply(%{"jsonrpc" => "2.0", "id" => id, "result" => result}, opts)
     end
 
     defp post(conn, body, store, opts) do
@@ -148,19 +185,42 @@ defmodule SuperPi.TestSupport.FakeHTTPMCP do
 
     defp check_session(conn, store) do
       case get_req_header(conn, "mcp-session-id") do
-        [] -> {:error, 400, "missing session"}
-        [sid | _] -> if Agent.get(store, &MapSet.member?(&1.sessions, sid)), do: :ok, else: {:error, 404, "unknown session"}
+        [] ->
+          {:error, 400, "missing session"}
+
+        [sid | _] ->
+          if Agent.get(store, &MapSet.member?(&1.sessions, sid)),
+            do: :ok,
+            else: {:error, 404, "unknown session"}
       end
     end
 
     # A notification or a response from the client: accepted, no body.
-    defp dispatch(conn, %{"method" => _} = body, _store, _opts) when not is_map_key(body, "id"), do: send_resp(conn, 202, "")
+    defp dispatch(conn, %{"method" => _} = body, _store, _opts) when not is_map_key(body, "id"),
+      do: send_resp(conn, 202, "")
+
     defp dispatch(conn, %{"result" => _}, _store, _opts), do: send_resp(conn, 202, "")
 
-    defp dispatch(conn, %{"method" => "tools/call", "params" => %{"name" => "silent"}}, _store, _opts), do: send_resp(conn, 202, "")
+    defp dispatch(
+           conn,
+           %{"method" => "tools/call", "params" => %{"name" => "silent"}},
+           _store,
+           _opts
+         ),
+         do: send_resp(conn, 202, "")
 
-    defp dispatch(conn, %{"method" => "tools/call", "id" => id, "params" => %{"name" => "stream"}} = body, store, opts) do
-      progress = %{"jsonrpc" => "2.0", "method" => "notifications/progress", "params" => %{"progress" => 1}}
+    defp dispatch(
+           conn,
+           %{"method" => "tools/call", "id" => id, "params" => %{"name" => "stream"}} = body,
+           store,
+           opts
+         ) do
+      progress = %{
+        "jsonrpc" => "2.0",
+        "method" => "notifications/progress",
+        "params" => %{"progress" => 1}
+      }
+
       {:ok, result} = rpc(body, store)
       stream(conn, [progress, %{"jsonrpc" => "2.0", "id" => id, "result" => result}], opts)
     end
@@ -197,8 +257,11 @@ defmodule SuperPi.TestSupport.FakeHTTPMCP do
 
     defp end_session(conn, store) do
       case get_req_header(conn, "mcp-session-id") do
-        [sid | _] -> Agent.update(store, fn s -> %{s | sessions: MapSet.delete(s.sessions, sid)} end)
-        [] -> :ok
+        [sid | _] ->
+          Agent.update(store, fn s -> %{s | sessions: MapSet.delete(s.sessions, sid)} end)
+
+        [] ->
+          :ok
       end
 
       send_resp(conn, 200, "")
@@ -208,7 +271,12 @@ defmodule SuperPi.TestSupport.FakeHTTPMCP do
 
     # Only the legacy transport gets here: a streamable `initialize` is answered in `post/4`.
     defp rpc(%{"method" => "initialize", "params" => params}, _store) do
-      {:ok, %{"protocolVersion" => params["protocolVersion"], "capabilities" => %{"tools" => %{}}, "serverInfo" => %{"name" => "fake-legacy", "version" => "1.0.0"}}}
+      {:ok,
+       %{
+         "protocolVersion" => params["protocolVersion"],
+         "capabilities" => %{"tools" => %{}},
+         "serverInfo" => %{"name" => "fake-legacy", "version" => "1.0.0"}
+       }}
     end
 
     defp rpc(%{"method" => "tools/list"}, _store) do
@@ -218,25 +286,51 @@ defmodule SuperPi.TestSupport.FakeHTTPMCP do
            %{
              "name" => "echo",
              "description" => "Echo the text",
-             "inputSchema" => %{"type" => "object", "properties" => %{"text" => %{"type" => "string"}}},
+             "inputSchema" => %{
+               "type" => "object",
+               "properties" => %{"text" => %{"type" => "string"}}
+             },
              "annotations" => %{"readOnlyHint" => true}
            },
-           %{"name" => "mutate", "description" => "Changes things", "inputSchema" => %{"type" => "object", "properties" => %{}}},
-           %{"name" => "stream", "description" => "Streams", "inputSchema" => %{"type" => "object", "properties" => %{}}, "annotations" => %{"readOnlyHint" => false}},
-           %{"name" => "silent", "description" => "Never answers", "inputSchema" => %{"type" => "object", "properties" => %{}}}
+           %{
+             "name" => "mutate",
+             "description" => "Changes things",
+             "inputSchema" => %{"type" => "object", "properties" => %{}}
+           },
+           %{
+             "name" => "stream",
+             "description" => "Streams",
+             "inputSchema" => %{"type" => "object", "properties" => %{}},
+             "annotations" => %{"readOnlyHint" => false}
+           },
+           %{
+             "name" => "silent",
+             "description" => "Never answers",
+             "inputSchema" => %{"type" => "object", "properties" => %{}}
+           }
          ]
        }}
     end
 
-    defp rpc(%{"method" => "tools/call", "params" => %{"name" => "echo", "arguments" => args}}, _store) do
+    defp rpc(
+           %{"method" => "tools/call", "params" => %{"name" => "echo", "arguments" => args}},
+           _store
+         ) do
       {:ok, %{"content" => [%{"type" => "text", "text" => "echo: " <> to_string(args["text"])}]}}
     end
 
-    defp rpc(%{"method" => "tools/call", "params" => %{"name" => name}}, _store) when name in ["mutate", "stream"] do
-      {:ok, %{"content" => [%{"type" => "text", "text" => "#{name} done"}], "structuredContent" => %{"ok" => true}}}
+    defp rpc(%{"method" => "tools/call", "params" => %{"name" => name}}, _store)
+         when name in ["mutate", "stream"] do
+      {:ok,
+       %{
+         "content" => [%{"type" => "text", "text" => "#{name} done"}],
+         "structuredContent" => %{"ok" => true}
+       }}
     end
 
     defp rpc(%{"method" => "ping"}, _store), do: {:ok, %{}}
-    defp rpc(%{"method" => method}, _store), do: {:error, %{"code" => -32601, "message" => "unknown method " <> method}}
+
+    defp rpc(%{"method" => method}, _store),
+      do: {:error, %{"code" => -32601, "message" => "unknown method " <> method}}
   end
 end

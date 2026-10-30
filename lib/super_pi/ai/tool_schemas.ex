@@ -6,7 +6,14 @@ defmodule SuperPi.AI.ToolSchemas do
   The Gemini client converts these to the upper-case dialect that Gemini wants.
   """
 
-  @schema_keys ["parameters", :parameters, "input_schema", :input_schema, "inputSchema", :inputSchema]
+  @schema_keys [
+    "parameters",
+    :parameters,
+    "input_schema",
+    :input_schema,
+    "inputSchema",
+    :inputSchema
+  ]
 
   @doc """
   The parameter schema of a tool spec, under any of the keys in use (`parameters`, MCP
@@ -35,7 +42,12 @@ defmodule SuperPi.AI.ToolSchemas do
     )
   end
 
-  def for_tool("write"), do: obj(%{"path" => str("File path to write"), "content" => str("Content to write")}, ["path", "content"])
+  def for_tool("write"),
+    do:
+      obj(%{"path" => str("File path to write"), "content" => str("Content to write")}, [
+        "path",
+        "content"
+      ])
 
   def for_tool("edit") do
     obj(
@@ -48,11 +60,33 @@ defmodule SuperPi.AI.ToolSchemas do
     )
   end
 
-  def for_tool("bash"), do: obj(%{"command" => str("Shell command to run"), "cd" => str("Directory to run it in")}, ["command"])
-  def for_tool("grep"), do: obj(%{"pattern" => str("Regular expression"), "path" => str("Directory to search")}, ["pattern"])
-  def for_tool("find"), do: obj(%{"path" => str("Directory to search"), "pattern" => str("File name pattern, for example *.ex")}, [])
+  def for_tool("bash"),
+    do:
+      obj(%{"command" => str("Shell command to run"), "cd" => str("Directory to run it in")}, [
+        "command"
+      ])
+
+  def for_tool("grep"),
+    do:
+      obj(%{"pattern" => str("Regular expression"), "path" => str("Directory to search")}, [
+        "pattern"
+      ])
+
+  def for_tool("find"),
+    do:
+      obj(
+        %{
+          "path" => str("Directory to search"),
+          "pattern" => str("File name pattern, for example *.ex")
+        },
+        []
+      )
+
   def for_tool("ls"), do: obj(%{"path" => str("Directory to list")}, [])
-  def for_tool("tool_search"), do: obj(%{"query" => str("Keyword to search the deferred tools")}, ["query"])
+
+  def for_tool("tool_search"),
+    do: obj(%{"query" => str("Keyword to search the deferred tools")}, ["query"])
+
   def for_tool(_other), do: obj(%{}, [])
 
   defp obj(properties, required) do

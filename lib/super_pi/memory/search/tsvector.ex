@@ -29,7 +29,13 @@ defmodule SuperPi.Memory.Search.Tsvector do
     LIMIT $5
     """
 
-    case SuperPi.Repo.active_repo().query(sql, [query, kind, id, Search.topic_pattern(topic), limit]) do
+    case SuperPi.Repo.active_repo().query(sql, [
+           query,
+           kind,
+           id,
+           Search.topic_pattern(topic),
+           limit
+         ]) do
       {:ok, %{rows: rows}} -> {:ok, Enum.map(rows, fn [id, rank] -> {id, rank} end)}
       {:error, reason} -> {:error, reason}
     end

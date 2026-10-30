@@ -89,9 +89,20 @@ defmodule SuperPi.ClusterSupport do
       |> Keyword.put(:storage_backend, :postgres)
       |> Keyword.put(:ecto_repos, [SuperPi.Repo.Postgres])
       |> Keyword.update(SuperPi.Repo.Postgres, [], &Keyword.delete(&1, :pool))
-      |> Keyword.update(Oban, [], &Keyword.merge(&1, engine: Oban.Engines.Basic, repo: SuperPi.Repo.Postgres, testing: :manual))
+      |> Keyword.update(
+        Oban,
+        [],
+        &Keyword.merge(&1,
+          engine: Oban.Engines.Basic,
+          repo: SuperPi.Repo.Postgres,
+          testing: :manual
+        )
+      )
 
-    [super_pi: Keyword.merge(super_pi, extra), opentelemetry: Application.get_all_env(:opentelemetry)]
+    [
+      super_pi: Keyword.merge(super_pi, extra),
+      opentelemetry: Application.get_all_env(:opentelemetry)
+    ]
   end
 
   # --- Helpers that run on a peer ---
@@ -99,7 +110,13 @@ defmodule SuperPi.ClusterSupport do
   @doc "Spawns a process that asks a question and sends `{:answer, result}` to `reply_to`."
   def start_asker(conversation_id, reply_to) do
     spawn(fn ->
-      result = SuperPi.UI.Broker.ask(conversation_id, %{"kind" => "questionnaire", "questions" => [%{"question" => "q"}]}, 15_000)
+      result =
+        SuperPi.UI.Broker.ask(
+          conversation_id,
+          %{"kind" => "questionnaire", "questions" => [%{"question" => "q"}]},
+          15_000
+        )
+
       send(reply_to, {:answer, result})
     end)
   end
@@ -141,7 +158,10 @@ defmodule SuperPi.ClusterSupport do
   @doc "Adds one to the conversation's input-token count inside one commit (a read-modify-write)."
   def add_usage(conversation_id) do
     SuperPi.Durable.Storage.commit(fn seq ->
-      current = SuperPi.Durable.Doc.snapshot_for_update("conversation", conversation_id, "pi.usage") || %{}
+      current =
+        SuperPi.Durable.Doc.snapshot_for_update("conversation", conversation_id, "pi.usage") ||
+          %{}
+
       next = %{"inputTokens" => Map.get(current, "inputTokens", 0) + 1}
       SuperPi.Durable.Doc.put_doc("conversation", conversation_id, "pi.usage", next, seq)
     end)
@@ -152,11 +172,12 @@ defmodule SuperPi.ClusterSupport do
     import Ecto.Query
 
     SuperPi.Repo.one(
-      from t in SuperPi.Durable.Schemas.Task,
+      from(t in SuperPi.Durable.Schemas.Task,
         where: t.conversation_id == ^conversation_id and t.kind == "pi.generation",
         order_by: [desc: t.id],
         limit: 1,
         select: t.status
+      )
     )
   end
 
@@ -165,9 +186,10 @@ defmodule SuperPi.ClusterSupport do
     import Ecto.Query
 
     SuperPi.Repo.one(
-      from t in SuperPi.Durable.Schemas.Task,
+      from(t in SuperPi.Durable.Schemas.Task,
         where: t.conversation_id == ^conversation_id and t.kind == "pi.generation",
         select: count(t.id)
+      )
     )
   end
 
@@ -176,13 +198,25 @@ defmodule SuperPi.ClusterSupport do
     import Ecto.Query
     {:ok, task} = SuperPi.Durable.TaskEngine.create_task(conversation_id, "pi.generation", %{})
     {:ok, running} = SuperPi.Durable.TaskEngine.start_task(task.id)
-    SuperPi.Repo.update_all(from(t in SuperPi.Durable.Schemas.Task, where: t.id == ^running.id), set: [owner_node: Atom.to_string(owner)])
+
+    SuperPi.Repo.update_all(from(t in SuperPi.Durable.Schemas.Task, where: t.id == ^running.id),
+      set: [owner_node: Atom.to_string(owner)]
+    )
+
     running
   end
 
   @doc "Creates a parent conversation with a running turn task. Returns `{conversation_id, task_id}`."
   def create_parent_turn do
-    conv = SuperPi.Durable.Storage.create_conversation!(agent: %{"model" => "m", "executionMode" => "accept-edits", "workspacePaths" => [File.cwd!()]})
+    conv =
+      SuperPi.Durable.Storage.create_conversation!(
+        agent: %{
+          "model" => "m",
+          "executionMode" => "accept-edits",
+          "workspacePaths" => [File.cwd!()]
+        }
+      )
+
     {:ok, task} = SuperPi.Durable.TaskEngine.create_task(conv.id, "pi.generation")
     {:ok, running} = SuperPi.Durable.TaskEngine.start_task(task.id)
     {conv.id, running.id}
@@ -190,7 +224,10 @@ defmodule SuperPi.ClusterSupport do
 
   @doc "Calls `delegate_subagent` as a parent's turn does."
   def delegate(conversation_id, task_id, args) do
-    SuperPi.Plugins.Subagent.wrap_tool("delegate_subagent", args, fn _ -> %{} end, %{conversation_id: conversation_id, active_task_id: task_id})
+    SuperPi.Plugins.Subagent.wrap_tool("delegate_subagent", args, fn _ -> %{} end, %{
+      conversation_id: conversation_id,
+      active_task_id: task_id
+    })
   end
 
   @doc "Runs the queued subagent jobs in this process (Oban is in manual mode on the peers)."
@@ -209,7 +246,8 @@ defmodule SuperPi.ClusterSupport do
   end
 
   @doc false
-  def terminate_local(pid), do: Horde.DynamicSupervisor.terminate_child(SuperPi.MachineSupervisor, pid)
+  def terminate_local(pid),
+    do: Horde.DynamicSupervisor.terminate_child(SuperPi.MachineSupervisor, pid)
 
   @doc "The task as stored."
   def get_task(task_id), do: SuperPi.Repo.get(SuperPi.Durable.Schemas.Task, task_id)
@@ -218,16 +256,34 @@ defmodule SuperPi.ClusterSupport do
   def messages(conversation_id), do: SuperPi.Durable.Context.derive(conversation_id).messages
 
   @doc "Reads a conversation document."
-  def doc(conversation_id, kind), do: SuperPi.Durable.Doc.snapshot("conversation", conversation_id, kind)
+  def doc(conversation_id, kind),
+    do: SuperPi.Durable.Doc.snapshot("conversation", conversation_id, kind)
 
   @doc "Deletes test data of the conversations."
   def cleanup(conversation_ids) do
     import Ecto.Query
     # A subagent's conversation points at its parent's task.
-    SuperPi.Repo.update_all(from(c in SuperPi.Durable.Schemas.Conversation, where: c.id in ^conversation_ids), set: [owner_task_id: nil])
-    SuperPi.Repo.delete_all(from j in Oban.Job, where: j.worker == "SuperPi.Workers.SubagentWorker" and fragment("(?->>'child_conversation_id')::bigint", j.args) in ^conversation_ids)
-    SuperPi.Repo.delete_all(from t in SuperPi.Durable.Schemas.Task, where: t.conversation_id in ^conversation_ids)
-    SuperPi.Repo.delete_all(from c in SuperPi.Durable.Schemas.Conversation, where: c.id in ^conversation_ids)
+    SuperPi.Repo.update_all(
+      from(c in SuperPi.Durable.Schemas.Conversation, where: c.id in ^conversation_ids),
+      set: [owner_task_id: nil]
+    )
+
+    SuperPi.Repo.delete_all(
+      from(j in Oban.Job,
+        where:
+          j.worker == "SuperPi.Workers.SubagentWorker" and
+            fragment("(?->>'child_conversation_id')::bigint", j.args) in ^conversation_ids
+      )
+    )
+
+    SuperPi.Repo.delete_all(
+      from(t in SuperPi.Durable.Schemas.Task, where: t.conversation_id in ^conversation_ids)
+    )
+
+    SuperPi.Repo.delete_all(
+      from(c in SuperPi.Durable.Schemas.Conversation, where: c.id in ^conversation_ids)
+    )
+
     :ok
   end
 end

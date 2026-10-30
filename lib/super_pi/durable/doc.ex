@@ -58,7 +58,13 @@ defmodule SuperPi.Durable.Doc do
   def ensure_ets! do
     case :ets.whereis(@ets_table) do
       :undefined ->
-        :ets.new(@ets_table, [:named_table, :public, :set, read_concurrency: true, write_concurrency: true])
+        :ets.new(@ets_table, [
+          :named_table,
+          :public,
+          :set,
+          read_concurrency: true,
+          write_concurrency: true
+        ])
 
       _tid ->
         @ets_table
@@ -76,7 +82,13 @@ defmodule SuperPi.Durable.Doc do
     spec = Map.get(@builtin_specs, kind, %{})
     history_policy = Keyword.get(opts, :history_policy, Map.get(spec, :history_policy, "latest"))
     fork_policy = Keyword.get(opts, :fork_policy, Map.get(spec, :fork_policy, "current"))
-    checkpoint_every = Keyword.get(opts, :checkpoint_every, Map.get(spec, :checkpoint_every, @max_deltas_before_checkpoint))
+
+    checkpoint_every =
+      Keyword.get(
+        opts,
+        :checkpoint_every,
+        Map.get(spec, :checkpoint_every, @max_deltas_before_checkpoint)
+      )
 
     doc =
       case find_active_doc(scope_kind, scope_id, kind, key) do
@@ -99,7 +111,10 @@ defmodule SuperPi.Durable.Doc do
 
     {prev_value, deltas_since_base} = reconstruct_doc_value(doc.id, nil)
     is_first = prev_value == nil
-    is_base = is_first or doc.history_policy == "latest" or deltas_since_base + 1 >= checkpoint_every
+
+    is_base =
+      is_first or doc.history_policy == "latest" or deltas_since_base + 1 >= checkpoint_every
+
     ops = if is_base, do: [], else: compute_ops(prev_value, new_value)
 
     %DocumentRevision{}
@@ -116,10 +131,11 @@ defmodule SuperPi.Durable.Doc do
     if doc.history_policy == "latest" do
       rev_ids =
         Repo.all(
-          from r in DocumentRevision,
+          from(r in DocumentRevision,
             where: r.document_id == ^doc.id,
             order_by: [desc: r.seq],
             select: r.id
+          )
         )
 
       case Enum.drop(rev_ids, 2) do
@@ -127,11 +143,12 @@ defmodule SuperPi.Durable.Doc do
           :ok
 
         old_ids ->
-          Repo.delete_all(from r in DocumentRevision, where: r.id in ^old_ids)
+          Repo.delete_all(from(r in DocumentRevision, where: r.id in ^old_ids))
       end
     end
 
     cache_key = {scope_kind, scope_id, kind, key}
+
     if keys = Process.get(:super_pi_tx_doc_keys) do
       Process.put(:super_pi_tx_doc_keys, [cache_key | keys])
     end
@@ -206,12 +223,14 @@ defmodule SuperPi.Durable.Doc do
   """
   def snapshot_for_update(scope_kind, scope_id, kind, key \\ "") do
     query =
-      from d in Document,
+      from(d in Document,
         where:
-          d.scope_kind == ^scope_kind and d.scope_id == ^scope_id and d.kind == ^kind and d.key == ^key and
+          d.scope_kind == ^scope_kind and d.scope_id == ^scope_id and d.kind == ^kind and
+            d.key == ^key and
             is_nil(d.retired_seq),
         order_by: [desc: d.id],
         limit: 1
+      )
 
     query = if SuperPi.Durable.Storage.row_locks?(), do: lock(query, "FOR UPDATE"), else: query
 
@@ -256,7 +275,7 @@ defmodule SuperPi.Durable.Doc do
     {owner_conv_id, effective_seq} = resolve_ancestor_conversation_at_seq(conversation_id, at_seq)
 
     query =
-      from d in Document,
+      from(d in Document,
         where:
           d.scope_kind == "conversation" and
             d.scope_id == ^owner_conv_id and
@@ -266,6 +285,7 @@ defmodule SuperPi.Durable.Doc do
             (is_nil(d.retired_seq) or d.retired_seq > ^effective_seq),
         order_by: [desc: d.created_seq],
         limit: 1
+      )
 
     case Repo.one(query) do
       nil ->
@@ -305,7 +325,7 @@ defmodule SuperPi.Durable.Doc do
 
   defp find_active_doc(scope_kind, scope_id, kind, key) do
     Repo.one(
-      from d in Document,
+      from(d in Document,
         where:
           d.scope_kind == ^scope_kind and
             d.scope_id == ^scope_id and
@@ -314,18 +334,20 @@ defmodule SuperPi.Durable.Doc do
             is_nil(d.retired_seq),
         order_by: [desc: d.id],
         limit: 1
+      )
     )
   end
 
   defp reconstruct_doc_value(document_id, max_seq) do
     revs_query =
-      from r in DocumentRevision,
+      from(r in DocumentRevision,
         where: r.document_id == ^document_id,
         order_by: [asc: r.seq, asc: r.id]
+      )
 
     revs_query =
       if is_integer(max_seq) do
-        from r in revs_query, where: r.seq <= ^max_seq
+        from(r in revs_query, where: r.seq <= ^max_seq)
       else
         revs_query
       end

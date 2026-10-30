@@ -60,7 +60,9 @@ defmodule SuperPi.RPCAndTUITest do
 
       # Allow the spawned socket process to use the Ecto SQL Sandbox in test mode
       send_rpc = fn id, method, params ->
-        req = Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params})
+        req =
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params})
+
         :ok = :gen_tcp.send(sock, req <> "\n")
         {:ok, line} = :gen_tcp.recv(sock, 0, 5_000)
         Jason.decode!(String.trim(line))
@@ -111,8 +113,15 @@ defmodule SuperPi.RPCAndTUITest do
       assert submit_reply["result"]["status"] == "ok"
 
       # The machine publishes the turn events, so a watcher gets them from the conversation topic.
-      assert_receive {:conversation_event, ^conv_id, %{"type" => "turn_started", "v" => 1, "turn_id" => turn_id}}
-      assert_receive {:conversation_event, ^conv_id, %{"type" => "turn_completed", "stop_reason" => "end_turn", "turn_id" => ^turn_id}}
+      assert_receive {:conversation_event, ^conv_id,
+                      %{"type" => "turn_started", "v" => 1, "turn_id" => turn_id}}
+
+      assert_receive {:conversation_event, ^conv_id,
+                      %{
+                        "type" => "turn_completed",
+                        "stop_reason" => "end_turn",
+                        "turn_id" => ^turn_id
+                      }}
 
       {ctx_reply, _st, []} =
         Server.handle_rpc_payload(

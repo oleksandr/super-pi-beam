@@ -22,7 +22,8 @@ defmodule SuperPi.Harness.Code do
   use SuperPi.Harness.DSL,
     id: "super-pi-code",
     name: "Super-Pi Code",
-    description: "Repository coding agent: reversible edits, rules, skills, hooks, model cascading",
+    description:
+      "Repository coding agent: reversible edits, rules, skills, hooks, model cascading",
     effort: "high",
     mode: "accept-edits",
     max_mode: "auto",

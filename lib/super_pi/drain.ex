@@ -36,7 +36,11 @@ defmodule SuperPi.Drain do
   def drain(timeout \\ nil) do
     timeout = timeout || Application.get_env(:super_pi, :drain_timeout_ms, 30_000)
     stop_accepting()
-    Logger.info("[Drain] node #{node()} stopped accepting work; waiting for running turns (up to #{timeout} ms)")
+
+    Logger.info(
+      "[Drain] node #{node()} stopped accepting work; waiting for running turns (up to #{timeout} ms)"
+    )
+
     wait(System.monotonic_time(:millisecond) + timeout)
   end
 
@@ -48,7 +52,10 @@ defmodule SuperPi.Drain do
 
       busy ->
         if System.monotonic_time(:millisecond) >= deadline do
-          Logger.warning("[Drain] timeout with running turns on conversations #{inspect(busy)}; they resume elsewhere")
+          Logger.warning(
+            "[Drain] timeout with running turns on conversations #{inspect(busy)}; they resume elsewhere"
+          )
+
           {:timeout, busy}
         else
           Process.sleep(100)

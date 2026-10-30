@@ -15,7 +15,6 @@ defmodule SuperPi.Harness.WorkspaceCliDefectsTest do
   alias SuperPi.CLI
   alias SuperPi.TestSupport.Faults
 
-
   setup do
     Process.flag(:trap_exit, true)
     g = tmp_dir!("global")
@@ -64,13 +63,19 @@ defmodule SuperPi.Harness.WorkspaceCliDefectsTest do
       refute code == 0 and out =~ "Removed", "got: #{inspect({code, out})}"
     end
 
-    test "`plugin enable` of a non-existent plugin fails and writes no config", %{opts: opts, g: g} do
+    test "`plugin enable` of a non-existent plugin fails and writes no config", %{
+      opts: opts,
+      g: g
+    } do
       {code, _out} = CLI.run(["plugin", "enable", "ghost"], opts)
       assert code != 0
       refute File.exists?(Path.join(g, "config.json"))
     end
 
-    test "`plugin disable` of a non-existent plugin fails and writes no config", %{opts: opts, g: g} do
+    test "`plugin disable` of a non-existent plugin fails and writes no config", %{
+      opts: opts,
+      g: g
+    } do
       {code, _out} = CLI.run(["plugin", "disable", "ghost"], opts)
       assert code != 0
       refute File.exists?(Path.join(g, "config.json"))
@@ -100,7 +105,11 @@ defmodule SuperPi.Harness.WorkspaceCliDefectsTest do
 
     test "`--agent research` restricts the session tools to read-only tools", %{opts: opts} do
       conv = Storage.create_conversation!()
-      CLI.run(["--conversation", "#{conv.id}", "--agent", "research", "-p", "hi"], session_opts(opts))
+
+      CLI.run(
+        ["--conversation", "#{conv.id}", "--agent", "research", "-p", "hi"],
+        session_opts(opts)
+      )
 
       tools = Doc.snapshot("conversation", conv.id, "pi.agent")["tools"] || []
       names = Enum.map(tools, & &1["name"])
@@ -111,16 +120,25 @@ defmodule SuperPi.Harness.WorkspaceCliDefectsTest do
 
     test "`--agent research` selects the planner harness, in plan mode", %{opts: opts} do
       conv = Storage.create_conversation!()
-      CLI.run(["--conversation", "#{conv.id}", "--agent", "research", "-p", "hi"], session_opts(opts))
+
+      CLI.run(
+        ["--conversation", "#{conv.id}", "--agent", "research", "-p", "hi"],
+        session_opts(opts)
+      )
 
       agent = Doc.snapshot("conversation", conv.id, "pi.agent")
       assert agent["executionMode"] == "plan"
       assert agent["maxExecutionMode"] == "plan"
     end
 
-    test "`--harness planner` does not declare mutating tools, and `--mode auto` cannot lift it", %{opts: opts} do
+    test "`--harness planner` does not declare mutating tools, and `--mode auto` cannot lift it",
+         %{opts: opts} do
       conv = Storage.create_conversation!()
-      CLI.run(["--conversation", "#{conv.id}", "--harness", "planner", "--mode", "auto", "-p", "hi"], session_opts(opts))
+
+      CLI.run(
+        ["--conversation", "#{conv.id}", "--harness", "planner", "--mode", "auto", "-p", "hi"],
+        session_opts(opts)
+      )
 
       agent = Doc.snapshot("conversation", conv.id, "pi.agent")
       names = Enum.map(agent["tools"], & &1["name"])
@@ -142,7 +160,11 @@ defmodule SuperPi.Harness.WorkspaceCliDefectsTest do
       %{repo: repo, conv: conv, flags: flags}
     end
 
-    test "does not execute bin/agy-tui from the current directory", %{repo: repo, conv: conv, flags: flags} do
+    test "does not execute bin/agy-tui from the current directory", %{
+      repo: repo,
+      conv: conv,
+      flags: flags
+    } do
       marker = Path.join(repo, "pwned")
       bin = Path.join(repo, "bin/agy-tui")
       File.write!(bin, "#!/bin/sh\ntouch #{marker}\n")
@@ -162,9 +184,14 @@ defmodule SuperPi.Harness.WorkspaceCliDefectsTest do
       conv = Storage.create_conversation!()
 
       {:ok, owner} =
-        Machine.start_link(conversation_id: conv.id, extensions: [], llm_responder: text_responder("owner"))
+        Machine.start_link(
+          conversation_id: conv.id,
+          extensions: [],
+          llm_responder: text_responder("owner")
+        )
 
-      _ = safe(fn -> CLI.run(["--conversation", "#{conv.id}", "-p", "hi"], session_opts(opts)) end)
+      _ =
+        safe(fn -> CLI.run(["--conversation", "#{conv.id}", "-p", "hi"], session_opts(opts)) end)
 
       assert Process.alive?(owner), "CLI stopped a machine owned by another caller"
     end
@@ -177,8 +204,14 @@ defmodule SuperPi.Harness.WorkspaceCliDefectsTest do
 
       result = safe(fn -> CLI.run(["--conversation", "#{conv.id}", "-p", "hi"], opts) end)
 
-      assert match?({:raised, _}, result) or match?({:caught, _, _}, result) or match?({:ok, {1, _}}, result)
-      assert Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv.id}) == [], "machine leaked"
+      assert match?({:raised, _}, result) or match?({:caught, _, _}, result) or
+               match?({:ok, {1, _}}, result)
+
+      assert Horde.Registry.lookup(
+               SuperPi.Conversation.Locator.registry(),
+               {:conversation_machine, conv.id}
+             ) == [],
+             "machine leaked"
     end
   end
 
@@ -188,7 +221,10 @@ defmodule SuperPi.Harness.WorkspaceCliDefectsTest do
     defp stream(opts, lines, responder) do
       conv = Storage.create_conversation!()
       all = session_opts(opts, llm_responder: responder, stdin_lines: lines)
-      safe(fn -> CLI.run(["--conversation", "#{conv.id}", "--input-format", "stream-json"], all) end)
+
+      safe(fn ->
+        CLI.run(["--conversation", "#{conv.id}", "--input-format", "stream-json"], all)
+      end)
     end
 
     test "a failed turn does not crash the whole run", %{opts: opts} do

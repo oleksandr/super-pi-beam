@@ -65,7 +65,10 @@ defmodule SuperPi.Plugins.Web do
 
   def id, do: "web"
   def name, do: "Web Fetch and Search"
-  def description, do: "web_fetch with a request-forgery policy and a decoded-byte cap, and web_search when a provider is configured"
+
+  def description,
+    do:
+      "web_fetch with a request-forgery policy and a decoded-byte cap, and web_search when a provider is configured"
 
   @default_max_chars 20_000
   @hard_max_chars 100_000
@@ -85,12 +88,24 @@ defmodule SuperPi.Plugins.Web do
       "type" => "object",
       "properties" => %{
         "url" => %{"type" => "string", "description" => "Absolute http or https URL."},
-        "format" => %{"type" => "string", "enum" => @formats, "description" => "markdown (default), text, or raw (the body as text)."},
-        "max_chars" => %{"type" => "integer", "description" => "Characters to return, 1 to #{@hard_max_chars}. Default #{@default_max_chars}."},
-        "offset" => %{"type" => "integer", "description" => "Character offset to start from, to read the next part of a long page."},
+        "format" => %{
+          "type" => "string",
+          "enum" => @formats,
+          "description" => "markdown (default), text, or raw (the body as text)."
+        },
+        "max_chars" => %{
+          "type" => "integer",
+          "description" =>
+            "Characters to return, 1 to #{@hard_max_chars}. Default #{@default_max_chars}."
+        },
+        "offset" => %{
+          "type" => "integer",
+          "description" => "Character offset to start from, to read the next part of a long page."
+        },
         "artifact" => %{
           "type" => "string",
-          "description" => "Save the full text under this artifact name instead of returning it. Use it for PDFs and for pages too long to read inline."
+          "description" =>
+            "Save the full text under this artifact name instead of returning it. Use it for PDFs and for pages too long to read inline."
         }
       },
       "required" => ["url"],
@@ -101,12 +116,16 @@ defmodule SuperPi.Plugins.Web do
   @search_spec %{
     "name" => "web_search",
     "effects" => ["net_read"],
-    "description" => "Search the web. Returns title, URL and a snippet per result. Read a result with web_fetch.",
+    "description" =>
+      "Search the web. Returns title, URL and a snippet per result. Read a result with web_fetch.",
     "parameters" => %{
       "type" => "object",
       "properties" => %{
         "query" => %{"type" => "string", "description" => "Search query."},
-        "max_results" => %{"type" => "integer", "description" => "Results to return, 1 to #{@max_results}. Default 5."}
+        "max_results" => %{
+          "type" => "integer",
+          "description" => "Results to return, 1 to #{@max_results}. Default 5."
+        }
       },
       "required" => ["query"],
       "additionalProperties" => false
@@ -120,7 +139,10 @@ defmodule SuperPi.Plugins.Web do
     if search_enabled?(config), do: [@fetch_spec, @search_spec], else: [@fetch_spec]
   end
 
-  defp search_enabled?(config), do: :search in Keyword.get(config, :tools, [:fetch, :search]) and Search.configured(config) != nil
+  defp search_enabled?(config),
+    do:
+      :search in Keyword.get(config, :tools, [:fetch, :search]) and
+        Search.configured(config) != nil
 
   @impl true
   def before_agent_start(agent_cfg, ctx) do
@@ -129,7 +151,11 @@ defmodule SuperPi.Plugins.Web do
 
     # A search tool left from an earlier request goes when the provider is gone. A spec that is
     # already there is replaced in place, so the tool order (and the provider prompt cache) is stable.
-    existing = if Enum.any?(specs, &(&1["name"] == "web_search")), do: existing, else: Enum.reject(existing, &(&1["name"] == "web_search"))
+    existing =
+      if Enum.any?(specs, &(&1["name"] == "web_search")),
+        do: existing,
+        else: Enum.reject(existing, &(&1["name"] == "web_search"))
+
     {:ok, Map.put(agent_cfg, "tools", Enum.reduce(specs, existing, &upsert(&2, &1)))}
   end
 
@@ -181,17 +207,38 @@ defmodule SuperPi.Plugins.Web do
     artifact = args["artifact"]
 
     cond do
-      Map.has_key?(args, "headers") -> {:error, "web_fetch takes no `headers` argument. Remove it and call again.", "invalid_arguments"}
-      not is_binary(url) or String.trim(url) == "" -> {:error, "`url` is required and must be a string.", "invalid_arguments"}
-      format not in @formats -> {:error, "`format` must be one of: #{Enum.join(@formats, ", ")}.", "invalid_arguments"}
-      artifact not in [nil, ""] and not Artifacts.valid_name?(artifact) -> {:error, "`artifact` is not a valid name. Use letters, digits, `.`, `_`, `-` and `/`.", "invalid_arguments"}
-      true -> {:ok, %{url: String.trim(url), format: format, max_chars: clamp(args["max_chars"], 1, @hard_max_chars, @default_max_chars), offset: non_neg(args["offset"]), artifact: if(artifact in [nil, ""], do: nil, else: artifact)}}
+      Map.has_key?(args, "headers") ->
+        {:error, "web_fetch takes no `headers` argument. Remove it and call again.",
+         "invalid_arguments"}
+
+      not is_binary(url) or String.trim(url) == "" ->
+        {:error, "`url` is required and must be a string.", "invalid_arguments"}
+
+      format not in @formats ->
+        {:error, "`format` must be one of: #{Enum.join(@formats, ", ")}.", "invalid_arguments"}
+
+      artifact not in [nil, ""] and not Artifacts.valid_name?(artifact) ->
+        {:error, "`artifact` is not a valid name. Use letters, digits, `.`, `_`, `-` and `/`.",
+         "invalid_arguments"}
+
+      true ->
+        {:ok,
+         %{
+           url: String.trim(url),
+           format: format,
+           max_chars: clamp(args["max_chars"], 1, @hard_max_chars, @default_max_chars),
+           offset: non_neg(args["offset"]),
+           artifact: if(artifact in [nil, ""], do: nil, else: artifact)
+         }}
     end
   end
 
-  defp parse_fetch_args(_), do: {:error, "Arguments must be an object with a `url`.", "invalid_arguments"}
+  defp parse_fetch_args(_),
+    do: {:error, "Arguments must be an object with a `url`.", "invalid_arguments"}
 
-  defp clamp(value, low, high, _default) when is_integer(value), do: value |> max(low) |> min(high)
+  defp clamp(value, low, high, _default) when is_integer(value),
+    do: value |> max(low) |> min(high)
+
   defp clamp(_value, _low, _high, default), do: default
 
   defp non_neg(value) when is_integer(value) and value > 0, do: value
@@ -226,10 +273,14 @@ defmodule SuperPi.Plugins.Web do
   end
 
   defp check_status(%{status: status} = resp) when status >= 400,
-    do: {:error, "HTTP #{status} from #{resp.final_url}.", "http_#{div(status, 100)}xx", %{"status" => status, "final_url" => resp.final_url}}
+    do:
+      {:error, "HTTP #{status} from #{resp.final_url}.", "http_#{div(status, 100)}xx",
+       %{"status" => status, "final_url" => resp.final_url}}
 
   defp check_status(%{status: status} = resp) when status >= 300,
-    do: {:error, "HTTP #{status} from #{resp.final_url} without a usable redirect.", "http_3xx", %{"status" => status, "final_url" => resp.final_url}}
+    do:
+      {:error, "HTTP #{status} from #{resp.final_url} without a usable redirect.", "http_3xx",
+       %{"status" => status, "final_url" => resp.final_url}}
 
   defp check_status(_), do: :ok
 
@@ -241,16 +292,34 @@ defmodule SuperPi.Plugins.Web do
   end
 
   defp present_binary(%{artifact: nil}, resp, _conv, kind) do
-    {:error, if(kind == :pdf, do: refused_type("application/pdf"), else: refused_type(resp.content_type || "unknown")), "content_type"}
+    {:error,
+     if(kind == :pdf,
+       do: refused_type("application/pdf"),
+       else: refused_type(resp.content_type || "unknown")
+     ), "content_type"}
   end
 
   defp present_binary(p, resp, conversation_id, _kind) do
-    with {:ok, size} <- save(conversation_id, p.artifact, resp.body, resp.content_type || "application/octet-stream") do
+    with {:ok, size} <-
+           save(
+             conversation_id,
+             p.artifact,
+             resp.body,
+             resp.content_type || "application/octet-stream"
+           ) do
       {:ok,
        success(
          "URL: #{resp.final_url}\nSaved #{size} bytes to artifact `#{p.artifact}`. Read it with artifact_get.",
          resp,
-         %{title: nil, chars: 0, truncated: false, links: [], offset: 0, next_offset: nil, artifact: p.artifact}
+         %{
+           title: nil,
+           chars: 0,
+           truncated: false,
+           links: [],
+           offset: 0,
+           next_offset: nil,
+           artifact: p.artifact
+         }
        )}
     end
   end
@@ -259,9 +328,17 @@ defmodule SuperPi.Plugins.Web do
     parse_opts = [format: p.format, base_url: resp.final_url]
     timeout = Keyword.get(config, :parse_timeout_ms, @parse_timeout_ms)
 
-    case SandboxRunner.run_isolated(fn -> Extract.extract(resp.body, resp.content_type, parse_opts) end, timeout_ms: timeout) do
-      {:ok, doc} -> present_doc(p, resp, doc, conversation_id, config)
-      {:error, _} -> {:error, "The page could not be converted within the time and memory limits. Try `format: \"raw\"`.", "extraction"}
+    case SandboxRunner.run_isolated(
+           fn -> Extract.extract(resp.body, resp.content_type, parse_opts) end,
+           timeout_ms: timeout
+         ) do
+      {:ok, doc} ->
+        present_doc(p, resp, doc, conversation_id, config)
+
+      {:error, _} ->
+        {:error,
+         "The page could not be converted within the time and memory limits. Try `format: \"raw\"`.",
+         "extraction"}
     end
   end
 
@@ -272,21 +349,45 @@ defmodule SuperPi.Plugins.Web do
 
     artifact_result =
       cond do
-        p.artifact != nil -> save(conversation_id, p.artifact, doc.text, mime)
-        page.chars > threshold and conversation_id != nil -> auto_save(conversation_id, resp, doc, mime)
-        true -> :none
+        p.artifact != nil ->
+          save(conversation_id, p.artifact, doc.text, mime)
+
+        page.chars > threshold and conversation_id != nil ->
+          auto_save(conversation_id, resp, doc, mime)
+
+        true ->
+          :none
       end
 
     case {p.artifact, artifact_result} do
       {nil, {:ok, _size, auto_name}} ->
-        {:ok, success(header(resp, doc.title) <> "\n" <> chunk <> notes(p, page, auto_name, resp), resp, meta(doc, page, auto_name))}
+        {:ok,
+         success(
+           header(resp, doc.title) <> "\n" <> chunk <> notes(p, page, auto_name, resp),
+           resp,
+           meta(doc, page, auto_name)
+         )}
 
       {nil, _none} ->
-        {:ok, success(header(resp, doc.title) <> "\n" <> chunk <> notes(p, page, nil, resp), resp, meta(doc, page, nil))}
+        {:ok,
+         success(
+           header(resp, doc.title) <> "\n" <> chunk <> notes(p, page, nil, resp),
+           resp,
+           meta(doc, page, nil)
+         )}
 
       {name, {:ok, size}} ->
-        output = header(resp, doc.title) <> "\nSaved #{page.chars} characters (#{size} bytes) to artifact `#{name}`. Read it with artifact_get."
-        {:ok, success(output, resp, %{meta(doc, page, name) | truncated: false, offset: 0, next_offset: nil})}
+        output =
+          header(resp, doc.title) <>
+            "\nSaved #{page.chars} characters (#{size} bytes) to artifact `#{name}`. Read it with artifact_get."
+
+        {:ok,
+         success(output, resp, %{
+           meta(doc, page, name)
+           | truncated: false,
+             offset: 0,
+             next_offset: nil
+         })}
 
       {_name, error} ->
         error
@@ -294,11 +395,20 @@ defmodule SuperPi.Plugins.Web do
   end
 
   defp meta(doc, page, artifact) do
-    %{title: doc.title, chars: page.chars, truncated: page.truncated, links: doc.links, offset: page.offset, next_offset: page.next_offset, artifact: artifact}
+    %{
+      title: doc.title,
+      chars: page.chars,
+      truncated: page.truncated,
+      links: doc.links,
+      offset: page.offset,
+      next_offset: page.next_offset,
+      artifact: artifact
+    }
   end
 
   defp auto_save(conversation_id, resp, doc, mime) do
-    name = "web/" <> host_slug(resp.final_url) <> "-" <> hash(resp.final_url) <> extension(doc.kind)
+    name =
+      "web/" <> host_slug(resp.final_url) <> "-" <> hash(resp.final_url) <> extension(doc.kind)
 
     case save(conversation_id, name, doc.text, mime) do
       {:ok, size} -> {:ok, size, name}
@@ -306,8 +416,17 @@ defmodule SuperPi.Plugins.Web do
     end
   end
 
-  defp host_slug(url), do: url |> URI.parse() |> Map.get(:host) |> to_string() |> String.replace(~r/[^A-Za-z0-9.-]/, "-") |> String.slice(0, 60)
-  defp hash(url), do: :sha256 |> :crypto.hash(url) |> Base.encode16(case: :lower) |> binary_part(0, 10)
+  defp host_slug(url),
+    do:
+      url
+      |> URI.parse()
+      |> Map.get(:host)
+      |> to_string()
+      |> String.replace(~r/[^A-Za-z0-9.-]/, "-")
+      |> String.slice(0, 60)
+
+  defp hash(url),
+    do: :sha256 |> :crypto.hash(url) |> Base.encode16(case: :lower) |> binary_part(0, 10)
 
   defp extension(:json), do: ".json"
   defp extension(:html), do: ".md"
@@ -317,28 +436,47 @@ defmodule SuperPi.Plugins.Web do
   defp mime(:html, "markdown"), do: "text/markdown"
   defp mime(_, _), do: "text/plain"
 
-  defp save(nil, _name, _data, _type), do: {:error, "An artifact needs a conversation.", "artifact"}
+  defp save(nil, _name, _data, _type),
+    do: {:error, "An artifact needs a conversation.", "artifact"}
 
   defp save(conversation_id, name, data, type) do
     case Artifacts.put(conversation_id, name, data, type) do
-      {:ok, %{size: size}} -> {:ok, size}
-      {:ok, _} -> {:ok, byte_size(data)}
-      {:error, {:too_large, max}} -> {:error, "The content is larger than the artifact limit of #{max} bytes.", "artifact"}
-      {:error, reason} -> {:error, "Could not save the artifact: #{inspect(reason)}.", "artifact"}
+      {:ok, %{size: size}} ->
+        {:ok, size}
+
+      {:ok, _} ->
+        {:ok, byte_size(data)}
+
+      {:error, {:too_large, max}} ->
+        {:error, "The content is larger than the artifact limit of #{max} bytes.", "artifact"}
+
+      {:error, reason} ->
+        {:error, "Could not save the artifact: #{inspect(reason)}.", "artifact"}
     end
   end
 
   defp header(resp, title) do
-    redirected = if length(resp.chain) > 1, do: " (redirected from #{hd(resp.chain)["url"]})", else: ""
-    (if title, do: "Title: #{title}\n", else: "") <> "URL: #{resp.final_url}#{redirected}\n"
+    redirected =
+      if length(resp.chain) > 1, do: " (redirected from #{hd(resp.chain)["url"]})", else: ""
+
+    if(title, do: "Title: #{title}\n", else: "") <> "URL: #{resp.final_url}#{redirected}\n"
   end
 
   defp notes(p, page, saved_name, resp) do
     [
-      if(page.truncated, do: "\n\n[Truncated: showing characters #{page.offset} to #{page.next_offset} of #{page.chars}. Call web_fetch again with offset=#{page.next_offset} to continue.]"),
-      if(p.offset > page.chars, do: "\n\n[offset #{p.offset} is past the end: the text has #{page.chars} characters.]"),
-      if(saved_name, do: "\n\n[The full text is saved as artifact `#{saved_name}`. Read it with artifact_get.]"),
-      if(resp.body_truncated, do: "\n\n[The download was cut at #{resp.bytes} bytes, the size limit.]")
+      if(page.truncated,
+        do:
+          "\n\n[Truncated: showing characters #{page.offset} to #{page.next_offset} of #{page.chars}. Call web_fetch again with offset=#{page.next_offset} to continue.]"
+      ),
+      if(p.offset > page.chars,
+        do: "\n\n[offset #{p.offset} is past the end: the text has #{page.chars} characters.]"
+      ),
+      if(saved_name,
+        do: "\n\n[The full text is saved as artifact `#{saved_name}`. Read it with artifact_get.]"
+      ),
+      if(resp.body_truncated,
+        do: "\n\n[The download was cut at #{resp.bytes} bytes, the size limit.]"
+      )
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join()
@@ -395,28 +533,48 @@ defmodule SuperPi.Plugins.Web do
       true ->
         query = String.trim(query)
 
-        case SandboxRunner.run_isolated(fn -> Search.run(provider, query, count) end, timeout_ms: @search_timeout_ms) do
-          {:ok, {:ok, results}} -> search_result(query, results, provider)
-          {:ok, {:error, message}} -> failure(message, "search_failed")
-          {:error, %{type: "tool_timeout"}} -> failure("The search timed out after #{@search_timeout_ms} ms.", "timeout")
-          {:error, %{reason: reason}} -> failure("The search failed: #{reason}", "search_failed")
+        case SandboxRunner.run_isolated(fn -> Search.run(provider, query, count) end,
+               timeout_ms: @search_timeout_ms
+             ) do
+          {:ok, {:ok, results}} ->
+            search_result(query, results, provider)
+
+          {:ok, {:error, message}} ->
+            failure(message, "search_failed")
+
+          {:error, %{type: "tool_timeout"}} ->
+            failure("The search timed out after #{@search_timeout_ms} ms.", "timeout")
+
+          {:error, %{reason: reason}} ->
+            failure("The search failed: #{reason}", "search_failed")
         end
     end
   end
 
   defp search_result(query, [], {mod, _}) do
-    %{"output" => "No results for: #{query}", "structured_output" => %{"query" => query, "results" => [], "provider" => inspect(mod)}, "details" => %{}}
+    %{
+      "output" => "No results for: #{query}",
+      "structured_output" => %{"query" => query, "results" => [], "provider" => inspect(mod)},
+      "details" => %{}
+    }
   end
 
   defp search_result(query, results, {mod, _}) do
     text =
       results
       |> Enum.with_index(1)
-      |> Enum.map_join("\n\n", fn {r, i} -> "#{i}. #{r.title}\n   #{r.url}" <> if(r.snippet == "", do: "", else: "\n   #{r.snippet}") end)
+      |> Enum.map_join("\n\n", fn {r, i} ->
+        "#{i}. #{r.title}\n   #{r.url}" <> if(r.snippet == "", do: "", else: "\n   #{r.snippet}")
+      end)
 
     %{
       "output" => text,
-      "structured_output" => %{"query" => query, "provider" => inspect(mod), "results" => Enum.map(results, &%{"title" => &1.title, "url" => &1.url, "snippet" => &1.snippet})},
+      "structured_output" => %{
+        "query" => query,
+        "provider" => inspect(mod),
+        "results" =>
+          Enum.map(results, &%{"title" => &1.title, "url" => &1.url, "snippet" => &1.snippet})
+      },
       "details" => %{"count" => length(results)}
     }
   end

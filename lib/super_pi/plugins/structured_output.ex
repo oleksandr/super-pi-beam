@@ -11,7 +11,9 @@ defmodule SuperPi.Plugins.StructuredOutput do
 
   def id, do: "structured_output"
   def name, do: "Structured Output & Early Termination"
-  def description, do: "Terminating tool for emitting typed machine-readable JSON without extra turn cost"
+
+  def description,
+    do: "Terminating tool for emitting typed machine-readable JSON without extra turn cost"
 
   @tool_spec %{
     "name" => "structured_output",
@@ -21,8 +23,14 @@ defmodule SuperPi.Plugins.StructuredOutput do
     "parameters" => %{
       "type" => "object",
       "properties" => %{
-        "headline" => %{"type" => "string", "description" => "Concise headline or title for the result"},
-        "summary" => %{"type" => "string", "description" => "One-paragraph summary of findings or actions taken"},
+        "headline" => %{
+          "type" => "string",
+          "description" => "Concise headline or title for the result"
+        },
+        "summary" => %{
+          "type" => "string",
+          "description" => "One-paragraph summary of findings or actions taken"
+        },
         "data" => %{"type" => "object", "description" => "Structured key-value payload"},
         "action_items" => %{
           "type" => "array",

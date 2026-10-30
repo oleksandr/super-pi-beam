@@ -16,7 +16,6 @@ defmodule SuperPi.Conversation.MachineDefectsTest do
   alias SuperPi.Durable.Storage
   alias SuperPi.TestSupport.Faults
 
-
   setup do
     # Machines are linked to the test process. A machine crash must surface as
     # an assertion failure, not as a test-process exit.
@@ -31,7 +30,9 @@ defmodule SuperPi.Conversation.MachineDefectsTest do
   end
 
   defp generation_tasks(conv_id) do
-    Repo.all(from t in TaskSchema, where: t.conversation_id == ^conv_id and t.kind == "pi.generation")
+    Repo.all(
+      from(t in TaskSchema, where: t.conversation_id == ^conv_id and t.kind == "pi.generation")
+    )
   end
 
   describe "C1: terminate path sends :settle, which has no handler (machine.ex:351,367)" do

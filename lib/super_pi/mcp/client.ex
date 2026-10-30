@@ -90,12 +90,17 @@ defmodule SuperPi.MCP.Client do
 
   @impl true
   def handle_call(:await_ready, _from, %{status: :ready} = state), do: {:reply, :ok, state}
-  def handle_call(:await_ready, _from, %{status: {:failed, reason}} = state), do: {:reply, {:error, reason}, state}
-  def handle_call(:await_ready, from, state), do: {:noreply, %{state | waiters: [from | state.waiters]}}
+
+  def handle_call(:await_ready, _from, %{status: {:failed, reason}} = state),
+    do: {:reply, {:error, reason}, state}
+
+  def handle_call(:await_ready, from, state),
+    do: {:noreply, %{state | waiters: [from | state.waiters]}}
 
   def handle_call(:tools, _from, state), do: {:reply, state.tools, state}
 
-  def handle_call({:call_tool, _tool, _args, _timeout}, _from, %{status: status} = state) when status != :ready do
+  def handle_call({:call_tool, _tool, _args, _timeout}, _from, %{status: status} = state)
+      when status != :ready do
     {:reply, {:error, {:not_ready, status}}, state}
   end
 
@@ -159,13 +164,17 @@ defmodule SuperPi.MCP.Client do
   defp handle_message(_notification, state), do: state
 
   # The server may send its own requests. `ping` gets an empty result, anything else is refused.
-  defp reply_to_server_request(state, id, "ping"), do: send_message(state, %{"jsonrpc" => "2.0", "id" => id, "result" => %{}})
+  defp reply_to_server_request(state, id, "ping"),
+    do: send_message(state, %{"jsonrpc" => "2.0", "id" => id, "result" => %{}})
 
   defp reply_to_server_request(state, id, method) do
     send_message(state, %{
       "jsonrpc" => "2.0",
       "id" => id,
-      "error" => %{"code" => -32601, "message" => "Method not supported by this client: #{method}"}
+      "error" => %{
+        "code" => -32601,
+        "message" => "Method not supported by this client: #{method}"
+      }
     })
   end
 
@@ -197,7 +206,8 @@ defmodule SuperPi.MCP.Client do
     end
   end
 
-  defp dispatch_response(kind, %{"error" => error}, state) when kind in [:initialize, :list_tools] do
+  defp dispatch_response(kind, %{"error" => error}, state)
+       when kind in [:initialize, :list_tools] do
     fail_all(state, {:handshake_failed, error})
   end
 

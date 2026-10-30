@@ -28,8 +28,11 @@ defmodule SuperPi.Event.Renderer.OpenAI do
   end
 
   @impl true
-  def render(%Event{type: "text_delta", data: %{"delta" => delta}}, st), do: {[chunk(st, %{"content" => delta})], st}
-  def render(%Event{type: "thinking_delta", data: %{"delta" => delta}}, st), do: {[chunk(st, %{"reasoning_content" => delta})], st}
+  def render(%Event{type: "text_delta", data: %{"delta" => delta}}, st),
+    do: {[chunk(st, %{"content" => delta})], st}
+
+  def render(%Event{type: "thinking_delta", data: %{"delta" => delta}}, st),
+    do: {[chunk(st, %{"reasoning_content" => delta})], st}
 
   def render(%Event{type: "tool_started", data: %{"name" => name} = data}, st) do
     args = Map.get(data, "args") || Map.get(data, "arguments") || %{}
@@ -38,7 +41,13 @@ defmodule SuperPi.Event.Renderer.OpenAI do
 
   def render(%Event{type: "tool_completed", data: %{"name" => name} = data}, st) do
     label = if Map.get(data, "is_error", false), do: "❌", else: "✅"
-    {[chunk(st, %{"reasoning_content" => "#{label} #{name} completed#{out_preview(Map.get(data, "output", ""))}\n\n"})], st}
+
+    {[
+       chunk(st, %{
+         "reasoning_content" =>
+           "#{label} #{name} completed#{out_preview(Map.get(data, "output", ""))}\n\n"
+       })
+     ], st}
   end
 
   def render(%Event{type: "permission_request", data: %{"tool_name" => name}}, st) do
@@ -52,7 +61,8 @@ defmodule SuperPi.Event.Renderer.OpenAI do
 
   @doc "A chunk with an empty delta and a `finish_reason`, for the handler's closing frame."
   @spec finish_chunk(map(), String.t()) :: map()
-  def finish_chunk(st, reason), do: wrap(st, %{"index" => 0, "delta" => %{}, "finish_reason" => reason})
+  def finish_chunk(st, reason),
+    do: wrap(st, %{"index" => 0, "delta" => %{}, "finish_reason" => reason})
 
   @doc "The chunk that carries only the assistant role. The handler sends it first."
   @spec role_chunk(map()) :: map()
@@ -60,11 +70,19 @@ defmodule SuperPi.Event.Renderer.OpenAI do
 
   @doc "The usage chunk. It has no choices."
   @spec usage_chunk(map(), map()) :: map()
-  def usage_chunk(st, usage), do: st |> wrap(nil) |> Map.merge(%{"choices" => [], "usage" => usage})
+  def usage_chunk(st, usage),
+    do: st |> wrap(nil) |> Map.merge(%{"choices" => [], "usage" => usage})
 
   defp chunk(st, delta), do: wrap(st, %{"index" => 0, "delta" => delta, "finish_reason" => nil})
 
-  defp wrap(st, nil), do: %{"id" => st.id, "object" => "chat.completion.chunk", "created" => st.created, "model" => st.model}
+  defp wrap(st, nil),
+    do: %{
+      "id" => st.id,
+      "object" => "chat.completion.chunk",
+      "created" => st.created,
+      "model" => st.model
+    }
+
   defp wrap(st, choice), do: st |> wrap(nil) |> Map.put("choices", [choice])
 
   defp arg_preview(%{"command" => cmd}) when is_binary(cmd), do: "$ #{cmd}\n"
@@ -81,7 +99,9 @@ defmodule SuperPi.Event.Renderer.OpenAI do
   defp out_preview(out) do
     raw = out |> out_text() |> String.trim()
 
-    if raw == "", do: "", else: " -> " <> String.slice(raw, 0..80) <> if(String.length(raw) > 80, do: "...", else: "")
+    if raw == "",
+      do: "",
+      else: " -> " <> String.slice(raw, 0..80) <> if(String.length(raw) > 80, do: "...", else: "")
   end
 
   defp out_text(out) when is_binary(out), do: out

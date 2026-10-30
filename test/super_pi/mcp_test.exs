@@ -68,7 +68,8 @@ defmodule SuperPi.MCPTest do
   end
 
   test "tools/call executes tools safely and returns MCP content format" do
-    tmp_path = Path.join(System.tmp_dir!(), "super_pi_mcp_test_#{System.unique_integer([:positive])}.txt")
+    tmp_path =
+      Path.join(System.tmp_dir!(), "super_pi_mcp_test_#{System.unique_integer([:positive])}.txt")
 
     # 1. Write file
     write_req = %{
@@ -119,7 +120,10 @@ defmodule SuperPi.MCPTest do
     }
 
     {:reply, read_reply, _state} = Server.handle_mcp_line(Jason.encode!(read_req), %{})
-    assert [%{"text" => json_text, "uri" => "superpi://workspace/context"}] = read_reply["result"]["contents"]
+
+    assert [%{"text" => json_text, "uri" => "superpi://workspace/context"}] =
+             read_reply["result"]["contents"]
+
     assert {:ok, _decoded} = Jason.decode(json_text)
   end
 end

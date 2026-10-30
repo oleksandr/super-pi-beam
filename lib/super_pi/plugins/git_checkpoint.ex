@@ -34,7 +34,10 @@ defmodule SuperPi.Plugins.GitCheckpoint do
         if byte_size(trimmed) > 0 do
           # Store the checkpoint so it remains reachable for rollbacks and is not garbage-collected
           System.cmd("git", ["stash", "store", "-m", "SuperPi Checkpoint", trimmed], cd: ws)
-          Logger.debug("[GitCheckpoint] Created git checkpoint: #{trimmed} for conversation #{Map.get(ctx, :conversation_id)}")
+
+          Logger.debug(
+            "[GitCheckpoint] Created git checkpoint: #{trimmed} for conversation #{Map.get(ctx, :conversation_id)}"
+          )
         end
 
       _ ->

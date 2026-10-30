@@ -69,7 +69,9 @@ defmodule SuperPi.Memory do
   @doc "A configuration value, with the module default."
   @spec config(atom()) :: term()
   def config(key) do
-    :super_pi |> Application.get_env(:memory, []) |> Keyword.get_lazy(key, fn -> Keyword.fetch!(@defaults, key) end)
+    :super_pi
+    |> Application.get_env(:memory, [])
+    |> Keyword.get_lazy(key, fn -> Keyword.fetch!(@defaults, key) end)
   end
 
   def provenances, do: @provenances
@@ -79,13 +81,21 @@ defmodule SuperPi.Memory do
   @spec scope(integer() | nil, keyword()) :: scope()
   def scope(conversation_id, opts \\ []) do
     case Keyword.get(opts, :scope, :owner) do
-      :global -> {"global", ""}
-      _ -> {"owner", if(is_integer(conversation_id), do: SuperPi.Auth.owner(conversation_id), else: SuperPi.Auth.anonymous())}
+      :global ->
+        {"global", ""}
+
+      _ ->
+        {"owner",
+         if(is_integer(conversation_id),
+           do: SuperPi.Auth.owner(conversation_id),
+           else: SuperPi.Auth.anonymous()
+         )}
     end
   end
 
   @doc "The query of every note in a scope."
-  def scoped({kind, id}), do: from(m in Memory, where: m.scope_kind == ^kind and m.scope_id == ^id)
+  def scoped({kind, id}),
+    do: from(m in Memory, where: m.scope_kind == ^kind and m.scope_id == ^id)
 
   # --- Writing ---
 
@@ -170,13 +180,21 @@ defmodule SuperPi.Memory do
   defp normalize_source(nil), do: {:ok, %{}}
 
   defp normalize_source(%{} = source) do
-    source = for {k, v} <- source, to_string(k) in @source_keys, valid_source_value?(v), into: %{}, do: {to_string(k), v}
+    source =
+      for {k, v} <- source,
+          to_string(k) in @source_keys,
+          valid_source_value?(v),
+          into: %{},
+          do: {to_string(k), v}
 
     case source do
       %{"url" => url} ->
-        if match?(%URI{scheme: s, host: h} when s in ["http", "https"] and is_binary(h), URI.parse(url)) and byte_size(url) <= 2048,
-          do: {:ok, source},
-          else: {:error, {:invalid, :source, "url must be an http(s) URL of at most 2048 bytes"}}
+        if match?(
+             %URI{scheme: s, host: h} when s in ["http", "https"] and is_binary(h),
+             URI.parse(url)
+           ) and byte_size(url) <= 2048,
+           do: {:ok, source},
+           else: {:error, {:invalid, :source, "url must be an http(s) URL of at most 2048 bytes"}}
 
       _ ->
         {:ok, source}
@@ -185,7 +203,9 @@ defmodule SuperPi.Memory do
 
   defp normalize_source(_), do: {:error, {:invalid, :source, "must be an object"}}
 
-  defp valid_source_value?(v) when is_binary(v), do: String.valid?(v) and byte_size(v) <= 2048 and not String.contains?(v, <<0>>)
+  defp valid_source_value?(v) when is_binary(v),
+    do: String.valid?(v) and byte_size(v) <= 2048 and not String.contains?(v, <<0>>)
+
   defp valid_source_value?(v), do: is_integer(v)
 
   defp provenance(opts, source) do
@@ -199,14 +219,23 @@ defmodule SuperPi.Memory do
   defp check_pin(false, _provenance, _source, _opts), do: :ok
 
   defp check_pin(true, provenance, source, opts) do
-    if (provenance == "compaction" or Map.has_key?(source, "url")) and not Keyword.get(opts, :allow_pin_untrusted, false),
-      do: {:error, :pin_refused},
-      else: :ok
+    if (provenance == "compaction" or Map.has_key?(source, "url")) and
+         not Keyword.get(opts, :allow_pin_untrusted, false),
+       do: {:error, :pin_refused},
+       else: :ok
   end
 
-  @default_confidence %{"user" => 0.9, "agent" => 0.7, "import" => 0.6, "web" => 0.5, "compaction" => 0.3}
+  @default_confidence %{
+    "user" => 0.9,
+    "agent" => 0.7,
+    "import" => 0.6,
+    "web" => 0.5,
+    "compaction" => 0.3
+  }
 
-  defp confidence(c, _provenance) when is_number(c), do: c |> max(0.0) |> min(1.0) |> Kernel.*(1.0)
+  defp confidence(c, _provenance) when is_number(c),
+    do: c |> max(0.0) |> min(1.0) |> Kernel.*(1.0)
+
   defp confidence(_, provenance), do: Map.fetch!(@default_confidence, provenance)
 
   @doc """
@@ -218,7 +247,12 @@ defmodule SuperPi.Memory do
     list
     |> Enum.filter(&(is_binary(&1) and String.valid?(&1)))
     |> Enum.map(fn t ->
-      t |> String.downcase() |> String.trim() |> String.replace(~r/[^\p{L}\p{N}._-]+/u, "-") |> String.trim("-") |> String.slice(0, 40)
+      t
+      |> String.downcase()
+      |> String.trim()
+      |> String.replace(~r/[^\p{L}\p{N}._-]+/u, "-")
+      |> String.trim("-")
+      |> String.slice(0, 40)
     end)
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
@@ -274,7 +308,8 @@ defmodule SuperPi.Memory do
   end
 
   defp origin_entry_seq(conversation_id) when is_integer(conversation_id),
-    do: Repo.one(from e in Entry, where: e.conversation_id == ^conversation_id, select: max(e.seq))
+    do:
+      Repo.one(from(e in Entry, where: e.conversation_id == ^conversation_id, select: max(e.seq)))
 
   defp origin_entry_seq(_), do: nil
 
@@ -289,7 +324,11 @@ defmodule SuperPi.Memory do
       |> String.slice(0, 56)
       |> String.trim("-")
 
-    if base == "", do: "note-" <> (:crypto.hash(:sha256, title) |> Base.encode16(case: :lower) |> binary_part(0, 10)), else: base
+    if base == "",
+      do:
+        "note-" <>
+          (:crypto.hash(:sha256, title) |> Base.encode16(case: :lower) |> binary_part(0, 10)),
+      else: base
   end
 
   defp free_slug(scope, title) do
@@ -335,7 +374,9 @@ defmodule SuperPi.Memory do
 
   @doc "The note with `slug` in the scope, or `nil`."
   @spec get(scope(), String.t()) :: Memory.t() | nil
-  def get({kind, id}, slug) when is_binary(slug), do: Repo.get_by(Memory, scope_kind: kind, scope_id: id, slug: slug)
+  def get({kind, id}, slug) when is_binary(slug),
+    do: Repo.get_by(Memory, scope_kind: kind, scope_id: id, slug: slug)
+
   def get(_scope, _slug), do: nil
 
   @doc """
@@ -349,9 +390,32 @@ defmodule SuperPi.Memory do
         {:error, :not_found}
 
       %Memory{id: id} = m ->
-        out = Repo.all(from l in MemoryLink, join: t in Memory, on: t.id == l.to_id, where: l.from_id == ^id, order_by: [l.id], select: {l.rel, t})
-        back = Repo.all(from l in MemoryLink, join: f in Memory, on: f.id == l.from_id, where: l.to_id == ^id, order_by: [l.id], select: {l.rel, f})
-        superseder = m.superseded_by_id && Repo.one(from s in Memory, where: s.id == ^m.superseded_by_id, select: s.slug)
+        out =
+          Repo.all(
+            from(l in MemoryLink,
+              join: t in Memory,
+              on: t.id == l.to_id,
+              where: l.from_id == ^id,
+              order_by: [l.id],
+              select: {l.rel, t}
+            )
+          )
+
+        back =
+          Repo.all(
+            from(l in MemoryLink,
+              join: f in Memory,
+              on: f.id == l.from_id,
+              where: l.to_id == ^id,
+              order_by: [l.id],
+              select: {l.rel, f}
+            )
+          )
+
+        superseder =
+          m.superseded_by_id &&
+            Repo.one(from(s in Memory, where: s.id == ^m.superseded_by_id, select: s.slug))
+
         {:ok, %{memory: m, links: out, backlinks: back, superseded_by: superseder}}
     end
   end
@@ -376,7 +440,9 @@ defmodule SuperPi.Memory do
       end)
 
     piece = flat |> String.slice(start, width) |> String.trim()
-    (if start > 0, do: "..." <> piece, else: piece) <> if(String.length(flat) > start + width, do: "...", else: "")
+
+    if(start > 0, do: "..." <> piece, else: piece) <>
+      if(String.length(flat) > start + width, do: "...", else: "")
   end
 
   # --- Linking ---
@@ -385,7 +451,8 @@ defmodule SuperPi.Memory do
   Adds a `rel` edge from the note `from_slug` to `to_slug`. `supersedes` marks `to` as replaced by
   `from`. Idempotent for an existing edge.
   """
-  @spec link(scope(), String.t(), String.t(), String.t(), keyword()) :: {:ok, %{from: Memory.t(), to: Memory.t(), rel: String.t()}} | {:error, term()}
+  @spec link(scope(), String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, %{from: Memory.t(), to: Memory.t(), rel: String.t()}} | {:error, term()}
   def link(scope, from_slug, to_slug, rel, _opts \\ []) do
     cond do
       rel not in @rels -> {:error, {:invalid, :rel, "must be one of #{Enum.join(@rels, ", ")}"}}
@@ -400,7 +467,13 @@ defmodule SuperPi.Memory do
            {:ok, to} <- fetch(scope, to_slug),
            :ok <- check_supersede(rel, from, to),
            {:ok, _} <-
-             Repo.insert(MemoryLink.changeset(%MemoryLink{}, %{from_id: from.id, to_id: to.id, rel: rel, created_seq: seq}),
+             Repo.insert(
+               MemoryLink.changeset(%MemoryLink{}, %{
+                 from_id: from.id,
+                 to_id: to.id,
+                 rel: rel,
+                 created_seq: seq
+               }),
                on_conflict: :nothing,
                conflict_target: [:from_id, :to_id, :rel]
              ) do
@@ -412,14 +485,22 @@ defmodule SuperPi.Memory do
     end)
   end
 
-  defp fetch(scope, slug), do: if(m = get(scope, slug), do: {:ok, m}, else: {:error, {:not_found, slug}})
+  defp fetch(scope, slug),
+    do: if(m = get(scope, slug), do: {:ok, m}, else: {:error, {:not_found, slug}})
 
   defp check_supersede("supersedes", from, to) do
     cond do
-      to.superseded_by_id == from.id -> :ok
-      to.superseded_by_id -> {:error, {:already_superseded, Repo.get!(Memory, to.superseded_by_id).slug}}
-      superseded_chain_reaches?(from, to.id, MapSet.new()) -> {:error, :cycle}
-      true -> :ok
+      to.superseded_by_id == from.id ->
+        :ok
+
+      to.superseded_by_id ->
+        {:error, {:already_superseded, Repo.get!(Memory, to.superseded_by_id).slug}}
+
+      superseded_chain_reaches?(from, to.id, MapSet.new()) ->
+        {:error, :cycle}
+
+      true ->
+        :ok
     end
   end
 
@@ -427,10 +508,14 @@ defmodule SuperPi.Memory do
 
   # `from` is already replaced, directly or not, by `target_id`: the edge would close a loop.
   defp superseded_chain_reaches?(%Memory{superseded_by_id: nil}, _target, _seen), do: false
-  defp superseded_chain_reaches?(%Memory{superseded_by_id: id}, target, _seen) when id == target, do: true
+
+  defp superseded_chain_reaches?(%Memory{superseded_by_id: id}, target, _seen) when id == target,
+    do: true
 
   defp superseded_chain_reaches?(%Memory{superseded_by_id: id}, target, seen) do
-    if MapSet.member?(seen, id), do: true, else: superseded_chain_reaches?(Repo.get!(Memory, id), target, MapSet.put(seen, id))
+    if MapSet.member?(seen, id),
+      do: true,
+      else: superseded_chain_reaches?(Repo.get!(Memory, id), target, MapSet.put(seen, id))
   end
 
   defp mark_superseded!(to, from, seq) do
@@ -440,12 +525,22 @@ defmodule SuperPi.Memory do
   @doc "Human-readable message for an error from `write/3` or `link/5`."
   @spec format_error(term()) :: String.t()
   def format_error({:invalid, field, why}), do: "#{field} #{why}."
-  def format_error(:pin_refused), do: "pinned is refused: a note from compaction or from a URL is not pinned without an operator opt-in."
+
+  def format_error(:pin_refused),
+    do:
+      "pinned is refused: a note from compaction or from a URL is not pinned without an operator opt-in."
+
   def format_error({:not_found, slug}), do: "No memory with slug `#{slug}`."
   def format_error(:not_found), do: "No such memory."
-  def format_error({:already_superseded, slug}), do: "That note is already superseded by `#{slug}`. Supersede the newest note instead."
+
+  def format_error({:already_superseded, slug}),
+    do: "That note is already superseded by `#{slug}`. Supersede the newest note instead."
+
   def format_error(:cycle), do: "That link would make a supersede cycle."
-  def format_error({:db, %Ecto.Changeset{errors: errors}}), do: "Could not store the note: #{inspect(errors)}."
+
+  def format_error({:db, %Ecto.Changeset{errors: errors}}),
+    do: "Could not store the note: #{inspect(errors)}."
+
   def format_error(other), do: "Memory error: #{inspect(other)}."
 
   # --- Index support ---
@@ -453,7 +548,9 @@ defmodule SuperPi.Memory do
   @doc "`{count, max updated_seq}` of the scope: cheap proof that the index text is still current."
   @spec fingerprint(scope()) :: String.t()
   def fingerprint(scope) do
-    {count, max_seq} = Repo.one(from m in scoped(scope), select: {count(m.id), max(m.updated_seq)})
+    {count, max_seq} =
+      Repo.one(from(m in scoped(scope), select: {count(m.id), max(m.updated_seq)}))
+
     "#{count}:#{max_seq || 0}"
   end
 end

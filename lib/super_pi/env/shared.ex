@@ -28,7 +28,9 @@ defmodule SuperPi.Env.Shared do
 
   @impl true
   def edit_file(path, old_text, new_text, opts \\ []) do
-    locked(path, fn -> Local.edit_file(path, old_text, new_text, Keyword.put(opts, :env_id, "shared")) end)
+    locked(path, fn ->
+      Local.edit_file(path, old_text, new_text, Keyword.put(opts, :env_id, "shared"))
+    end)
   end
 
   @impl true
@@ -42,7 +44,9 @@ defmodule SuperPi.Env.Shared do
 
   @doc "Key of the advisory lock for a path: a signed 64-bit integer from a hash of the path."
   def lock_key(path) do
-    <<key::signed-64, _rest::binary>> = :crypto.hash(:md5, "super_pi_shared_file:" <> Path.expand(path))
+    <<key::signed-64, _rest::binary>> =
+      :crypto.hash(:md5, "super_pi_shared_file:" <> Path.expand(path))
+
     key
   end
 

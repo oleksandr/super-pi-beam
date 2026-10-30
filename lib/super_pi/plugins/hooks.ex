@@ -20,7 +20,9 @@ defmodule SuperPi.Plugins.Hooks do
 
   def id, do: "hooks"
   def name, do: "Lifecycle Hooks"
-  def description, do: "Executes lifecycle hooks (SessionStart, PreToolUse, PostToolUse, Stop) from hooks.json"
+
+  def description,
+    do: "Executes lifecycle hooks (SessionStart, PreToolUse, PostToolUse, Stop) from hooks.json"
 
   @max_stop_continues 3
 
@@ -39,7 +41,7 @@ defmodule SuperPi.Plugins.Hooks do
       |> Enum.flat_map(fn {hook_dir, handler} ->
         case run_hook_command(handler, common, hook_dir) do
           {:ok, %{"injectSteps" => steps}} when is_list(steps) ->
-             extract_injected_texts(steps)
+            extract_injected_texts(steps)
 
           _ ->
             []
@@ -51,16 +53,31 @@ defmodule SuperPi.Plugins.Hooks do
       # produces output now. They are never refreshed again, so they would stay stale.
       sections = Map.get(agent_cfg, "systemSections")
 
-      if is_list(sections) and Enum.any?(sections, &(is_map(&1) and &1["id"] == "agy_session_start_hooks")) do
-        {:ok, Map.put(agent_cfg, "systemSections", Enum.reject(sections, &(is_map(&1) and &1["id"] == "agy_session_start_hooks")))}
+      if is_list(sections) and
+           Enum.any?(sections, &(is_map(&1) and &1["id"] == "agy_session_start_hooks")) do
+        {:ok,
+         Map.put(
+           agent_cfg,
+           "systemSections",
+           Enum.reject(sections, &(is_map(&1) and &1["id"] == "agy_session_start_hooks"))
+         )}
       else
         {:ok, agent_cfg}
       end
     else
       sections = Map.get(agent_cfg, "systemSections", [])
-      clean_sections = Enum.reject(sections, &(&1["id"] in ["session_start_hooks", "agy_session_start_hooks"]))
+
+      clean_sections =
+        Enum.reject(sections, &(&1["id"] in ["session_start_hooks", "agy_session_start_hooks"]))
+
       joined = Enum.join(injected_texts, "\n")
-      {:ok, Map.put(agent_cfg, "systemSections", clean_sections ++ [%{"id" => "session_start_hooks", "content" => joined}])}
+
+      {:ok,
+       Map.put(
+         agent_cfg,
+         "systemSections",
+         clean_sections ++ [%{"id" => "session_start_hooks", "content" => joined}]
+       )}
     end
   end
 
@@ -68,7 +85,12 @@ defmodule SuperPi.Plugins.Hooks do
   def before_request(derived, ctx) do
     agent_cfg = Doc.snapshot("conversation", ctx.conversation_id, "pi.agent") || %{}
     hooks_files = resolve_hooks_files(agent_cfg)
-    common = Map.merge(build_common_payload(agent_cfg, ctx), %{"invocationNum" => 1, "initialNumSteps" => length(derived.messages)})
+
+    common =
+      Map.merge(build_common_payload(agent_cfg, ctx), %{
+        "invocationNum" => 1,
+        "initialNumSteps" => length(derived.messages)
+      })
 
     ephemeral_msgs =
       hooks_files
@@ -113,10 +135,19 @@ defmodule SuperPi.Plugins.Hooks do
         # `ask` and `force_ask` ask a human. With a client that can answer, the call goes on and
         # `wrap_tool` asks. Without one the call is blocked, as before.
         {:ok, %{"decision" => decision} = out} when decision in ["ask", "force_ask"] ->
-          reason = Map.get(out, "reason", "User confirmation required by PreToolUse hook (#{decision})")
+          reason =
+            Map.get(out, "reason", "User confirmation required by PreToolUse hook (#{decision})")
 
-          if PermissionPrompt.available?(Map.get(ctx, :conversation_id), SuperPi.Plugins.Permissions.load_effective_settings(agent_cfg)) do
-            SuperPi.UI.Pending.put(ctx.conversation_id, Map.get(ctx, :tool_call_id), {:hook_ask, reason})
+          if PermissionPrompt.available?(
+               Map.get(ctx, :conversation_id),
+               SuperPi.Plugins.Permissions.load_effective_settings(agent_cfg)
+             ) do
+            SuperPi.UI.Pending.put(
+              ctx.conversation_id,
+              Map.get(ctx, :tool_call_id),
+              {:hook_ask, reason}
+            )
+
             {:cont, {:allow, acc_overwrite}}
           else
             {:halt, {:block, reason}}
@@ -150,13 +181,23 @@ defmodule SuperPi.Plugins.Hooks do
   def wrap_tool(tool_name, args, next, ctx) do
     case SuperPi.UI.Pending.take(ctx.conversation_id, Map.get(ctx, :tool_call_id)) do
       {:hook_ask, reason} ->
-        fields = %{"tool_name" => tool_name, "arguments" => args, "reason" => reason, "risk" => "high"}
+        fields = %{
+          "tool_name" => tool_name,
+          "arguments" => args,
+          "reason" => reason,
+          "risk" => "high"
+        }
 
         # `allow_always` does not stick for a hook: the hook decides again on the next call.
         if PermissionPrompt.ask(ctx, fields) in [:allow_once, :allow_always] do
           next.(args)
         else
-          %{"is_error" => true, "output" => "Blocked by extension: #{reason}", "structured_output" => nil, "details" => %{"blocked" => true}}
+          %{
+            "is_error" => true,
+            "output" => "Blocked by extension: #{reason}",
+            "structured_output" => nil,
+            "details" => %{"blocked" => true}
+          }
         end
 
       _ ->
@@ -176,7 +217,9 @@ defmodule SuperPi.Plugins.Hooks do
         "stepIdx" => 1
       })
       |> then(fn p ->
-        if result["is_error"], do: Map.put(p, "error", output_to_string(result["output"])), else: p
+        if result["is_error"],
+          do: Map.put(p, "error", output_to_string(result["output"])),
+          else: p
       end)
 
     hooks_files
@@ -490,10 +533,14 @@ defmodule SuperPi.Plugins.Hooks do
                   case Map.get(spec, event_name, []) do
                     list when is_list(list) ->
                       Enum.flat_map(list, fn group ->
-                        if is_map(group) and matcher_matches?(Map.get(group, "matcher", "*"), tool_name) do
+                        if is_map(group) and
+                             matcher_matches?(Map.get(group, "matcher", "*"), tool_name) do
                           case Map.get(group, "hooks", []) do
-                            hooks when is_list(hooks) -> Enum.map(hooks, fn h -> {hook_dir, h} end)
-                            _ -> []
+                            hooks when is_list(hooks) ->
+                              Enum.map(hooks, fn h -> {hook_dir, h} end)
+
+                            _ ->
+                              []
                           end
                         else
                           []
@@ -534,7 +581,8 @@ defmodule SuperPi.Plugins.Hooks do
     %{
       "conversationId" => conv_id,
       "workspacePaths" => Map.get(agent_cfg, "workspacePaths", [File.cwd!()]),
-      "transcriptPath" => Path.join([app_dir, "brain", conv_id, ".system_generated", "logs", "transcript.jsonl"]),
+      "transcriptPath" =>
+        Path.join([app_dir, "brain", conv_id, ".system_generated", "logs", "transcript.jsonl"]),
       "artifactDirectoryPath" => Path.join([app_dir, "brain", conv_id]),
       "modelName" => Map.get(agent_cfg, "model", "auto")
     }

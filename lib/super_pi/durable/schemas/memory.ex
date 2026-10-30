@@ -22,21 +22,21 @@ defmodule SuperPi.Durable.Schemas.Memory do
   @type t :: %__MODULE__{}
 
   schema "memories" do
-    field :scope_kind, :string, default: "owner"
-    field :scope_id, :string, default: ""
-    field :slug, :string
-    field :title, :string
-    field :body, :string
-    field :topics, :string, default: ""
-    field :provenance, :string, default: "agent"
-    field :confidence, :float, default: 0.7
-    field :source, :map, default: %{}
-    field :pinned, :boolean, default: false
-    field :superseded_by_id, :integer
-    field :created_seq, :integer
-    field :updated_seq, :integer
-    field :origin_conversation_id, :integer
-    field :origin_entry_seq, :integer
+    field(:scope_kind, :string, default: "owner")
+    field(:scope_id, :string, default: "")
+    field(:slug, :string)
+    field(:title, :string)
+    field(:body, :string)
+    field(:topics, :string, default: "")
+    field(:provenance, :string, default: "agent")
+    field(:confidence, :float, default: 0.7)
+    field(:source, :map, default: %{})
+    field(:pinned, :boolean, default: false)
+    field(:superseded_by_id, :integer)
+    field(:created_seq, :integer)
+    field(:updated_seq, :integer)
+    field(:origin_conversation_id, :integer)
+    field(:origin_entry_seq, :integer)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -49,7 +49,9 @@ defmodule SuperPi.Durable.Schemas.Memory do
     |> cast(attrs, @fields)
     |> validate_required([:scope_kind, :slug, :title, :body, :created_seq, :updated_seq])
     |> validate_number(:confidence, greater_than_or_equal_to: 0.0, less_than_or_equal_to: 1.0)
-    |> unique_constraint([:scope_kind, :scope_id, :slug], name: :memories_scope_kind_scope_id_slug_index)
+    |> unique_constraint([:scope_kind, :scope_id, :slug],
+      name: :memories_scope_kind_scope_id_slug_index
+    )
   end
 end
 
@@ -65,10 +67,10 @@ defmodule SuperPi.Durable.Schemas.MemoryLink do
   @type t :: %__MODULE__{}
 
   schema "memory_links" do
-    field :from_id, :integer
-    field :to_id, :integer
-    field :rel, :string
-    field :created_seq, :integer
+    field(:from_id, :integer)
+    field(:to_id, :integer)
+    field(:rel, :string)
+    field(:created_seq, :integer)
 
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end

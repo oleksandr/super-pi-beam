@@ -16,7 +16,6 @@ defmodule SuperPi.Conversation.MachineMoreDefectsTest do
   alias SuperPi.Durable.Schemas.Task, as: TaskSchema
   alias SuperPi.TestSupport.Faults
 
-
   setup do
     Process.flag(:trap_exit, true)
     :ok
@@ -29,7 +28,9 @@ defmodule SuperPi.Conversation.MachineMoreDefectsTest do
   end
 
   defp generation_tasks(conv_id) do
-    Repo.all(from t in TaskSchema, where: t.conversation_id == ^conv_id and t.kind == "pi.generation")
+    Repo.all(
+      from(t in TaskSchema, where: t.conversation_id == ^conv_id and t.kind == "pi.generation")
+    )
   end
 
   # Waits until the machine holds the steer text. The machine answers a steer at once and stores
@@ -67,7 +68,9 @@ defmodule SuperPi.Conversation.MachineMoreDefectsTest do
   defp message_texts(conv_id) do
     {entries, _} = Context.visible_entries_with_graph(conv_id)
 
-    for %{kind: "pi.message", data: %{"role" => "user", "content" => [%{"text" => t} | _]}} <- entries, do: t
+    for %{kind: "pi.message", data: %{"role" => "user", "content" => [%{"text" => t} | _]}} <-
+          entries,
+        do: t
   end
 
   describe "steer preemption (machine.ex:180-190)" do
@@ -122,8 +125,18 @@ defmodule SuperPi.Conversation.MachineMoreDefectsTest do
            %{
              "role" => "assistant",
              "content" => [
-               %{"type" => "tool_call", "id" => "call_a", "name" => "t", "arguments" => %{"n" => "a"}},
-               %{"type" => "tool_call", "id" => "call_b", "name" => "t", "arguments" => %{"n" => "b"}}
+               %{
+                 "type" => "tool_call",
+                 "id" => "call_a",
+                 "name" => "t",
+                 "arguments" => %{"n" => "a"}
+               },
+               %{
+                 "type" => "tool_call",
+                 "id" => "call_b",
+                 "name" => "t",
+                 "arguments" => %{"n" => "b"}
+               }
              ]
            }}
         end
@@ -143,7 +156,12 @@ defmodule SuperPi.Conversation.MachineMoreDefectsTest do
         %{"output" => "ok-#{n}", "details" => %{}}
       end
 
-      {:ok, pid} = Machine.start_link(conversation_id: conv.id, llm_responder: responder, tool_executor: executor)
+      {:ok, pid} =
+        Machine.start_link(
+          conversation_id: conv.id,
+          llm_responder: responder,
+          tool_executor: executor
+        )
 
       first = Task.async(fn -> submit(pid, "go", timeout: 10_000) end)
       assert_receive {:executed, "a", tool_pid}, 5_000
@@ -208,7 +226,10 @@ defmodule SuperPi.Conversation.MachineMoreDefectsTest do
       conv = Storage.create_conversation!()
 
       {:ok, pid} =
-        Machine.start_link(conversation_id: conv.id, llm_responder: fn _p, _c -> {:retry_after, 5} end)
+        Machine.start_link(
+          conversation_id: conv.id,
+          llm_responder: fn _p, _c -> {:retry_after, 5} end
+        )
 
       result = submit(pid, "hi", timeout: 2_500)
       if Process.alive?(pid), do: Process.exit(pid, :kill)
@@ -283,7 +304,8 @@ defmodule SuperPi.Conversation.MachineMoreDefectsTest do
       use SuperPi.Extension
 
       @impl true
-      def on_input(_input, _ctx), do: {:transform, "see image", [%{"type" => "image", "data" => "IMG-BYTES-123"}]}
+      def on_input(_input, _ctx),
+        do: {:transform, "see image", [%{"type" => "image", "data" => "IMG-BYTES-123"}]}
     end
 
     test "media returned by on_input is kept in the user message" do

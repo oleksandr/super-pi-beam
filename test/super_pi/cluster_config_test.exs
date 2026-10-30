@@ -42,43 +42,88 @@ defmodule SuperPi.ClusterConfigTest do
     end
 
     test "epmd takes a host list" do
-      cfg = read(Map.merge(@pg, %{"SUPER_PI_CLUSTER_STRATEGY" => "epmd", "SUPER_PI_CLUSTER_HOSTS" => "super_pi@10.0.0.1, super_pi@10.0.0.2"}))
-      assert [super_pi: [strategy: :"Elixir.Cluster.Strategy.Epmd", config: [hosts: hosts]]] = cfg[:topologies]
+      cfg =
+        read(
+          Map.merge(@pg, %{
+            "SUPER_PI_CLUSTER_STRATEGY" => "epmd",
+            "SUPER_PI_CLUSTER_HOSTS" => "super_pi@10.0.0.1, super_pi@10.0.0.2"
+          })
+        )
+
+      assert [super_pi: [strategy: :"Elixir.Cluster.Strategy.Epmd", config: [hosts: hosts]]] =
+               cfg[:topologies]
+
       assert hosts == [:"super_pi@10.0.0.1", :"super_pi@10.0.0.2"]
     end
 
     test "dnspoll takes a query, a base name and an interval" do
       cfg =
-        read(Map.merge(@pg, %{"SUPER_PI_CLUSTER_STRATEGY" => "dnspoll", "SUPER_PI_CLUSTER_DNS_QUERY" => "sp.internal", "SUPER_PI_CLUSTER_POLL_MS" => "2000"}))
+        read(
+          Map.merge(@pg, %{
+            "SUPER_PI_CLUSTER_STRATEGY" => "dnspoll",
+            "SUPER_PI_CLUSTER_DNS_QUERY" => "sp.internal",
+            "SUPER_PI_CLUSTER_POLL_MS" => "2000"
+          })
+        )
 
-      assert [super_pi: [strategy: :"Elixir.Cluster.Strategy.DNSPoll", config: config]] = cfg[:topologies]
+      assert [super_pi: [strategy: :"Elixir.Cluster.Strategy.DNSPoll", config: config]] =
+               cfg[:topologies]
+
       assert config[:query] == "sp.internal"
       assert config[:node_basename] == "super_pi"
       assert config[:polling_interval] == 2000
     end
 
     test "kubernetes_dns takes the headless service name" do
-      cfg = read(Map.merge(@pg, %{"SUPER_PI_CLUSTER_STRATEGY" => "kubernetes_dns", "SUPER_PI_CLUSTER_K8S_SERVICE" => "super-pi-headless", "SUPER_PI_CLUSTER_NODE_BASENAME" => "sp"}))
-      assert [super_pi: [strategy: :"Elixir.Cluster.Strategy.Kubernetes.DNS", config: config]] = cfg[:topologies]
+      cfg =
+        read(
+          Map.merge(@pg, %{
+            "SUPER_PI_CLUSTER_STRATEGY" => "kubernetes_dns",
+            "SUPER_PI_CLUSTER_K8S_SERVICE" => "super-pi-headless",
+            "SUPER_PI_CLUSTER_NODE_BASENAME" => "sp"
+          })
+        )
+
+      assert [super_pi: [strategy: :"Elixir.Cluster.Strategy.Kubernetes.DNS", config: config]] =
+               cfg[:topologies]
+
       assert config[:service] == "super-pi-headless"
       assert config[:application_name] == "sp"
     end
 
     test "gossip needs a secret" do
-      cfg = read(Map.merge(@pg, %{"SUPER_PI_CLUSTER_STRATEGY" => "gossip", "SUPER_PI_CLUSTER_GOSSIP_SECRET" => "s3cret"}))
-      assert [super_pi: [strategy: :"Elixir.Cluster.Strategy.Gossip", config: config]] = cfg[:topologies]
+      cfg =
+        read(
+          Map.merge(@pg, %{
+            "SUPER_PI_CLUSTER_STRATEGY" => "gossip",
+            "SUPER_PI_CLUSTER_GOSSIP_SECRET" => "s3cret"
+          })
+        )
+
+      assert [super_pi: [strategy: :"Elixir.Cluster.Strategy.Gossip", config: config]] =
+               cfg[:topologies]
+
       assert config[:secret] == "s3cret"
       assert config[:port] == 45892
     end
 
     test "a strategy without its required variable is an error" do
-      for {strategy, var} <- [{"epmd", "SUPER_PI_CLUSTER_HOSTS"}, {"dnspoll", "SUPER_PI_CLUSTER_DNS_QUERY"}, {"kubernetes_dns", "SUPER_PI_CLUSTER_K8S_SERVICE"}, {"gossip", "SUPER_PI_CLUSTER_GOSSIP_SECRET"}] do
-        assert_raise RuntimeError, ~r/#{var}/, fn -> read(Map.merge(@pg, %{"SUPER_PI_CLUSTER_STRATEGY" => strategy})) end
+      for {strategy, var} <- [
+            {"epmd", "SUPER_PI_CLUSTER_HOSTS"},
+            {"dnspoll", "SUPER_PI_CLUSTER_DNS_QUERY"},
+            {"kubernetes_dns", "SUPER_PI_CLUSTER_K8S_SERVICE"},
+            {"gossip", "SUPER_PI_CLUSTER_GOSSIP_SECRET"}
+          ] do
+        assert_raise RuntimeError, ~r/#{var}/, fn ->
+          read(Map.merge(@pg, %{"SUPER_PI_CLUSTER_STRATEGY" => strategy}))
+        end
       end
     end
 
     test "an unknown strategy is an error" do
-      assert_raise RuntimeError, ~r/must be none, epmd/, fn -> read(Map.merge(@pg, %{"SUPER_PI_CLUSTER_STRATEGY" => "carrier-pigeon"})) end
+      assert_raise RuntimeError, ~r/must be none, epmd/, fn ->
+        read(Map.merge(@pg, %{"SUPER_PI_CLUSTER_STRATEGY" => "carrier-pigeon"}))
+      end
     end
 
     test "a cluster over SQLite is refused" do
@@ -92,11 +137,17 @@ defmodule SuperPi.ClusterConfigTest do
     test "validate! refuses a cluster over SQLite, and accepts none" do
       assert :ok = SpCluster.validate!()
 
-      Application.put_env(:super_pi, :cluster, strategy: :epmd, topologies: [super_pi: [strategy: :"Elixir.Cluster.Strategy.Epmd", config: [hosts: []]]])
+      Application.put_env(:super_pi, :cluster,
+        strategy: :epmd,
+        topologies: [super_pi: [strategy: :"Elixir.Cluster.Strategy.Epmd", config: [hosts: []]]]
+      )
+
       on_exit(fn -> Application.delete_env(:super_pi, :cluster) end)
 
       assert SpCluster.enabled?()
-      if SuperPi.Repo.active_repo() == SuperPi.Repo.SQLite, do: assert_raise(ArgumentError, ~r/needs PostgreSQL/, &SpCluster.validate!/0)
+
+      if SuperPi.Repo.active_repo() == SuperPi.Repo.SQLite,
+        do: assert_raise(ArgumentError, ~r/needs PostgreSQL/, &SpCluster.validate!/0)
     end
 
     test "children are empty without a strategy" do
@@ -105,7 +156,12 @@ defmodule SuperPi.ClusterConfigTest do
 
     test "status on one node" do
       conv = SuperPi.Durable.Storage.create_conversation!()
-      {:ok, _} = Locator.ensure_started(conv.id, extensions: [], llm_responder: fn _, _ -> {:ok, Faults.text_msg("ok")} end)
+
+      {:ok, _} =
+        Locator.ensure_started(conv.id,
+          extensions: [],
+          llm_responder: fn _, _ -> {:ok, Faults.text_msg("ok")} end
+        )
 
       status = SpCluster.status()
       assert status.self == node()
@@ -132,9 +188,17 @@ defmodule SuperPi.ClusterConfigTest do
 
     test "supervision :local keeps the machine under the local supervisor" do
       conv = SuperPi.Durable.Storage.create_conversation!()
-      {:ok, pid} = Locator.ensure_started(conv.id, [extensions: [], llm_responder: responder()], supervision: :local)
 
-      assert pid in Enum.map(DynamicSupervisor.which_children(SuperPi.LocalMachineSupervisor), &elem(&1, 1))
+      {:ok, pid} =
+        Locator.ensure_started(conv.id, [extensions: [], llm_responder: responder()],
+          supervision: :local
+        )
+
+      assert pid in Enum.map(
+               DynamicSupervisor.which_children(SuperPi.LocalMachineSupervisor),
+               &elem(&1, 1)
+             )
+
       assert {:ok, _} = Machine.submit(pid, "hi", timeout: 10_000)
     end
 
@@ -175,7 +239,10 @@ defmodule SuperPi.ClusterConfigTest do
 
   describe "drain" do
     defp post_chat do
-      body = %{"model" => "super-pi-workspace", "messages" => [%{"role" => "user", "content" => "hi"}]}
+      body = %{
+        "model" => "super-pi-workspace",
+        "messages" => [%{"role" => "user", "content" => "hi"}]
+      }
 
       conn(:post, "/v1/chat/completions", Jason.encode!(body))
       |> put_req_header("content-type", "application/json")
@@ -202,7 +269,9 @@ defmodule SuperPi.ClusterConfigTest do
       assert conn(:get, "/ready") |> Router.call(Router.init([])) |> Map.fetch!(:status) == 503
       # Liveness and metrics stay up while draining.
       assert conn(:get, "/health") |> Router.call(Router.init([])) |> Map.fetch!(:status) == 200
-      assert conn(:get, "/v1/models") |> Router.call(Router.init([])) |> Map.fetch!(:status) == 200
+
+      assert conn(:get, "/v1/models") |> Router.call(Router.init([])) |> Map.fetch!(:status) ==
+               200
 
       Drain.resume()
       assert post_chat().status == 200
@@ -210,16 +279,38 @@ defmodule SuperPi.ClusterConfigTest do
 
     test "RPC refuses new sessions and turns, but not reads" do
       Drain.stop_accepting()
-      call = fn method, params -> RPC.handle_rpc_payload(Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params}), RPC.new_client_state()) |> elem(0) end
+
+      call = fn method, params ->
+        RPC.handle_rpc_payload(
+          Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params}),
+          RPC.new_client_state()
+        )
+        |> elem(0)
+      end
 
       assert %{"error" => %{"code" => -32005}} = call.("session.open", %{})
-      assert %{"error" => %{"code" => -32005}} = call.("session.submit", %{"conversation_id" => 1, "text" => "x"})
-      refute match?(%{"error" => %{"code" => -32005}}, call.("session.context", %{"conversation_id" => 1}))
+
+      assert %{"error" => %{"code" => -32005}} =
+               call.("session.submit", %{"conversation_id" => 1, "text" => "x"})
+
+      refute match?(
+               %{"error" => %{"code" => -32005}},
+               call.("session.context", %{"conversation_id" => 1})
+             )
     end
 
     test "drain returns at once when no turn is running, and waits for a running one" do
       conv = SuperPi.Durable.Storage.create_conversation!()
-      {:ok, pid} = Locator.ensure_started(conv.id, [extensions: [], llm_responder: fn _p, _c -> Process.sleep(700) && {:ok, Faults.text_msg("done")} end], supervision: :local)
+
+      {:ok, pid} =
+        Locator.ensure_started(
+          conv.id,
+          [
+            extensions: [],
+            llm_responder: fn _p, _c -> Process.sleep(700) && {:ok, Faults.text_msg("done")} end
+          ],
+          supervision: :local
+        )
 
       assert Drain.busy_conversations() == []
       assert :drained = Drain.drain(2_000)
@@ -237,7 +328,16 @@ defmodule SuperPi.ClusterConfigTest do
 
     test "drain gives up at the timeout and names the busy conversations" do
       conv = SuperPi.Durable.Storage.create_conversation!()
-      {:ok, pid} = Locator.ensure_started(conv.id, [extensions: [], llm_responder: fn _p, _c -> Process.sleep(1_500) && {:ok, Faults.text_msg("done")} end], supervision: :local)
+
+      {:ok, pid} =
+        Locator.ensure_started(
+          conv.id,
+          [
+            extensions: [],
+            llm_responder: fn _p, _c -> Process.sleep(1_500) && {:ok, Faults.text_msg("done")} end
+          ],
+          supervision: :local
+        )
 
       task = Task.async(fn -> Machine.submit(pid, "slow", timeout: 10_000) end)
       Process.sleep(200)
@@ -250,7 +350,12 @@ defmodule SuperPi.ClusterConfigTest do
 
   describe "GET /cluster" do
     test "reports this node, and needs a key when tokens are configured" do
-      body = conn(:get, "/cluster") |> Router.call(Router.init([])) |> Map.fetch!(:resp_body) |> Jason.decode!()
+      body =
+        conn(:get, "/cluster")
+        |> Router.call(Router.init([]))
+        |> Map.fetch!(:resp_body)
+        |> Jason.decode!()
+
       assert body["self"] == Atom.to_string(node())
       assert body["strategy"] == "none"
       assert body["accepting"] == true
@@ -261,7 +366,12 @@ defmodule SuperPi.ClusterConfigTest do
       on_exit(fn -> Application.delete_env(:super_pi, :gateway_tokens) end)
 
       assert conn(:get, "/cluster") |> Router.call(Router.init([])) |> Map.fetch!(:status) == 401
-      ok = conn(:get, "/cluster") |> put_req_header("authorization", "Bearer tok") |> Router.call(Router.init([]))
+
+      ok =
+        conn(:get, "/cluster")
+        |> put_req_header("authorization", "Bearer tok")
+        |> Router.call(Router.init([]))
+
       assert ok.status == 200
     end
   end
@@ -271,7 +381,13 @@ defmodule SuperPi.ClusterConfigTest do
       System.put_env("SUPER_PI_GATEWAY", "true")
       System.put_env("SUPER_PI_GATEWAY_BIND", "0.0.0.0")
       System.put_env("SUPER_PI_GATEWAY_PORT", "4123")
-      on_exit(fn -> Enum.each(~w(SUPER_PI_GATEWAY SUPER_PI_GATEWAY_BIND SUPER_PI_GATEWAY_PORT), &System.delete_env/1) end)
+
+      on_exit(fn ->
+        Enum.each(
+          ~w(SUPER_PI_GATEWAY SUPER_PI_GATEWAY_BIND SUPER_PI_GATEWAY_PORT),
+          &System.delete_env/1
+        )
+      end)
 
       cfg = Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)[:super_pi]
       assert cfg[:start_gateway] == true
@@ -279,11 +395,16 @@ defmodule SuperPi.ClusterConfigTest do
       assert cfg[:gateway_ip] == {0, 0, 0, 0}
 
       System.put_env("SUPER_PI_GATEWAY_BIND", "not-an-ip")
-      assert_raise RuntimeError, ~r/must be an IP address/, fn -> Config.Reader.read!("config/runtime.exs", env: :prod, target: :host) end
+
+      assert_raise RuntimeError, ~r/must be an IP address/, fn ->
+        Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)
+      end
     end
 
     test "the gateway stays off by default" do
-      refute Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)[:super_pi][:start_gateway]
+      refute Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)[:super_pi][
+               :start_gateway
+             ]
     end
   end
 end

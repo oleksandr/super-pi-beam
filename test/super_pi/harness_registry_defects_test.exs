@@ -17,7 +17,6 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
   alias SuperPi.Plugins
   alias SuperPi.TestSupport.Faults
 
-
   setup do
     Process.flag(:trap_exit, true)
     :ok
@@ -57,7 +56,8 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
     end
 
     test "run_before_compact skips a module without the hook" do
-      assert :default = Extension.run_before_compact([OnlyAfterRun], %{entries: [], opts: []}, @ctx)
+      assert :default =
+               Extension.run_before_compact([OnlyAfterRun], %{entries: [], opts: []}, @ctx)
     end
 
     test "run_before_request skips a module without the hook" do
@@ -77,11 +77,19 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
     end
 
     test "run_wrap_tool skips a module without the hook" do
-      assert %{"out" => 1} = Extension.run_wrap_tool([OnlyAfterRun], "bash", %{}, fn _ -> %{"out" => 1} end, @ctx)
+      assert %{"out" => 1} =
+               Extension.run_wrap_tool(
+                 [OnlyAfterRun],
+                 "bash",
+                 %{},
+                 fn _ -> %{"out" => 1} end,
+                 @ctx
+               )
     end
 
     test "run_after_tool skips a module without the hook" do
-      assert %{"o" => 1} = Extension.run_after_tool([OnlyAfterRun], "bash", %{}, %{"o" => 1}, @ctx)
+      assert %{"o" => 1} =
+               Extension.run_after_tool([OnlyAfterRun], "bash", %{}, %{"o" => 1}, @ctx)
     end
 
     test "run_after_tools skips a module without the hook" do
@@ -94,7 +102,10 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
 
     test "after_tools callback typespec includes :terminate (extension.ex:55-56)" do
       {:ok, callbacks} = Code.Typespec.fetch_callbacks(Extension)
-      {_, [spec | _]} = Enum.find(callbacks, fn {{name, arity}, _} -> {name, arity} == {:after_tools, 2} end)
+
+      {_, [spec | _]} =
+        Enum.find(callbacks, fn {{name, arity}, _} -> {name, arity} == {:after_tools, 2} end)
+
       text = :after_tools |> Code.Typespec.spec_to_quoted(spec) |> Macro.to_string()
 
       assert text =~ ":terminate", "spec omits :terminate, which the machine handles: #{text}"
@@ -130,8 +141,11 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
     end
 
     test "agent_defaults/1 honours opts[:model]" do
-      assert %{"model" => "custom-model"} = SuperPi.Harness.Code.agent_defaults(model: "custom-model")
-      assert %{"model" => "custom-model"} = SuperPi.Harness.Assistant.agent_defaults(model: "custom-model")
+      assert %{"model" => "custom-model"} =
+               SuperPi.Harness.Code.agent_defaults(model: "custom-model")
+
+      assert %{"model" => "custom-model"} =
+               SuperPi.Harness.Assistant.agent_defaults(model: "custom-model")
     end
 
     test "the model comes from config :super_pi, :default_model, not from the harness" do
@@ -145,7 +159,10 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
 
     test "@callback extensions typespec admits {module, opts} tuples (harness.ex:20)" do
       {:ok, callbacks} = Code.Typespec.fetch_callbacks(Harness)
-      {_, [spec | _]} = Enum.find(callbacks, fn {{name, arity}, _} -> {name, arity} == {:extensions, 1} end)
+
+      {_, [spec | _]} =
+        Enum.find(callbacks, fn {{name, arity}, _} -> {name, arity} == {:extensions, 1} end)
+
       text = :extensions |> Code.Typespec.spec_to_quoted(spec) |> Macro.to_string()
 
       assert Enum.any?(SuperPi.Harness.Code.extensions(), &is_tuple/1)
@@ -160,22 +177,40 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
     end
 
     test "Planner.extensions/0 blocks bash", %{ctx: ctx} do
-      assert {:block, _} = Extension.run_before_tool(Harness.Planner.extensions(), "bash", %{"command" => "ls"}, ctx)
+      assert {:block, _} =
+               Extension.run_before_tool(
+                 Harness.Planner.extensions(),
+                 "bash",
+                 %{"command" => "ls"},
+                 ctx
+               )
     end
 
     test "Planner.extensions/0 blocks write", %{ctx: ctx} do
-      assert {:block, _} = Extension.run_before_tool(Harness.Planner.extensions(), "write", %{"path" => "x", "content" => "y"}, ctx)
+      assert {:block, _} =
+               Extension.run_before_tool(
+                 Harness.Planner.extensions(),
+                 "write",
+                 %{"path" => "x", "content" => "y"},
+                 ctx
+               )
     end
 
     test "Planner confines reads to the workspace and hides secrets", %{ctx: ctx} do
       exts = Harness.Planner.extensions()
-      assert {:block, _} = Extension.run_before_tool(exts, "read", %{"path" => "/etc/passwd"}, ctx)
+
+      assert {:block, _} =
+               Extension.run_before_tool(exts, "read", %{"path" => "/etc/passwd"}, ctx)
+
       assert {:block, _} = Extension.run_before_tool(exts, "read", %{"path" => ".env"}, ctx)
     end
 
     test "the loadout has no mutating tool, and the ceiling is plan" do
       defaults = Harness.Planner.agent_defaults()
-      assert Enum.map(defaults["tools"], & &1["name"]) -- ["read", "grep", "find", "ls", "tool_search"] == []
+
+      assert Enum.map(defaults["tools"], & &1["name"]) --
+               ["read", "grep", "find", "ls", "tool_search"] == []
+
       assert defaults["executionMode"] == "plan"
       assert defaults["maxExecutionMode"] == "plan"
     end
@@ -193,7 +228,12 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
         Machine.start_link(
           conversation_id: conv.id,
           extensions: Harness.Planner.extensions(),
-          llm_responder: Faults.tool_then_text_responder("write", %{"path" => "/tmp/x", "content" => "y"}, "done"),
+          llm_responder:
+            Faults.tool_then_text_responder(
+              "write",
+              %{"path" => "/tmp/x", "content" => "y"},
+              "done"
+            ),
           tool_executor: executor
         )
 

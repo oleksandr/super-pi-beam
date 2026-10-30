@@ -89,8 +89,15 @@ defmodule SuperPi.Event.Renderer.AGUI do
       "mode" => Map.get(agent, "executionMode"),
       "maxMode" => Map.get(agent, "maxExecutionMode"),
       "model" => Map.get(agent, "model"),
-      "usage" => %{"inputTokens" => Map.get(usage, "inputTokens", 0), "outputTokens" => Map.get(usage, "outputTokens", 0)},
-      "plan" => Enum.map(Map.get(live, "todos", []), &%{"id" => &1["id"], "text" => &1["text"], "completed" => &1["done"] == true}),
+      "usage" => %{
+        "inputTokens" => Map.get(usage, "inputTokens", 0),
+        "outputTokens" => Map.get(usage, "outputTokens", 0)
+      },
+      "plan" =>
+        Enum.map(
+          Map.get(live, "todos", []),
+          &%{"id" => &1["id"], "text" => &1["text"], "completed" => &1["done"] == true}
+        ),
       "pendingPermission" => nil
     }
   end
@@ -104,13 +111,18 @@ defmodule SuperPi.Event.Renderer.AGUI do
   @impl true
   def render(%Event{type: "turn_started"} = ev, st) do
     run_id = st.run_id || to_string(ev.turn_id)
-    {[item("RUN_STARTED", %{"threadId" => st.thread_id, "runId" => run_id})], %{st | run_id: run_id}}
+
+    {[item("RUN_STARTED", %{"threadId" => st.thread_id, "runId" => run_id})],
+     %{st | run_id: run_id}}
   end
 
   def render(%Event{type: "text_delta", data: %{"delta" => delta}} = ev, st) do
     {closing, st} = close_reasoning(st)
     {opening, st} = open_message(st, ev)
-    {closing ++ opening ++ [item("TEXT_MESSAGE_CONTENT", %{"messageId" => st.message, "delta" => delta})], st}
+
+    {closing ++
+       opening ++ [item("TEXT_MESSAGE_CONTENT", %{"messageId" => st.message, "delta" => delta})],
+     st}
   end
 
   def render(%Event{type: "thinking_delta", data: %{"delta" => delta}} = ev, st) do
@@ -120,11 +132,14 @@ defmodule SuperPi.Event.Renderer.AGUI do
       else
         {id, st} = next_id(st, ev, "reason")
 
-        {[item("REASONING_START", %{"messageId" => id}), item("REASONING_MESSAGE_START", %{"messageId" => id, "role" => "assistant"})],
-         %{st | reasoning: id}}
+        {[
+           item("REASONING_START", %{"messageId" => id}),
+           item("REASONING_MESSAGE_START", %{"messageId" => id, "role" => "assistant"})
+         ], %{st | reasoning: id}}
       end
 
-    {opening ++ [item("REASONING_MESSAGE_CONTENT", %{"messageId" => st.reasoning, "delta" => delta})], st}
+    {opening ++
+       [item("REASONING_MESSAGE_CONTENT", %{"messageId" => st.reasoning, "delta" => delta})], st}
   end
 
   def render(%Event{type: "message_completed"}, st) do
@@ -137,12 +152,20 @@ defmodule SuperPi.Event.Renderer.AGUI do
     {closing, st} = close_message(st)
     {id, name, st, start} = start_call(st, ev, data)
     delta = Map.get(data, "delta")
-    args = if is_binary(delta) and delta != "", do: [item("TOOL_CALL_ARGS", %{"toolCallId" => id, "delta" => delta})], else: []
+
+    args =
+      if is_binary(delta) and delta != "",
+        do: [item("TOOL_CALL_ARGS", %{"toolCallId" => id, "delta" => delta})],
+        else: []
+
     _ = name
     {closing ++ start ++ args, st}
   end
 
-  def render(%Event{type: "tool_started", data: %{"tool_call_id" => real_id, "name" => name} = data}, st) do
+  def render(
+        %Event{type: "tool_started", data: %{"tool_call_id" => real_id, "name" => name} = data},
+        st
+      ) do
     {closing, st} = close_message(st)
     {call_id, st} = claim_call(st, real_id, name)
 
@@ -154,8 +177,10 @@ defmodule SuperPi.Event.Renderer.AGUI do
         _ ->
           args = Jason.encode!(Map.get(data, "arguments") || %{})
 
-          {[item("TOOL_CALL_START", %{"toolCallId" => call_id, "toolCallName" => name}), item("TOOL_CALL_ARGS", %{"toolCallId" => call_id, "delta" => args})],
-           put_call(st, call_id, %{name: name, started?: true})}
+          {[
+             item("TOOL_CALL_START", %{"toolCallId" => call_id, "toolCallName" => name}),
+             item("TOOL_CALL_ARGS", %{"toolCallId" => call_id, "delta" => args})
+           ], put_call(st, call_id, %{name: name, started?: true})}
       end
 
     {closing ++ start_and_args ++ [item("TOOL_CALL_END", %{"toolCallId" => call_id})], st}
@@ -166,21 +191,52 @@ defmodule SuperPi.Event.Renderer.AGUI do
     {[tool_result(st, call_id, data["output"])], st}
   end
 
-  def render(%Event{type: "tool_blocked", data: %{"tool_call_id" => real_id, "name" => name, "reason" => reason}}, st) do
+  def render(
+        %Event{
+          type: "tool_blocked",
+          data: %{"tool_call_id" => real_id, "name" => name, "reason" => reason}
+        },
+        st
+      ) do
     # A blocked call never started, so it has no `TOOL_CALL_START` yet.
     {call_id, st} = claim_call(st, real_id, name)
-    {start, st} = if Map.get(st.calls, call_id), do: {[], st}, else: {[item("TOOL_CALL_START", %{"toolCallId" => call_id, "toolCallName" => name}), item("TOOL_CALL_END", %{"toolCallId" => call_id})], put_call(st, call_id, %{name: name, started?: true})}
-    {start ++ [tool_result(st, call_id, "Blocked: #{reason}"), custom("tool_blocked", %{"toolCallId" => call_id, "reason" => reason})], st}
+
+    {start, st} =
+      if Map.get(st.calls, call_id),
+        do: {[], st},
+        else:
+          {[
+             item("TOOL_CALL_START", %{"toolCallId" => call_id, "toolCallName" => name}),
+             item("TOOL_CALL_END", %{"toolCallId" => call_id})
+           ], put_call(st, call_id, %{name: name, started?: true})}
+
+    {start ++
+       [
+         tool_result(st, call_id, "Blocked: #{reason}"),
+         custom("tool_blocked", %{"toolCallId" => call_id, "reason" => reason})
+       ], st}
   end
 
   def render(%Event{type: "turn_completed", data: data}, st) do
     {a, st} = close_reasoning(st)
     {b, st} = close_message(st)
-    {a ++ b ++ [item("RUN_FINISHED", %{"threadId" => st.thread_id, "runId" => st.run_id, "result" => finish_result(data)})], reset_run(st)}
+
+    {a ++
+       b ++
+       [
+         item("RUN_FINISHED", %{
+           "threadId" => st.thread_id,
+           "runId" => st.run_id,
+           "result" => finish_result(data)
+         })
+       ], reset_run(st)}
   end
 
-  def render(%Event{type: "turn_error", data: %{"error" => error}}, st), do: finish_error(st, to_string(error), nil)
-  def render(%Event{type: "turn_cancelled"}, st), do: finish_error(st, "The run was cancelled.", "cancelled")
+  def render(%Event{type: "turn_error", data: %{"error" => error}}, st),
+    do: finish_error(st, to_string(error), nil)
+
+  def render(%Event{type: "turn_cancelled"}, st),
+    do: finish_error(st, "The run was cancelled.", "cancelled")
 
   def render(%Event{type: "compaction_completed"}, st) do
     {[item("MESSAGES_SNAPSHOT", %{"messages" => messages(st)})], st}
@@ -202,30 +258,51 @@ defmodule SuperPi.Event.Renderer.AGUI do
     }
 
     {delta, st} = project(st, &Map.put(&1, "pendingPermission", pending))
-    {[custom("permission_request", Map.drop(Event.to_wire(ev), ["type", "v"]) |> camelize()) | delta], st}
+
+    {[
+       custom("permission_request", Map.drop(Event.to_wire(ev), ["type", "v"]) |> camelize())
+       | delta
+     ], st}
   end
 
-  def render(%Event{type: "ui_request"} = ev, st), do: {[custom("ui_request", Map.drop(Event.to_wire(ev), ["type", "v"]) |> camelize())], st}
+  def render(%Event{type: "ui_request"} = ev, st),
+    do: {[custom("ui_request", Map.drop(Event.to_wire(ev), ["type", "v"]) |> camelize())], st}
 
   def render(%Event{type: "ui_resolved", data: %{"request_id" => rid} = data}, st) do
     {delta, st} =
       project(st, fn proj ->
-        if get_in(proj, ["pendingPermission", "requestId"]) == rid, do: Map.put(proj, "pendingPermission", nil), else: proj
+        if get_in(proj, ["pendingPermission", "requestId"]) == rid,
+          do: Map.put(proj, "pendingPermission", nil),
+          else: proj
       end)
 
     {[custom("ui_resolved", %{"requestId" => rid, "outcome" => data["outcome"]}) | delta], st}
   end
 
-  def render(%Event{type: "notice", data: data}, st), do: {[custom("notice", %{"level" => data["level"], "message" => data["message"]})], st}
+  def render(%Event{type: "notice", data: data}, st),
+    do: {[custom("notice", %{"level" => data["level"], "message" => data["message"]})], st}
 
-  def render(%Event{type: type, data: data}, st) when type in ["subagent_started", "subagent_finished"], do: {[custom(type, camelize(data))], st}
+  def render(%Event{type: type, data: data}, st)
+      when type in ["subagent_started", "subagent_finished"],
+      do: {[custom(type, camelize(data))], st}
 
-  def render(%Event{type: "state_changed", data: %{"status" => status}}, st), do: project(st, &Map.put(&1, "status", status))
-  def render(%Event{type: "mode_changed", data: data}, st), do: project(st, &Map.merge(&1, %{"mode" => data["mode"], "maxMode" => data["max_mode"]}))
-  def render(%Event{type: "plan_updated", data: %{"entries" => entries}}, st), do: project(st, &Map.put(&1, "plan", entries))
+  def render(%Event{type: "state_changed", data: %{"status" => status}}, st),
+    do: project(st, &Map.put(&1, "status", status))
+
+  def render(%Event{type: "mode_changed", data: data}, st),
+    do: project(st, &Map.merge(&1, %{"mode" => data["mode"], "maxMode" => data["max_mode"]}))
+
+  def render(%Event{type: "plan_updated", data: %{"entries" => entries}}, st),
+    do: project(st, &Map.put(&1, "plan", entries))
 
   def render(%Event{type: "usage_updated", data: data}, st) do
-    project(st, &Map.put(&1, "usage", %{"inputTokens" => data["total_input_tokens"], "outputTokens" => data["total_output_tokens"]}))
+    project(
+      st,
+      &Map.put(&1, "usage", %{
+        "inputTokens" => data["total_input_tokens"],
+        "outputTokens" => data["total_output_tokens"]
+      })
+    )
   end
 
   def render(%Event{}, st), do: {[], st}
@@ -244,7 +321,9 @@ defmodule SuperPi.Event.Renderer.AGUI do
     |> Enum.reduce([], fn
       %{"type" => type, "delta" => d} = cur, [%{"type" => type, "delta" => prev} = last | rest]
       when type in ["TEXT_MESSAGE_CONTENT", "REASONING_MESSAGE_CONTENT", "TOOL_CALL_ARGS"] ->
-        if same_target?(cur, last), do: [%{last | "delta" => prev <> d} | rest], else: [cur, last | rest]
+        if same_target?(cur, last),
+          do: [%{last | "delta" => prev <> d} | rest],
+          else: [cur, last | rest]
 
       cur, acc ->
         [cur | acc]
@@ -262,19 +341,27 @@ defmodule SuperPi.Event.Renderer.AGUI do
 
   defp open_message(st, ev) do
     {id, st} = next_id(st, ev, "msg")
-    {[item("TEXT_MESSAGE_START", %{"messageId" => id, "role" => "assistant"})], %{st | message: id}}
+
+    {[item("TEXT_MESSAGE_START", %{"messageId" => id, "role" => "assistant"})],
+     %{st | message: id}}
   end
 
   defp close_message(%__MODULE__{message: nil} = st), do: {[], st}
-  defp close_message(st), do: {[item("TEXT_MESSAGE_END", %{"messageId" => st.message})], %{st | message: nil}}
+
+  defp close_message(st),
+    do: {[item("TEXT_MESSAGE_END", %{"messageId" => st.message})], %{st | message: nil}}
 
   defp close_reasoning(%__MODULE__{reasoning: nil} = st), do: {[], st}
 
   defp close_reasoning(st) do
-    {[item("REASONING_MESSAGE_END", %{"messageId" => st.reasoning}), item("REASONING_END", %{"messageId" => st.reasoning})], %{st | reasoning: nil}}
+    {[
+       item("REASONING_MESSAGE_END", %{"messageId" => st.reasoning}),
+       item("REASONING_END", %{"messageId" => st.reasoning})
+     ], %{st | reasoning: nil}}
   end
 
-  defp next_id(st, ev, prefix), do: {"#{prefix}-#{ev.turn_id || "x"}-#{st.seq + 1}", %{st | seq: st.seq + 1}}
+  defp next_id(st, ev, prefix),
+    do: {"#{prefix}-#{ev.turn_id || "x"}-#{st.seq + 1}", %{st | seq: st.seq + 1}}
 
   # --- Tool calls ---
   # A streamed call is announced by its first `toolcall_delta`, before the id the machine
@@ -290,7 +377,9 @@ defmodule SuperPi.Event.Renderer.AGUI do
     else
       st = put_call(st, announced, %{name: name, started?: true})
       st = %{st | call_order: st.call_order ++ [announced]}
-      {announced, name, st, [item("TOOL_CALL_START", %{"toolCallId" => announced, "toolCallName" => name})]}
+
+      {announced, name, st,
+       [item("TOOL_CALL_START", %{"toolCallId" => announced, "toolCallName" => name})]}
     end
   end
 
@@ -299,7 +388,8 @@ defmodule SuperPi.Event.Renderer.AGUI do
   defp claim_call(st, real_id, _name) do
     cond do
       Map.has_key?(st.calls, real_id) ->
-        {real_id, %{st | call_order: List.delete(st.call_order, real_id)} |> alias_call(real_id, real_id)}
+        {real_id,
+         %{st | call_order: List.delete(st.call_order, real_id)} |> alias_call(real_id, real_id)}
 
       st.call_order != [] ->
         [first | rest] = st.call_order
@@ -312,12 +402,20 @@ defmodule SuperPi.Event.Renderer.AGUI do
 
   defp claim_result(st, real_id), do: {get_in(st.calls, [{:alias, real_id}]) || real_id, st}
 
-  defp alias_call(st, real_id, call_id), do: %{st | calls: Map.put(st.calls, {:alias, real_id}, call_id)}
+  defp alias_call(st, real_id, call_id),
+    do: %{st | calls: Map.put(st.calls, {:alias, real_id}, call_id)}
+
   defp put_call(st, id, info), do: %{st | calls: Map.put(st.calls, id, info)}
 
   defp tool_result(st, call_id, output) do
     content = if is_binary(output), do: output, else: Jason.encode!(output)
-    item("TOOL_CALL_RESULT", %{"messageId" => "tool-#{call_id}-#{st.seq}", "toolCallId" => call_id, "content" => content, "role" => "tool"})
+
+    item("TOOL_CALL_RESULT", %{
+      "messageId" => "tool-#{call_id}-#{st.seq}",
+      "toolCallId" => call_id,
+      "content" => content,
+      "role" => "tool"
+    })
   end
 
   # --- Run end ---
@@ -329,7 +427,9 @@ defmodule SuperPi.Event.Renderer.AGUI do
     {a ++ b ++ [item("RUN_ERROR", fields)], reset_run(st)}
   end
 
-  defp finish_result(%{"result" => %{} = result}), do: result |> Map.take(["content"]) |> then(&if(&1 == %{}, do: nil, else: &1))
+  defp finish_result(%{"result" => %{} = result}),
+    do: result |> Map.take(["content"]) |> then(&if(&1 == %{}, do: nil, else: &1))
+
   defp finish_result(_), do: nil
 
   defp reset_run(st), do: %{st | calls: %{}, call_order: [], run_id: nil}
@@ -351,7 +451,9 @@ defmodule SuperPi.Event.Renderer.AGUI do
 
   # --- Items ---
 
-  defp item(type, fields), do: Map.merge(fields, %{"type" => type, "timestamp" => System.system_time(:millisecond)})
+  defp item(type, fields),
+    do: Map.merge(fields, %{"type" => type, "timestamp" => System.system_time(:millisecond)})
+
   defp custom(name, value), do: item("CUSTOM", %{"name" => name, "value" => value})
 
   defp camelize(%{} = map) do

@@ -11,7 +11,11 @@ defmodule SuperPi.EnvTest do
               token_prefix <- string(:alphanumeric, min_length: 4, max_length: 10),
               max_runs: 25
             ) do
-        tmp_file = Path.join(System.tmp_dir!(), "super_pi_lock_test_#{System.unique_integer([:positive])}.txt")
+        tmp_file =
+          Path.join(
+            System.tmp_dir!(),
+            "super_pi_lock_test_#{System.unique_integer([:positive])}.txt"
+          )
 
         initial_lines =
           for i <- 1..worker_count do
@@ -47,7 +51,15 @@ defmodule SuperPi.EnvTest do
 
     property "SandboxRunner isolates exceptions, exits, timeouts, and heap OOM kills without ever crashing the caller" do
       check all(
-              fault_kind <- member_of([:raise_exception, :throw_exit, :killed, :heap_oom, :timeout, :ok_value]),
+              fault_kind <-
+                member_of([
+                  :raise_exception,
+                  :throw_exit,
+                  :killed,
+                  :heap_oom,
+                  :timeout,
+                  :ok_value
+                ]),
               payload <- string(:alphanumeric, min_length: 3, max_length: 20),
               max_runs: 40
             ) do
@@ -139,12 +151,19 @@ defmodule SuperPi.EnvTest do
     end
 
     test "list_files and scan_lines respect .gitignore and locate matching lines accurately" do
-      tmp_dir = Path.join(System.tmp_dir!(), "super_pi_scan_#{System.unique_integer([:positive])}")
+      tmp_dir =
+        Path.join(System.tmp_dir!(), "super_pi_scan_#{System.unique_integer([:positive])}")
+
       File.mkdir_p!(Path.join(tmp_dir, "src"))
       File.mkdir_p!(Path.join(tmp_dir, "ignored_dir"))
 
       File.write!(Path.join(tmp_dir, ".gitignore"), "ignored_dir/\n*.secret\n")
-      File.write!(Path.join(tmp_dir, "src/module_a.ex"), "defmodule Alpha do\n  def run_magic, do: :ok\nend\n")
+
+      File.write!(
+        Path.join(tmp_dir, "src/module_a.ex"),
+        "defmodule Alpha do\n  def run_magic, do: :ok\nend\n"
+      )
+
       File.write!(Path.join(tmp_dir, "src/keys.secret"), "run_magic_secret\n")
       File.write!(Path.join(tmp_dir, "ignored_dir/skip.ex"), "run_magic\n")
 

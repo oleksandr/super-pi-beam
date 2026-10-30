@@ -52,7 +52,11 @@ defmodule SuperPi.Workers.MemoryHarvestWorker do
             ~s(Reply {"facts": []} when nothing is worth keeping.)
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"conversation_id" => conversation_id, "head_entry_id" => head_id, "entry_ids" => ids} = args}) do
+  def perform(%Oban.Job{
+        args:
+          %{"conversation_id" => conversation_id, "head_entry_id" => head_id, "entry_ids" => ids} =
+            args
+      }) do
     scope = {Map.get(args, "scope_kind", "owner"), Map.get(args, "scope_id", "")}
 
     case transcript(ids) do
@@ -81,7 +85,9 @@ defmodule SuperPi.Workers.MemoryHarvestWorker do
     end
   end
 
-  defp valid_fact?(%{"title" => t, "body" => b}) when is_binary(t) and is_binary(b), do: String.trim(t) != "" and String.trim(b) != ""
+  defp valid_fact?(%{"title" => t, "body" => b}) when is_binary(t) and is_binary(b),
+    do: String.trim(t) != "" and String.trim(b) != ""
+
   defp valid_fact?(_), do: false
 
   defp store(facts, scope, conversation_id, head_id) do
@@ -102,7 +108,10 @@ defmodule SuperPi.Workers.MemoryHarvestWorker do
     :ok
   end
 
-  defp slug(head_id, title), do: "h#{head_id}-" <> (:crypto.hash(:sha256, title) |> Base.encode16(case: :lower) |> binary_part(0, 8))
+  defp slug(head_id, title),
+    do:
+      "h#{head_id}-" <>
+        (:crypto.hash(:sha256, title) |> Base.encode16(case: :lower) |> binary_part(0, 8))
 
   defp ask(transcript) do
     prompt = prompt(transcript)
@@ -121,7 +130,9 @@ defmodule SuperPi.Workers.MemoryHarvestWorker do
            provider.generate(
              %{
                model: effective,
-               messages: [%{"role" => "user", "content" => [%{"type" => "text", "text" => prompt}]}],
+               messages: [
+                 %{"role" => "user", "content" => [%{"type" => "text", "text" => prompt}]}
+               ],
                system_sections: [%{"id" => "core", "content" => @system}],
                tools: []
              },
@@ -141,7 +152,10 @@ defmodule SuperPi.Workers.MemoryHarvestWorker do
   # --- Transcript ---
 
   defp transcript(ids) do
-    entries = Repo.all(from e in Entry, where: e.id in ^ids and e.kind == "pi.message", order_by: [asc: e.id])
+    entries =
+      Repo.all(
+        from(e in Entry, where: e.id in ^ids and e.kind == "pi.message", order_by: [asc: e.id])
+      )
 
     entries
     |> Enum.map(&render/1)

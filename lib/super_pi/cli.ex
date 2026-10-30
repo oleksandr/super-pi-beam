@@ -118,7 +118,9 @@ defmodule SuperPi.CLI do
   defp split_flags(argv), do: split_flags(argv, [], [])
 
   defp split_flags([], flags, pos), do: {Enum.reverse(flags), Enum.reverse(pos)}
-  defp split_flags(["--" | rest], flags, pos), do: {Enum.reverse(flags), Enum.reverse(pos) ++ rest}
+
+  defp split_flags(["--" | rest], flags, pos),
+    do: {Enum.reverse(flags), Enum.reverse(pos) ++ rest}
 
   defp split_flags(["--" <> long = tok | rest], flags, pos) do
     {name, has_inline?} =
@@ -151,24 +153,41 @@ defmodule SuperPi.CLI do
 
   defp split_flags([tok | rest], flags, pos), do: split_flags(rest, flags, [tok | pos])
 
-  defp take_value(tok, [value | rest], flags, pos), do: split_flags(rest, [value, tok | flags], pos)
+  defp take_value(tok, [value | rest], flags, pos),
+    do: split_flags(rest, [value, tok | flags], pos)
+
   defp take_value(tok, [], flags, pos), do: split_flags([], [tok | flags], pos)
 
   defp existing_switch(name) do
     Enum.find_value(Keyword.keys(@switches), fn k -> if Atom.to_string(k) == name, do: k end)
   end
 
-  @top_subcommands ["agent", "agents", "models", "harness", "harnesses", "changelog", "help", "chat"]
+  @top_subcommands [
+    "agent",
+    "agents",
+    "models",
+    "harness",
+    "harnesses",
+    "changelog",
+    "help",
+    "chat"
+  ]
   @mcp_actions ["list", "add", "remove", "enable", "disable"]
   @plugin_actions ["list", "enable", "disable", "validate"]
   @remote_actions ["start", "status", "stop"]
 
   defp subcommand?([sub]) when sub in @top_subcommands, do: true
   defp subcommand?(["run" | _]), do: true
-  defp subcommand?(["help", sub]) when sub in @top_subcommands or sub in ["mcp", "plugin", "plugins"], do: true
+
+  defp subcommand?(["help", sub])
+       when sub in @top_subcommands or sub in ["mcp", "plugin", "plugins"], do: true
+
   defp subcommand?([sub]) when sub in ["mcp", "plugin", "plugins", "remote-control"], do: true
   defp subcommand?(["mcp", action | _]), do: action in @mcp_actions
-  defp subcommand?([sub, action | _]) when sub in ["plugin", "plugins"], do: action in @plugin_actions
+
+  defp subcommand?([sub, action | _]) when sub in ["plugin", "plugins"],
+    do: action in @plugin_actions
+
   defp subcommand?(["remote-control", action | _]), do: action in @remote_actions
   defp subcommand?(_), do: false
 
@@ -197,14 +216,31 @@ defmodule SuperPi.CLI do
 
       {:subcommand, sub, _rest, _flags} when sub in ["harness", "harnesses"] ->
         harnesses = Harness.list()
-        id_w = harnesses |> Enum.map(&String.length(&1.id())) |> Enum.max(fn -> 0 end) |> max(10) |> Kernel.+(2)
-        name_w = harnesses |> Enum.map(&String.length(&1.name())) |> Enum.max(fn -> 0 end) |> max(4) |> Kernel.+(2)
-        header = String.pad_trailing("HARNESS ID", id_w) <> String.pad_trailing("NAME", name_w) <> "DESCRIPTION"
+
+        id_w =
+          harnesses
+          |> Enum.map(&String.length(&1.id()))
+          |> Enum.max(fn -> 0 end)
+          |> max(10)
+          |> Kernel.+(2)
+
+        name_w =
+          harnesses
+          |> Enum.map(&String.length(&1.name()))
+          |> Enum.max(fn -> 0 end)
+          |> max(4)
+          |> Kernel.+(2)
+
+        header =
+          String.pad_trailing("HARNESS ID", id_w) <>
+            String.pad_trailing("NAME", name_w) <> "DESCRIPTION"
+
         sep = String.duplicate("-", String.length(header) + 20)
 
         rows =
           Enum.map(harnesses, fn mod ->
-            String.pad_trailing(mod.id(), id_w) <> String.pad_trailing(mod.name(), name_w) <> mod.description()
+            String.pad_trailing(mod.id(), id_w) <>
+              String.pad_trailing(mod.name(), name_w) <> mod.description()
           end)
 
         {0, Enum.join([header, sep | rows], "\n")}
@@ -261,8 +297,11 @@ defmodule SuperPi.CLI do
 
       name ->
         case Harness.fetch(name) do
-          {:ok, mod} -> {:ok, mod}
-          {:error, _} -> {:error, "Unknown harness: #{name}. Run `super-pi harnesses` to list them."}
+          {:ok, mod} ->
+            {:ok, mod}
+
+          {:error, _} ->
+            {:error, "Unknown harness: #{name}. Run `super-pi harnesses` to list them."}
         end
     end
   end
@@ -270,7 +309,15 @@ defmodule SuperPi.CLI do
   defp start_session(flags, positional, opts, harness_mod, workspace_dirs, global_dir, app_dir) do
     base_agent_defaults =
       harness_mod.agent_defaults(
-        Enum.reject([model: flags.model, effort: flags.effort, mode: flags.mode, workspace_paths: workspace_dirs], fn {_k, v} -> is_nil(v) end)
+        Enum.reject(
+          [
+            model: flags.model,
+            effort: flags.effort,
+            mode: flags.mode,
+            workspace_paths: workspace_dirs
+          ],
+          fn {_k, v} -> is_nil(v) end
+        )
       )
 
     agent_cfg =
@@ -343,7 +390,8 @@ defmodule SuperPi.CLI do
         flags.input_format == "stream-json" ->
           run_stream_json_turns(conv.id, pid, opts, app_dir)
 
-        Keyword.get(opts, :interactive_tui, false) and (prompt_text == "" or flags.prompt_interactive != nil) ->
+        Keyword.get(opts, :interactive_tui, false) and
+            (prompt_text == "" or flags.prompt_interactive != nil) ->
           launch_interactive_tui(conv.id, flags, workspace_dirs, opts)
 
         prompt_text != "" or flags.prompt_interactive != nil ->
@@ -464,12 +512,20 @@ defmodule SuperPi.CLI do
 
   # Asks each question on the terminal. Type an option number (several, comma separated, for a
   # multi-select question) or free text. End of input cancels the question.
-  defp answer_questionnaire(conv_id, %{"request_id" => request_id, "questions" => questions}, read, write) do
+  defp answer_questionnaire(
+         conv_id,
+         %{"request_id" => request_id, "questions" => questions},
+         read,
+         write
+       ) do
     answers =
       Enum.reduce_while(questions, [], fn q, acc ->
         case ask_one(q, read, write) do
-          {:ok, selected} -> {:cont, [%{"question" => q["question"], "selected" => selected} | acc]}
-          :eof -> {:halt, :eof}
+          {:ok, selected} ->
+            {:cont, [%{"question" => q["question"], "selected" => selected} | acc]}
+
+          :eof ->
+            {:halt, :eof}
         end
       end)
 
@@ -540,7 +596,13 @@ defmodule SuperPi.CLI do
         end
       end)
 
-    if multi?, do: picks, else: if(length(options) > 0 and match?({_, ""}, Integer.parse(text)), do: hd(picks), else: text)
+    if multi?,
+      do: picks,
+      else:
+        if(length(options) > 0 and match?({_, ""}, Integer.parse(text)),
+          do: hd(picks),
+          else: text
+        )
   end
 
   defp read_stdin_prompt(opts) do
@@ -685,8 +747,16 @@ defmodule SuperPi.CLI do
 
   defp run_remote_control_subcommand(["status" | _]) do
     case Process.whereis(SuperPi.RPC.Server) do
-      nil -> {1, Jason.encode!(%{"daemon" => "super_pi_rpc", "status" => "stopped"})}
-      pid -> {0, Jason.encode!(%{"daemon" => "super_pi_rpc", "status" => "ready", "port" => SuperPi.RPC.Server.port(pid)})}
+      nil ->
+        {1, Jason.encode!(%{"daemon" => "super_pi_rpc", "status" => "stopped"})}
+
+      pid ->
+        {0,
+         Jason.encode!(%{
+           "daemon" => "super_pi_rpc",
+           "status" => "ready",
+           "port" => SuperPi.RPC.Server.port(pid)
+         })}
     end
   end
 
@@ -738,13 +808,28 @@ defmodule SuperPi.CLI do
     if is_binary(prompt) do
       case Machine.submit(pid, prompt) do
         {:ok, msg} ->
-          {0, Jason.encode!(%{"type" => "turn_result", "conversation_id" => conv_id, "message" => msg_json(msg)})}
+          {0,
+           Jason.encode!(%{
+             "type" => "turn_result",
+             "conversation_id" => conv_id,
+             "message" => msg_json(msg)
+           })}
 
         {:error, reason} ->
-          {1, Jason.encode!(%{"type" => "turn_error", "conversation_id" => conv_id, "error" => format_reason(reason)})}
+          {1,
+           Jason.encode!(%{
+             "type" => "turn_error",
+             "conversation_id" => conv_id,
+             "error" => format_reason(reason)
+           })}
       end
     else
-      {1, Jason.encode!(%{"type" => "turn_error", "conversation_id" => conv_id, "error" => "prompt must be a string"})}
+      {1,
+       Jason.encode!(%{
+         "type" => "turn_error",
+         "conversation_id" => conv_id,
+         "error" => "prompt must be a string"
+       })}
     end
   end
 

@@ -72,15 +72,25 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
   def start(opts) do
     with {:ok, url} <- validate_url(Keyword.get(opts, :url)),
          {:ok, headers} <- expand_headers(Keyword.get(opts, :headers) || %{}) do
-      {:ok, %__MODULE__{url: url, headers: headers, receive_timeout: Keyword.get(opts, :receive_timeout, @default_receive_timeout)}}
+      {:ok,
+       %__MODULE__{
+         url: url,
+         headers: headers,
+         receive_timeout: Keyword.get(opts, :receive_timeout, @default_receive_timeout)
+       }}
     end
   end
 
   @impl true
-  def send_message(%{mode: :legacy_connecting} = state, message), do: %{state | queue: state.queue ++ [message]}
+  def send_message(%{mode: :legacy_connecting} = state, message),
+    do: %{state | queue: state.queue ++ [message]}
 
   def send_message(state, message) do
-    state = if initialize?(message) and state.mode == :streamable, do: %{state | init_message: message}, else: state
+    state =
+      if initialize?(message) and state.mode == :streamable,
+        do: %{state | init_message: message},
+        else: state
+
     spawn_post(state, message)
   end
 
@@ -95,15 +105,18 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
     {:ignore, start_legacy(state, init_message)}
   end
 
-  def handle_info(state, {:mcp_http, :sse_event, event, data}) when state.mode in [:legacy_connecting, :legacy] do
+  def handle_info(state, {:mcp_http, :sse_event, event, data})
+      when state.mode in [:legacy_connecting, :legacy] do
     legacy_event(state, event, data)
   end
 
-  def handle_info(state, {:mcp_http, :sse_closed, reason}) when state.mode in [:legacy_connecting, :legacy] do
+  def handle_info(state, {:mcp_http, :sse_closed, reason})
+      when state.mode in [:legacy_connecting, :legacy] do
     {:closed, {:sse_closed, describe(reason)}, state}
   end
 
-  def handle_info(state, {:DOWN, ref, :process, _pid, _reason}) when is_map_key(state.tasks, ref) do
+  def handle_info(state, {:DOWN, ref, :process, _pid, _reason})
+      when is_map_key(state.tasks, ref) do
     {:ignore, %{state | tasks: Map.delete(state.tasks, ref), acks: Map.delete(state.acks, ref)}}
   end
 
@@ -134,8 +147,12 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
 
   defp validate_url(url) when is_binary(url) do
     case URI.parse(url) do
-      %URI{scheme: scheme, host: host} when scheme in ["http", "https"] and is_binary(host) and host != "" -> {:ok, url}
-      _ -> {:error, {:invalid_url, url}}
+      %URI{scheme: scheme, host: host}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        {:ok, url}
+
+      _ ->
+        {:error, {:invalid_url, url}}
     end
   end
 
@@ -145,9 +162,14 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
     {pairs, missing, invalid} =
       Enum.reduce(headers, {[], [], []}, fn {name, value}, {pairs, missing, invalid} ->
         case expand_env(value) do
-          {:ok, expanded} -> {[{String.downcase(to_string(name)), expanded} | pairs], missing, invalid}
-          {:missing, names} -> {pairs, names ++ missing, invalid}
-          :invalid -> {pairs, missing, [to_string(name) | invalid]}
+          {:ok, expanded} ->
+            {[{String.downcase(to_string(name)), expanded} | pairs], missing, invalid}
+
+          {:missing, names} ->
+            {pairs, names ++ missing, invalid}
+
+          :invalid ->
+            {pairs, missing, [to_string(name) | invalid]}
         end
       end)
 
@@ -165,7 +187,8 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
   def expand_env(value) when is_number(value) or is_boolean(value), do: {:ok, to_string(value)}
 
   def expand_env(value) when is_binary(value) do
-    names = @env_ref |> Regex.scan(value, capture: :all_but_first) |> List.flatten() |> Enum.uniq()
+    names =
+      @env_ref |> Regex.scan(value, capture: :all_but_first) |> List.flatten() |> Enum.uniq()
 
     case Enum.reject(names, &System.get_env/1) do
       [] -> {:ok, Regex.replace(@env_ref, value, fn _, name -> System.get_env(name) end)}
@@ -177,7 +200,8 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
 
   # --- Owner side ---
 
-  defp remember_version(state, %{"result" => %{"protocolVersion" => version}}) when is_binary(version) do
+  defp remember_version(state, %{"result" => %{"protocolVersion" => version}})
+       when is_binary(version) do
     %{state | protocol_version: version}
   end
 
@@ -201,10 +225,13 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
     # Requests run side by side, but a request waits for the notifications sent before it:
     # `notifications/initialized` must reach the server before the first `tools/list`.
     earlier = Map.values(state.acks)
-    {pid, ref} = spawn_monitor(fn ->
+
+    {pid, ref} =
+      spawn_monitor(fn ->
         await_exit(earlier)
         run_post(owner, ctx, message)
       end)
+
     acks = if request?(message), do: state.acks, else: Map.put(state.acks, ref, pid)
     %{state | tasks: Map.put(state.tasks, ref, pid), acks: acks}
   end
@@ -240,7 +267,13 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
       end
     end)
 
-    %{state | mode: :legacy_connecting, queue: [init_message | state.queue], sse: pid, tasks: Map.put(state.tasks, ref, pid)}
+    %{
+      state
+      | mode: :legacy_connecting,
+        queue: [init_message | state.queue],
+        sse: pid,
+        tasks: Map.put(state.tasks, ref, pid)
+    }
   end
 
   defp legacy_event(%{mode: :legacy_connecting} = state, "endpoint", data) do
@@ -256,8 +289,11 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
 
   defp legacy_event(state, "message", data) do
     case decode_messages(data) do
-      {:ok, messages} -> {:messages, messages, Enum.reduce(messages, state, &remember_version(&2, &1))}
-      :error -> {:ignore, state}
+      {:ok, messages} ->
+        {:messages, messages, Enum.reduce(messages, state, &remember_version(&2, &1))}
+
+      :error ->
+        {:ignore, state}
     end
   end
 
@@ -296,7 +332,9 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
 
       # The server dropped the session. Start a new one and repeat the request once.
       {:ok, %{status: 404}} when is_binary(ctx.session_id) and not ctx.legacy? ->
-        if initialize?(message), do: {:error, {:http_status, 404, ""}}, else: reinitialize_and_retry(owner, ctx, message)
+        if initialize?(message),
+          do: {:error, {:http_status, 404, ""}},
+          else: reinitialize_and_retry(owner, ctx, message)
 
       {:ok, %{status: status}} when status in [404, 405] and not ctx.legacy? ->
         if initialize?(message) and is_nil(ctx.session_id) do
@@ -317,16 +355,31 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
   defp reinitialize_and_retry(owner, ctx, message) do
     with %{} = init <- ctx.init_message,
          {:ok, %{status: status, headers: headers}} when status in 200..299 <-
-           exchange(:silent, ctx, Map.put(init, "id", "reinit-#{System.unique_integer([:positive])}"), nil),
+           exchange(
+             :silent,
+             ctx,
+             Map.put(init, "id", "reinit-#{System.unique_integer([:positive])}"),
+             nil
+           ),
          session when is_binary(session) <- header(headers, "mcp-session-id"),
          {:ok, %{status: ack}} when ack in 200..299 <-
-           exchange(:silent, ctx, %{"jsonrpc" => "2.0", "method" => "notifications/initialized"}, session) do
+           exchange(
+             :silent,
+             ctx,
+             %{"jsonrpc" => "2.0", "method" => "notifications/initialized"},
+             session
+           ) do
       send(owner, {:mcp_http, :session, session})
 
       case exchange(owner, ctx, message, session) do
-        {:ok, %{status: status} = response} when status in 200..299 -> check_answered(message, response)
-        {:ok, %{status: status, body: body}} -> {:error, {:http_status, status, body}}
-        {:error, reason} -> {:error, reason}
+        {:ok, %{status: status} = response} when status in 200..299 ->
+          check_answered(message, response)
+
+        {:ok, %{status: status, body: body}} ->
+          {:error, {:http_status, status, body}}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     else
       _ -> {:error, :session_expired}
@@ -335,14 +388,31 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
 
   # A request needs an answer in its own response. Anything else would hang the caller until its timeout.
   defp check_answered(message, %{status: status, ids: ids}) do
-    if request?(message) and message["id"] not in ids, do: {:error, {:no_response, status}}, else: :ok
+    if request?(message) and message["id"] not in ids,
+      do: {:error, {:no_response, status}},
+      else: :ok
   end
 
   # Sends one POST. Messages go to `sink` (the owner, or `:silent`) while the body is still arriving.
   defp exchange(sink, ctx, message, session_id) do
-    request = Finch.build(:post, ctx.url, request_headers(ctx, message, session_id), Jason.encode!(message))
+    request =
+      Finch.build(
+        :post,
+        ctx.url,
+        request_headers(ctx, message, session_id),
+        Jason.encode!(message)
+      )
 
-    acc = %{status: nil, headers: [], body: [], size: 0, sse: nil, ids: [], sink: sink, session_id: session_id}
+    acc = %{
+      status: nil,
+      headers: [],
+      body: [],
+      size: 0,
+      sse: nil,
+      ids: [],
+      sink: sink,
+      session_id: session_id
+    }
 
     case Finch.stream(request, @pool, acc, &on_chunk/2, receive_timeout: ctx.receive_timeout) do
       {:ok, acc} -> {:ok, finish(acc)}
@@ -354,11 +424,15 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
 
   defp on_chunk({:headers, headers}, acc) do
     headers = Enum.map(headers, fn {k, v} -> {String.downcase(k), v} end)
-    sse? = acc.status in 200..299 and String.starts_with?(header(headers, "content-type") || "", "text/event-stream")
+
+    sse? =
+      acc.status in 200..299 and
+        String.starts_with?(header(headers, "content-type") || "", "text/event-stream")
 
     # Before the first message, so the owner holds the session when it answers the handshake.
     with true <- acc.status in 200..299,
-         session when is_binary(session) and session != acc.session_id <- header(headers, "mcp-session-id"),
+         session when is_binary(session) and session != acc.session_id <-
+           header(headers, "mcp-session-id"),
          pid when is_pid(pid) <- acc.sink do
       send(pid, {:mcp_http, :session, session})
     end
@@ -372,7 +446,9 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
   end
 
   defp on_chunk({:data, data}, acc) do
-    if acc.size + byte_size(data) <= @max_body, do: %{acc | body: [acc.body | data], size: acc.size + byte_size(data)}, else: acc
+    if acc.size + byte_size(data) <= @max_body,
+      do: %{acc | body: [acc.body | data], size: acc.size + byte_size(data)},
+      else: acc
   end
 
   defp on_chunk(_other, acc), do: acc
@@ -419,7 +495,10 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
   # Returns the ids of the responses among the messages.
   defp deliver(sink, messages) do
     if is_pid(sink), do: Enum.each(messages, &send(sink, {:mcp_http, :message, &1}))
-    for %{"id" => id} = m <- messages, Map.has_key?(m, "result") or Map.has_key?(m, "error"), do: id
+
+    for %{"id" => id} = m <- messages,
+        Map.has_key?(m, "result") or Map.has_key?(m, "error"),
+        do: id
   end
 
   defp decode_messages(data) do
@@ -432,7 +511,12 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
 
   defp report_failure(owner, message, reason) do
     if request?(message) do
-      error = %{"jsonrpc" => "2.0", "id" => message["id"], "error" => %{"code" => -32000, "message" => describe(reason)}}
+      error = %{
+        "jsonrpc" => "2.0",
+        "id" => message["id"],
+        "error" => %{"code" => -32000, "message" => describe(reason)}
+      }
+
       send(owner, {:mcp_http, :message, error})
     else
       Logger.debug("[MCP] #{message["method"] || "response"} not delivered: #{describe(reason)}")
@@ -443,8 +527,16 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
   defp initialize?(message), do: message["method"] == "initialize"
 
   defp request_headers(ctx, message, session_id) do
-    defaults = [{"content-type", "application/json"}, {"accept", "application/json, text/event-stream"}]
-    version = if ctx.protocol_version && not initialize?(message), do: [{"mcp-protocol-version", ctx.protocol_version}], else: []
+    defaults = [
+      {"content-type", "application/json"},
+      {"accept", "application/json, text/event-stream"}
+    ]
+
+    version =
+      if ctx.protocol_version && not initialize?(message),
+        do: [{"mcp-protocol-version", ctx.protocol_version}],
+        else: []
+
     session = if session_id, do: [{"mcp-session-id", session_id}], else: []
 
     # The configured headers go last, so a user can override a default.
@@ -458,7 +550,13 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
   # --- Legacy HTTP+SSE event stream ---
 
   defp run_sse(owner, ctx) do
-    request = Finch.build(:get, ctx.url, Map.to_list(Map.merge(%{"accept" => "text/event-stream"}, Map.new(ctx.headers))))
+    request =
+      Finch.build(
+        :get,
+        ctx.url,
+        Map.to_list(Map.merge(%{"accept" => "text/event-stream"}, Map.new(ctx.headers)))
+      )
+
     acc = %{status: nil, buffer: ""}
 
     fun = fn
@@ -467,7 +565,11 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
 
       {:data, data}, %{status: 200} = acc ->
         {events, rest} = split_events(acc.buffer <> data)
-        Enum.each(events, fn {event, payload} -> send(owner, {:mcp_http, :sse_event, event, payload}) end)
+
+        Enum.each(events, fn {event, payload} ->
+          send(owner, {:mcp_http, :sse_event, event, payload})
+        end)
+
         %{acc | buffer: rest}
 
       _other, acc ->
@@ -490,7 +592,9 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
   # Splits a buffer into complete `{event, data}` pairs and the unfinished rest. The default event
   # type is "message". A block without a data line (a comment, a keep-alive) yields nothing.
   defp split_events(buffer) do
-    {complete, [rest]} = buffer |> String.replace("\r\n", "\n") |> String.split("\n\n") |> Enum.split(-1)
+    {complete, [rest]} =
+      buffer |> String.replace("\r\n", "\n") |> String.split("\n\n") |> Enum.split(-1)
+
     {Enum.flat_map(complete, &parse_event/1), rest}
   end
 
@@ -511,11 +615,19 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
   defp strip_space(value), do: value
 
   defp describe({:http_status, status, body}) do
-    "HTTP #{status}" <> if(String.trim(to_string(body)) == "", do: "", else: ": " <> String.slice(String.trim(to_string(body)), 0, 200))
+    "HTTP #{status}" <>
+      if(String.trim(to_string(body)) == "",
+        do: "",
+        else: ": " <> String.slice(String.trim(to_string(body)), 0, 200)
+      )
   end
 
-  defp describe({:no_response, status}), do: "the server sent no response to the request (HTTP #{status})"
-  defp describe(:session_expired), do: "the server dropped the session and a new one could not be started"
+  defp describe({:no_response, status}),
+    do: "the server sent no response to the request (HTTP #{status})"
+
+  defp describe(:session_expired),
+    do: "the server dropped the session and a new one could not be started"
+
   defp describe(%{__exception__: true} = exception), do: Exception.message(exception)
   defp describe(other), do: inspect(other)
 end

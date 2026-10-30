@@ -11,7 +11,6 @@ defmodule SuperPi.MCP.ServerDefectsTest do
 
   alias SuperPi.MCP.Server
 
-
   setup do
     SuperPi.Tools.ensure_catalog_ets!()
 
@@ -36,7 +35,8 @@ defmodule SuperPi.MCP.ServerDefectsTest do
     e -> {:raised, e}
   end
 
-  defp rpc(id, method, params), do: %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}
+  defp rpc(id, method, params),
+    do: %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}
 
   describe "malformed requests must produce JSON-RPC errors, not raise (mcp/server.ex:55-140)" do
     @bad_requests [
@@ -44,8 +44,10 @@ defmodule SuperPi.MCP.ServerDefectsTest do
       {"initialize with list params", "initialize", []},
       {"tools/call with null arguments", "tools/call", %{"name" => "read", "arguments" => nil}},
       {"tools/call with list arguments", "tools/call", %{"name" => "read", "arguments" => []}},
-      {"tools/call with a non-string tool name", "tools/call", %{"name" => 123, "arguments" => %{}}},
-      {"tools/call with a non-string path", "tools/call", %{"name" => "read", "arguments" => %{"path" => 123}}}
+      {"tools/call with a non-string tool name", "tools/call",
+       %{"name" => 123, "arguments" => %{}}},
+      {"tools/call with a non-string path", "tools/call",
+       %{"name" => "read", "arguments" => %{"path" => 123}}}
     ]
 
     for {label, method, params} <- @bad_requests do
@@ -75,7 +77,11 @@ defmodule SuperPi.MCP.ServerDefectsTest do
   end
 
   describe "notifications get no reply (mcp/server.ex:57-60,206)" do
-    for method <- ["notifications/cancelled", "notifications/roots/list_changed", "notifications/progress"] do
+    for method <- [
+          "notifications/cancelled",
+          "notifications/roots/list_changed",
+          "notifications/progress"
+        ] do
       test method do
         request = %{"jsonrpc" => "2.0", "method" => unquote(method), "params" => %{}}
         assert {:noreply, _state} = Server.handle_mcp_line(Jason.encode!(request), %{})
@@ -89,7 +95,8 @@ defmodule SuperPi.MCP.ServerDefectsTest do
       File.write!(path, <<255, 254, 253, 0, 200>>)
       on_exit(fn -> File.rm(path) end)
 
-      {:ok, {:reply, reply, _}} = call(rpc(1, "tools/call", %{"name" => "read", "arguments" => %{"path" => path}}))
+      {:ok, {:reply, reply, _}} =
+        call(rpc(1, "tools/call", %{"name" => "read", "arguments" => %{"path" => path}}))
 
       assert {:ok, _json} = Jason.encode(reply),
              "run_stdio would crash in Jason.encode!/1 on this reply"

@@ -27,7 +27,13 @@ defmodule SuperPi.Web.ExtractTest do
   </body></html>
   """
 
-  defp html(body, opts \\ []), do: Extract.extract(body, "text/html; charset=utf-8", [base_url: "https://example.com/base/"] ++ opts)
+  defp html(body, opts \\ []),
+    do:
+      Extract.extract(
+        body,
+        "text/html; charset=utf-8",
+        [base_url: "https://example.com/base/"] ++ opts
+      )
 
   describe "HTML to markdown" do
     test "keeps the main content, drops scripts, styles and chrome" do
@@ -35,7 +41,10 @@ defmodule SuperPi.Web.ExtractTest do
       assert r.kind == :html
       assert r.title == "The Title"
       assert r.text =~ "# Heading One"
-      assert r.text =~ "First **bold** and *italic* with [a link](https://example.com/docs/a?x=1) and `code()`."
+
+      assert r.text =~
+               "First **bold** and *italic* with [a link](https://example.com/docs/a?x=1) and `code()`."
+
       refute r.text =~ "secret"
       refute r.text =~ "alert"
       refute r.text =~ "color:red"
@@ -86,7 +95,11 @@ defmodule SuperPi.Web.ExtractTest do
     end
 
     test "prefers article over body, and keeps the page header when there is no main" do
-      r = html("<body><header><h1>Blog</h1></header><div>junk</div><article><h2>Post</h2><p>Body</p></article></body>")
+      r =
+        html(
+          "<body><header><h1>Blog</h1></header><div>junk</div><article><h2>Post</h2><p>Body</p></article></body>"
+        )
+
       assert r.text =~ "## Post"
       refute r.text =~ "junk"
 
@@ -96,7 +109,8 @@ defmodule SuperPi.Web.ExtractTest do
     end
 
     test "keeps the space between inline elements the parser dropped" do
-      assert html("<p><b>a</b> <i>b</i> <a href=\"/x\">l</a></p>").text == "**a** *b* [l](https://example.com/x)"
+      assert html("<p><b>a</b> <i>b</i> <a href=\"/x\">l</a></p>").text ==
+               "**a** *b* [l](https://example.com/x)"
     end
 
     test "uses the first h1 as the title when there is no title element" do
@@ -149,7 +163,10 @@ defmodule SuperPi.Web.ExtractTest do
   describe "character sets" do
     test "decodes the declared charset" do
       assert Extract.extract(<<"caf", 0xE9>>, "text/plain; charset=iso-8859-1").text == "café"
-      assert Extract.extract(<<0x93, "q", 0x94>>, "text/plain; charset=windows-1252").text == "“q”"
+
+      assert Extract.extract(<<0x93, "q", 0x94>>, "text/plain; charset=windows-1252").text ==
+               "“q”"
+
       assert Extract.extract("café", "text/plain; charset=utf-8").text == "café"
     end
 
@@ -158,7 +175,10 @@ defmodule SuperPi.Web.ExtractTest do
       assert Extract.extract(utf16, "text/plain").text == "héllo"
       assert Extract.extract(<<0xEF, 0xBB, 0xBF, "bom">>, "text/plain").text == "bom"
 
-      page = <<"<html><head><meta charset=\"iso-8859-1\"></head><body><main>caf", 0xE9, "</main></body></html>">>
+      page =
+        <<"<html><head><meta charset=\"iso-8859-1\"></head><body><main>caf", 0xE9,
+          "</main></body></html>">>
+
       assert Extract.extract(page, "text/html").text == "café"
     end
 

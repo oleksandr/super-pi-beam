@@ -41,7 +41,8 @@ defmodule SuperPi.AI.Providers.Anthropic do
   def id, do: "anthropic"
 
   @impl true
-  def handles?(model), do: String.starts_with?(model, "claude-") or String.starts_with?(model, "anthropic/")
+  def handles?(model),
+    do: String.starts_with?(model, "claude-") or String.starts_with?(model, "anthropic/")
 
   @impl true
   def configured?, do: is_binary(api_key()) and api_key() != ""
@@ -94,7 +95,10 @@ defmodule SuperPi.AI.Providers.Anthropic do
   end
 
   defp system_text(sections) do
-    sections |> Enum.map(&(Map.get(&1, "content") || Map.get(&1, :content) || "")) |> Enum.reject(&(&1 == "")) |> Enum.join("\n\n")
+    sections
+    |> Enum.map(&(Map.get(&1, "content") || Map.get(&1, :content) || ""))
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
   end
 
   defp put_unless_empty(map, _key, value) when value in ["", []], do: map
@@ -128,7 +132,14 @@ defmodule SuperPi.AI.Providers.Anthropic do
       "content" => tool_output(m["content"])
     }
 
-    [%{"role" => "user", "content" => [if(m["is_error"] == true, do: Map.put(block, "is_error", true), else: block)]}]
+    [
+      %{
+        "role" => "user",
+        "content" => [
+          if(m["is_error"] == true, do: Map.put(block, "is_error", true), else: block)
+        ]
+      }
+    ]
   end
 
   defp convert(%{"role" => "user", "content" => content}) do
@@ -141,10 +152,15 @@ defmodule SuperPi.AI.Providers.Anthropic do
   defp convert(%{"role" => "assistant", "content" => content}) when is_list(content) do
     blocks =
       Enum.flat_map(content, fn
-        %{"type" => "text", "text" => t} when is_binary(t) and t != "" -> [%{"type" => "text", "text" => t}]
-        %{"type" => "tool_call", "id" => id, "name" => name} = b -> [%{"type" => "tool_use", "id" => id, "name" => name, "input" => b["arguments"] || %{}}]
+        %{"type" => "text", "text" => t} when is_binary(t) and t != "" ->
+          [%{"type" => "text", "text" => t}]
+
+        %{"type" => "tool_call", "id" => id, "name" => name} = b ->
+          [%{"type" => "tool_use", "id" => id, "name" => name, "input" => b["arguments"] || %{}}]
+
         # Thinking blocks are dropped (see the moduledoc).
-        _ -> []
+        _ ->
+          []
       end)
 
     if blocks == [], do: [], else: [%{"role" => "assistant", "content" => blocks}]
@@ -156,7 +172,8 @@ defmodule SuperPi.AI.Providers.Anthropic do
 
   defp convert(_other), do: []
 
-  defp user_blocks(text) when is_binary(text), do: if(String.trim(text) == "", do: [], else: [%{"type" => "text", "text" => text}])
+  defp user_blocks(text) when is_binary(text),
+    do: if(String.trim(text) == "", do: [], else: [%{"type" => "text", "text" => text}])
 
   defp user_blocks(blocks) when is_list(blocks) do
     Enum.flat_map(blocks, fn
@@ -164,7 +181,16 @@ defmodule SuperPi.AI.Providers.Anthropic do
         [%{"type" => "text", "text" => t}]
 
       %{"type" => "image", "source" => src} ->
-        [%{"type" => "image", "source" => %{"type" => "base64", "media_type" => src["media_type"] || "image/png", "data" => src["data"] || ""}}]
+        [
+          %{
+            "type" => "image",
+            "source" => %{
+              "type" => "base64",
+              "media_type" => src["media_type"] || "image/png",
+              "data" => src["data"] || ""
+            }
+          }
+        ]
 
       _ ->
         []
@@ -173,7 +199,9 @@ defmodule SuperPi.AI.Providers.Anthropic do
 
   defp user_blocks(_), do: []
 
-  defp merge(%{"role" => "user", "content" => new}, [%{"role" => "user", "content" => prev} = last | rest]) do
+  defp merge(%{"role" => "user", "content" => new}, [
+         %{"role" => "user", "content" => prev} = last | rest
+       ]) do
     # Tool results first: the API requires them at the start of the message that answers tool_use.
     {results, others} = Enum.split_with(prev ++ new, &(&1["type"] == "tool_result"))
     [%{last | "content" => results ++ others} | rest]
@@ -184,6 +212,9 @@ defmodule SuperPi.AI.Providers.Anthropic do
   defp tool_output(output) when is_binary(output), do: output
   defp tool_output(output), do: Jason.encode!(output)
 
-  defp api_key, do: Application.get_env(:super_pi, :anthropic_api_key) || System.get_env("ANTHROPIC_API_KEY")
-  defp base_url, do: Application.get_env(:super_pi, :anthropic_base_url, "https://api.anthropic.com")
+  defp api_key,
+    do: Application.get_env(:super_pi, :anthropic_api_key) || System.get_env("ANTHROPIC_API_KEY")
+
+  defp base_url,
+    do: Application.get_env(:super_pi, :anthropic_base_url, "https://api.anthropic.com")
 end

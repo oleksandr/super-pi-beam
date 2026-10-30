@@ -61,8 +61,16 @@ defmodule SuperPi.Triggers do
              {:ok, key} <- idempotency_key(conn) do
           enqueue(conn, schedule, body, key)
         else
-          {:error, :bad_body} -> reply(conn, 400, "invalid_body", "Body must be UTF-8 text.")
-          {:error, :bad_key} -> reply(conn, 400, "invalid_idempotency_key", "Idempotency-Key must be printable text of at most #{@max_key_chars} characters.")
+          {:error, :bad_body} ->
+            reply(conn, 400, "invalid_body", "Body must be UTF-8 text.")
+
+          {:error, :bad_key} ->
+            reply(
+              conn,
+              400,
+              "invalid_idempotency_key",
+              "Idempotency-Key must be printable text of at most #{@max_key_chars} characters."
+            )
         end
 
       {:error, :too_large, conn} ->
@@ -90,15 +98,27 @@ defmodule SuperPi.Triggers do
     end
   end
 
-  defp valid_key?(key), do: key != "" and String.length(key) <= @max_key_chars and String.printable?(key)
+  defp valid_key?(key),
+    do: key != "" and String.length(key) <= @max_key_chars and String.printable?(key)
 
   defp enqueue(conn, s, body, key) do
     now = DateTime.utc_now()
 
     # A delivery without a key is always a new run, so its job key is unique by construction.
-    fire_at = if key, do: "key:" <> key, else: "hook:" <> DateTime.to_iso8601(now) <> ":" <> Base.url_encode64(:crypto.strong_rand_bytes(6), padding: false)
+    fire_at =
+      if key,
+        do: "key:" <> key,
+        else:
+          "hook:" <>
+            DateTime.to_iso8601(now) <>
+            ":" <> Base.url_encode64(:crypto.strong_rand_bytes(6), padding: false)
 
-    args = %{"schedule_id" => s.id, "fire_at" => fire_at, "payload" => body, "received_at" => DateTime.to_iso8601(now)}
+    args = %{
+      "schedule_id" => s.id,
+      "fire_at" => fire_at,
+      "payload" => body,
+      "received_at" => DateTime.to_iso8601(now)
+    }
 
     case args |> ScheduleRunWorker.new() |> Oban.insert() do
       {:ok, %Oban.Job{conflict?: true}} ->

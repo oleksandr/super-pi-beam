@@ -19,18 +19,26 @@ defmodule SuperPi.Properties.DiscoveryTest do
         {k, :error} -> Application.delete_env(:super_pi, k)
       end)
 
-      for v <- ["SUPER_PI_DATA_DIR", "SUPER_PI_CONFIG_DIR", "SUPER_PI_DISCOVERY_ROOTS"], do: System.delete_env(v)
+      for v <- ["SUPER_PI_DATA_DIR", "SUPER_PI_CONFIG_DIR", "SUPER_PI_DISCOVERY_ROOTS"],
+          do: System.delete_env(v)
     end)
 
     Enum.each(keys, &Application.delete_env(:super_pi, &1))
-    for v <- ["SUPER_PI_DATA_DIR", "SUPER_PI_CONFIG_DIR", "SUPER_PI_DISCOVERY_ROOTS"], do: System.delete_env(v)
+
+    for v <- ["SUPER_PI_DATA_DIR", "SUPER_PI_CONFIG_DIR", "SUPER_PI_DISCOVERY_ROOTS"],
+        do: System.delete_env(v)
+
     :ok
   end
 
   defp write_skill!(root, name, marker) do
     dir = Path.join([root, name])
     File.mkdir_p!(dir)
-    File.write!(Path.join(dir, "SKILL.md"), "---\nname: #{name}\ndescription: #{marker}\n---\nbody")
+
+    File.write!(
+      Path.join(dir, "SKILL.md"),
+      "---\nname: #{name}\ndescription: #{marker}\n---\nbody"
+    )
   end
 
   defp name_set, do: map(list_of(member_of(@names), max_length: 5), &Enum.uniq/1)
@@ -112,7 +120,11 @@ defmodule SuperPi.Properties.DiscoveryTest do
   end
 
   property "extra roots from the environment keep their order and are expanded" do
-    check all(roots <- list_of(member_of(["/r/one", "/r/two", "/r/three"]), min_length: 1, max_length: 3), max_runs: 30) do
+    check all(
+            roots <-
+              list_of(member_of(["/r/one", "/r/two", "/r/three"]), min_length: 1, max_length: 3),
+            max_runs: 30
+          ) do
       sep = if match?({:win32, _}, :os.type()), do: ";", else: ":"
       Application.delete_env(:super_pi, :discovery_roots)
       System.put_env("SUPER_PI_DISCOVERY_ROOTS", Enum.join(roots, sep))

@@ -43,7 +43,12 @@ defmodule SuperPi.Memory.Search do
   alias SuperPi.Repo
 
   @doc "Candidate ids with a raw rank (higher is better). `topic` is a normalized topic or `nil`."
-  @callback candidates(scope :: M.scope(), words :: [String.t()], topic :: String.t() | nil, limit :: pos_integer()) ::
+  @callback candidates(
+              scope :: M.scope(),
+              words :: [String.t()],
+              topic :: String.t() | nil,
+              limit :: pos_integer()
+            ) ::
               {:ok, [{integer(), number()}]} | {:error, term()}
 
   @doc "Backend name for `details`."
@@ -94,7 +99,7 @@ defmodule SuperPi.Memory.Search do
     else
       {backend, degraded, raw} = candidates(scope, words, topic, max(limit * 4, 20))
       ids = Enum.map(raw, &elem(&1, 0))
-      notes = Map.new(Repo.all(from m in Memory, where: m.id in ^ids), &{&1.id, &1})
+      notes = Map.new(Repo.all(from(m in Memory, where: m.id in ^ids)), &{&1.id, &1})
       max_raw = raw |> Enum.map(&elem(&1, 1)) |> Enum.max(fn -> 0 end)
 
       entries =
@@ -183,8 +188,11 @@ defmodule SuperPi.Memory.Search do
     {next, changed?} =
       Enum.map_reduce(entries, false, fn e, changed? ->
         case e.memory.superseded_by_id && Map.fetch(scores, e.memory.superseded_by_id) do
-          {:ok, superseder} when e.score >= superseder -> {%{e | score: superseder - 1.0e-9}, true}
-          _ -> {e, changed?}
+          {:ok, superseder} when e.score >= superseder ->
+            {%{e | score: superseder - 1.0e-9}, true}
+
+          _ ->
+            {e, changed?}
         end
       end)
 

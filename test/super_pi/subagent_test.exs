@@ -18,7 +18,12 @@ defmodule SuperPi.SubagentTest do
   alias SuperPi.TestSupport.Faults
 
   defp parent!(agent \\ %{}) do
-    base = %{"model" => "test-model", "executionMode" => "accept-edits", "workspacePaths" => [File.cwd!()]}
+    base = %{
+      "model" => "test-model",
+      "executionMode" => "accept-edits",
+      "workspacePaths" => [File.cwd!()]
+    }
+
     Storage.create_conversation!(agent: Map.merge(base, agent))
   end
 
@@ -67,11 +72,23 @@ defmodule SuperPi.SubagentTest do
   end
 
   # Jobs of this test. Other runs on a shared database (the cluster tests) leave finished ones.
-  defp queued_jobs, do: Repo.all(from j in Oban.Job, where: j.worker == "SuperPi.Workers.SubagentWorker" and j.state == "available", order_by: j.id)
-  defp subagent_tasks, do: Repo.all(from t in TaskSchema, where: t.kind == "pi.subagent", order_by: t.id)
+  defp queued_jobs,
+    do:
+      Repo.all(
+        from(j in Oban.Job,
+          where: j.worker == "SuperPi.Workers.SubagentWorker" and j.state == "available",
+          order_by: j.id
+        )
+      )
+
+  defp subagent_tasks,
+    do: Repo.all(from(t in TaskSchema, where: t.kind == "pi.subagent", order_by: t.id))
+
   defp task_status(id), do: Repo.get!(TaskSchema, id).status
   defp children(res), do: res["structured_output"]["subagents"]
-  defp registered_machines, do: Enum.map(Locator.all(), fn {id, _pid} -> {:conversation_machine, id} end)
+
+  defp registered_machines,
+    do: Enum.map(Locator.all(), fn {id, _pid} -> {:conversation_machine, id} end)
 
   defp eventually(fun, tries \\ 300) do
     cond do
@@ -88,11 +105,17 @@ defmodule SuperPi.SubagentTest do
       conv = parent!()
       task = parent_task!(conv)
 
-      res = delegate(conv, %{"role" => "scout", "prompt" => "find the router"}, %{active_task_id: task.id})
+      res =
+        delegate(conv, %{"role" => "scout", "prompt" => "find the router"}, %{
+          active_task_id: task.id
+        })
 
       refute res["is_error"]
       assert res["output"] =~ "acknowledgement"
-      assert [%{"status" => "started", "child_conversation_id" => child_id, "task_id" => task_id}] = children(res)
+
+      assert [%{"status" => "started", "child_conversation_id" => child_id, "task_id" => task_id}] =
+               children(res)
+
       assert res["output"] =~ "child conversation #{child_id}"
 
       # The control directive tells the machine to park, on these tasks.
@@ -102,7 +125,9 @@ defmodule SuperPi.SubagentTest do
       assert [%{id: ^task_id, status: "pending"}] = subagent_tasks()
       assert task_status(task.id) == "waiting"
       assert Locator.whereis(child_id) == nil
-      assert [%{worker: "SuperPi.Workers.SubagentWorker", queue: "subagents", max_attempts: 1}] = queued_jobs()
+
+      assert [%{worker: "SuperPi.Workers.SubagentWorker", queue: "subagents", max_attempts: 1}] =
+               queued_jobs()
     end
 
     test "the child runs in its job and its answer is the task's summary" do
@@ -121,7 +146,9 @@ defmodule SuperPi.SubagentTest do
     test "a child's job that finds its task aborted does nothing" do
       children_respond!(text("never"))
       conv = parent!()
-      [%{"task_id" => task_id, "child_conversation_id" => child_id}] = conv |> delegate(%{"role" => "scout", "prompt" => "x"}) |> children()
+
+      [%{"task_id" => task_id, "child_conversation_id" => child_id}] =
+        conv |> delegate(%{"role" => "scout", "prompt" => "x"}) |> children()
 
       TaskEngine.abort_task!(task_id)
       assert %{success: 1} = drain()
@@ -168,7 +195,9 @@ defmodule SuperPi.SubagentTest do
 
       conv = parent!()
       Auth.claim!(conv.id, "alice")
-      [%{"child_conversation_id" => child_id}] = conv |> delegate(%{"role" => "scout", "prompt" => "x"}) |> children()
+
+      [%{"child_conversation_id" => child_id}] =
+        conv |> delegate(%{"role" => "scout", "prompt" => "x"}) |> children()
 
       assert Auth.owner(child_id) == "alice"
     end
@@ -184,7 +213,15 @@ defmodule SuperPi.SubagentTest do
 
     test "a delegation without a running turn is refused" do
       conv = parent!()
-      res = Subagent.wrap_tool("delegate_subagent", %{"role" => "scout", "prompt" => "x"}, fn _ -> %{} end, %{conversation_id: conv.id})
+
+      res =
+        Subagent.wrap_tool(
+          "delegate_subagent",
+          %{"role" => "scout", "prompt" => "x"},
+          fn _ -> %{} end,
+          %{conversation_id: conv.id}
+        )
+
       assert res["structured_output"]["status"] == "invalid_context"
     end
 
@@ -209,13 +246,30 @@ defmodule SuperPi.SubagentTest do
       task = parent_task!(conv)
 
       [%{"child_conversation_id" => child_id}] =
-        conv |> delegate(%{"role" => "scout", "prompt" => "look"}, %{active_task_id: task.id}) |> children()
+        conv
+        |> delegate(%{"role" => "scout", "prompt" => "look"}, %{active_task_id: task.id})
+        |> children()
 
       drain()
 
-      assert_receive {:conversation_event, _, %{"type" => "subagent_started", "child_conversation_id" => ^child_id, "role" => "scout", "task" => "look", "turn_id" => turn}}
+      assert_receive {:conversation_event, _,
+                      %{
+                        "type" => "subagent_started",
+                        "child_conversation_id" => ^child_id,
+                        "role" => "scout",
+                        "task" => "look",
+                        "turn_id" => turn
+                      }}
+
       assert turn == task.id
-      assert_receive {:conversation_event, _, %{"type" => "subagent_finished", "child_conversation_id" => ^child_id, "status" => "completed", "summary" => "found it"}}
+
+      assert_receive {:conversation_event, _,
+                      %{
+                        "type" => "subagent_finished",
+                        "child_conversation_id" => ^child_id,
+                        "status" => "completed",
+                        "summary" => "found it"
+                      }}
     end
 
     test "a failed child is reported as failed" do
@@ -225,7 +279,9 @@ defmodule SuperPi.SubagentTest do
       delegate(conv, %{"role" => "scout", "prompt" => "x"})
       drain()
 
-      assert_receive {:conversation_event, _, %{"type" => "subagent_finished", "status" => "failed", "summary" => summary}}
+      assert_receive {:conversation_event, _,
+                      %{"type" => "subagent_finished", "status" => "failed", "summary" => summary}}
+
       assert summary =~ "boom"
     end
   end
@@ -243,7 +299,9 @@ defmodule SuperPi.SubagentTest do
 
         assert agent["executionMode"] == "plan"
         names = Enum.map(agent["tools"], & &1["name"])
-        assert names -- ["read", "grep", "find", "ls", "tool_search"] == [], "#{role}: #{inspect(names)}"
+
+        assert names -- ["read", "grep", "find", "ls", "tool_search"] == [],
+               "#{role}: #{inspect(names)}"
       end
     end
 
@@ -314,7 +372,9 @@ defmodule SuperPi.SubagentTest do
       children_respond!(fn _p, _c -> Process.sleep(3_000) && {:ok, Faults.text_msg("late")} end)
       before = registered_machines()
       conv = parent!()
-      [%{"task_id" => task_id}] = conv |> delegate(%{"role" => "scout", "prompt" => "x", "timeout_ms" => 200}) |> children()
+
+      [%{"task_id" => task_id}] =
+        conv |> delegate(%{"role" => "scout", "prompt" => "x", "timeout_ms" => 200}) |> children()
 
       drain()
 
@@ -374,14 +434,24 @@ defmodule SuperPi.SubagentTest do
 
     test "one failure does not hide the others" do
       children_respond!(fn payload, _ctx ->
-        if inspect(payload.messages) =~ "bad", do: {:error, "nope"}, else: {:ok, Faults.text_msg("good result")}
+        if inspect(payload.messages) =~ "bad",
+          do: {:error, "nope"},
+          else: {:ok, Faults.text_msg("good result")}
       end)
 
       conv = parent!()
-      delegate(conv, %{"tasks" => [%{"role" => "scout", "prompt" => "bad one"}, %{"role" => "scout", "prompt" => "fine"}]})
+
+      delegate(conv, %{
+        "tasks" => [
+          %{"role" => "scout", "prompt" => "bad one"},
+          %{"role" => "scout", "prompt" => "fine"}
+        ]
+      })
+
       drain()
 
-      assert [%{status: "failed"}, %{status: "completed", result: %{"summary" => "good result"}}] = subagent_tasks()
+      assert [%{status: "failed"}, %{status: "completed", result: %{"summary" => "good result"}}] =
+               subagent_tasks()
     end
   end
 
@@ -400,15 +470,24 @@ defmodule SuperPi.SubagentTest do
             %{"role" => "scout", "prompt" => "x", "wait_policy" => "whenever"}
           ] do
         res = delegate(conv, args)
-        assert res["structured_output"]["status"] == "invalid_arguments", "args #{inspect(args)}: #{inspect(res)}"
+
+        assert res["structured_output"]["status"] == "invalid_arguments",
+               "args #{inspect(args)}: #{inspect(res)}"
       end
 
-      assert Repo.all(from c in Conversation, where: c.owner_kind == "task") == []
+      assert Repo.all(from(c in Conversation, where: c.owner_kind == "task")) == []
       assert queued_jobs() == []
     end
 
     test "a call without a conversation context is an error, not a crash" do
-      res = Subagent.wrap_tool("delegate_subagent", %{"role" => "scout", "prompt" => "x"}, fn _ -> %{} end, %{})
+      res =
+        Subagent.wrap_tool(
+          "delegate_subagent",
+          %{"role" => "scout", "prompt" => "x"},
+          fn _ -> %{} end,
+          %{}
+        )
+
       assert res["structured_output"]["status"] == "invalid_context"
     end
 
@@ -437,22 +516,40 @@ defmodule SuperPi.SubagentTest do
     end
 
     defp start_parent(conv, responder) do
-      {:ok, pid} = Machine.start_link(conversation_id: conv.id, extensions: [{Subagent, []}], llm_responder: responder)
+      {:ok, pid} =
+        Machine.start_link(
+          conversation_id: conv.id,
+          extensions: [{Subagent, []}],
+          llm_responder: responder
+        )
+
       pid
     end
 
-    defp submit_async(pid, text), do: Task.async(fn -> Machine.safe_submit(pid, text, timeout: 30_000) end)
+    defp submit_async(pid, text),
+      do: Task.async(fn -> Machine.safe_submit(pid, text, timeout: 30_000) end)
 
     defp user_texts(messages) do
       for %{"role" => "user", "content" => [%{"text" => t} | _]} <- messages, do: t
     end
 
-    defp generation_task(conv), do: Repo.one!(from t in TaskSchema, where: t.conversation_id == ^conv.id and t.kind == "pi.generation")
+    defp generation_task(conv),
+      do:
+        Repo.one!(
+          from(t in TaskSchema,
+            where: t.conversation_id == ^conv.id and t.kind == "pi.generation"
+          )
+        )
 
     test "the model delegates, the machine parks, and the summaries arrive as the next messages" do
       children_respond!(text("The router lives in lib/router.ex"))
       conv = parent!(%{"executionMode" => "auto"})
-      pid = start_parent(conv, parent_responder(self(), %{"role" => "scout", "prompt" => "where is the router?"}))
+
+      pid =
+        start_parent(
+          conv,
+          parent_responder(self(), %{"role" => "scout", "prompt" => "where is the router?"})
+        )
 
       sub = submit_async(pid, "delegate please")
       eventually(fn -> machine_state(pid) == :awaiting_children end)
@@ -466,7 +563,11 @@ defmodule SuperPi.SubagentTest do
       assert [%{"content" => ack}] = Enum.filter(history, &(&1["role"] == "tool"))
       assert ack =~ "acknowledgement"
       refute ack =~ "lib/router.ex"
-      assert Enum.any?(user_texts(history), &(&1 =~ "Subagent scout" and &1 =~ "finished" and &1 =~ "lib/router.ex"))
+
+      assert Enum.any?(
+               user_texts(history),
+               &(&1 =~ "Subagent scout" and &1 =~ "finished" and &1 =~ "lib/router.ex")
+             )
 
       assert task_status(generation_task(conv).id) == "completed"
     end
@@ -536,7 +637,14 @@ defmodule SuperPi.SubagentTest do
       me = self()
       children_respond!(blocking(me))
       conv = parent!(%{"executionMode" => "auto"})
-      delegation = %{"tasks" => [%{"role" => "scout", "prompt" => "first"}, %{"role" => "worker", "prompt" => "second"}]}
+
+      delegation = %{
+        "tasks" => [
+          %{"role" => "scout", "prompt" => "first"},
+          %{"role" => "worker", "prompt" => "second"}
+        ]
+      }
+
       pid = start_parent(conv, parent_responder(me, delegation))
 
       sub = submit_async(pid, "go")
@@ -566,11 +674,20 @@ defmodule SuperPi.SubagentTest do
       me = self()
 
       children_respond!(fn payload, ctx ->
-        if inspect(payload.messages) =~ "bad", do: {:error, "boom"}, else: blocking(me, "slow result").(payload, ctx)
+        if inspect(payload.messages) =~ "bad",
+          do: {:error, "boom"},
+          else: blocking(me, "slow result").(payload, ctx)
       end)
 
       conv = parent!(%{"executionMode" => "auto"})
-      delegation = %{"tasks" => [%{"role" => "scout", "prompt" => "bad"}, %{"role" => "scout", "prompt" => "slow"}]}
+
+      delegation = %{
+        "tasks" => [
+          %{"role" => "scout", "prompt" => "bad"},
+          %{"role" => "scout", "prompt" => "slow"}
+        ]
+      }
+
       pid = start_parent(conv, parent_responder(me, delegation))
 
       sub = submit_async(pid, "go")
@@ -597,14 +714,19 @@ defmodule SuperPi.SubagentTest do
       me = self()
 
       children_respond!(fn payload, ctx ->
-        if inspect(payload.messages) =~ "bad", do: {:error, "boom"}, else: blocking(me).(payload, ctx)
+        if inspect(payload.messages) =~ "bad",
+          do: {:error, "boom"},
+          else: blocking(me).(payload, ctx)
       end)
 
       conv = parent!(%{"executionMode" => "auto"})
 
       delegation = %{
         "wait_policy" => "fail_fast",
-        "tasks" => [%{"role" => "scout", "prompt" => "bad"}, %{"role" => "scout", "prompt" => "slow"}]
+        "tasks" => [
+          %{"role" => "scout", "prompt" => "bad"},
+          %{"role" => "scout", "prompt" => "slow"}
+        ]
       }
 
       pid = start_parent(conv, parent_responder(me, delegation))
@@ -639,7 +761,13 @@ defmodule SuperPi.SubagentTest do
       :gen_statem.stop(pid)
       Locator.await_gone(conv.id)
 
-      {:ok, pid2} = Machine.start_link(conversation_id: conv.id, extensions: [{Subagent, []}], llm_responder: responder)
+      {:ok, pid2} =
+        Machine.start_link(
+          conversation_id: conv.id,
+          extensions: [{Subagent, []}],
+          llm_responder: responder
+        )
+
       eventually(fn -> machine_state(pid2) == :awaiting_children end)
       assert task_status(generation_task(conv).id) == "waiting"
 
@@ -665,7 +793,12 @@ defmodule SuperPi.SubagentTest do
       drain()
       assert task_status(generation_task(conv).id) == "pending"
 
-      {:ok, _pid2} = Machine.start_link(conversation_id: conv.id, extensions: [{Subagent, []}], llm_responder: responder)
+      {:ok, _pid2} =
+        Machine.start_link(
+          conversation_id: conv.id,
+          extensions: [{Subagent, []}],
+          llm_responder: responder
+        )
 
       eventually(fn -> task_status(generation_task(conv).id) == "completed" end)
       assert_received {:history, history}
@@ -677,16 +810,28 @@ defmodule SuperPi.SubagentTest do
       children_respond!(text("resumed answer"))
       conv = parent!()
       task = parent_task!(conv)
+
       [%{"task_id" => sub_task_id, "child_conversation_id" => child_id}] =
-        conv |> delegate(%{"role" => "scout", "prompt" => "x"}, %{active_task_id: task.id}) |> children()
+        conv
+        |> delegate(%{"role" => "scout", "prompt" => "x"}, %{active_task_id: task.id})
+        |> children()
 
       {:ok, _} = TaskEngine.start_task(sub_task_id)
-      Storage.append_entry!(child_id, "pi.message", %{"role" => "user", "content" => [%{"type" => "text", "text" => "x"}]})
+
+      Storage.append_entry!(child_id, "pi.message", %{
+        "role" => "user",
+        "content" => [%{"type" => "text", "text" => "x"}]
+      })
+
       {:ok, gen} = TaskEngine.create_task(child_id, "pi.generation", %{"prompt" => "x"})
       {:ok, _} = TaskEngine.start_task(gen.id)
-      Repo.update_all(from(t in TaskSchema, where: t.id == ^gen.id), set: [owner_node: "dead@127.0.0.1"])
 
-      {:ok, pid} = Locator.ensure_started(child_id, SuperPi.Workers.SubagentWorker.machine_opts("scout"))
+      Repo.update_all(from(t in TaskSchema, where: t.id == ^gen.id),
+        set: [owner_node: "dead@127.0.0.1"]
+      )
+
+      {:ok, pid} =
+        Locator.ensure_started(child_id, SuperPi.Workers.SubagentWorker.machine_opts("scout"))
 
       eventually(fn -> task_status(sub_task_id) == "completed" end)
       assert Repo.get!(TaskSchema, sub_task_id).result["summary"] == "resumed answer"

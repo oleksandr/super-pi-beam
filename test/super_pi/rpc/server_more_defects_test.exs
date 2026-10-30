@@ -14,7 +14,6 @@ defmodule SuperPi.RPC.ServerMoreDefectsTest do
   alias SuperPi.RPC.Server
   alias SuperPi.TestSupport.Faults
 
-
   defp request(id, method, params) do
     Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params})
   end
@@ -25,7 +24,10 @@ defmodule SuperPi.RPC.ServerMoreDefectsTest do
 
   defp connect do
     {:ok, server} = Server.start_link(port: 0)
-    {:ok, sock} = :gen_tcp.connect(~c"127.0.0.1", Server.port(server), [:binary, packet: :raw, active: false])
+
+    {:ok, sock} =
+      :gen_tcp.connect(~c"127.0.0.1", Server.port(server), [:binary, packet: :raw, active: false])
+
     on_exit(fn -> :gen_tcp.close(sock) end)
     sock
   end
@@ -51,7 +53,13 @@ defmodule SuperPi.RPC.ServerMoreDefectsTest do
 
     pid =
       spawn(fn ->
-        {:ok, _} = Horde.Registry.register(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv_id}, nil)
+        {:ok, _} =
+          Horde.Registry.register(
+            SuperPi.Conversation.Locator.registry(),
+            {:conversation_machine, conv_id},
+            nil
+          )
+
         send(test, :fake_registered)
 
         receive do
@@ -93,7 +101,11 @@ defmodule SuperPi.RPC.ServerMoreDefectsTest do
 
       assert_receive {:DOWN, ^ref, :process, ^pid, :connection_crashed}, 5_000
 
-      assert [{machine, _}] = Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv.id}),
+      assert [{machine, _}] =
+               Horde.Registry.lookup(
+                 SuperPi.Conversation.Locator.registry(),
+                 {:conversation_machine, conv.id}
+               ),
              "machine is gone after its connection process exited"
 
       assert Process.alive?(machine)
@@ -106,8 +118,14 @@ defmodule SuperPi.RPC.ServerMoreDefectsTest do
       start_fake_machine(conv_id, :hang)
       sock = connect()
 
-      :ok = :gen_tcp.send(sock, request(1, "session.submit", %{"conversation_id" => conv_id, "text" => "hi"}) <> "\n")
-      :ok = :gen_tcp.send(sock, request(2, "session.cancel", %{"conversation_id" => conv_id}) <> "\n")
+      :ok =
+        :gen_tcp.send(
+          sock,
+          request(1, "session.submit", %{"conversation_id" => conv_id, "text" => "hi"}) <> "\n"
+        )
+
+      :ok =
+        :gen_tcp.send(sock, request(2, "session.cancel", %{"conversation_id" => conv_id}) <> "\n")
 
       assert {:ok, %{"id" => 2}} = recv_json(sock, 1_000),
              "session.cancel was not answered within 1s while a submit was pending"
@@ -118,7 +136,11 @@ defmodule SuperPi.RPC.ServerMoreDefectsTest do
       start_fake_machine(conv_id, :die)
       sock = connect()
 
-      :ok = :gen_tcp.send(sock, request(1, "session.submit", %{"conversation_id" => conv_id, "text" => "hi"}) <> "\n")
+      :ok =
+        :gen_tcp.send(
+          sock,
+          request(1, "session.submit", %{"conversation_id" => conv_id, "text" => "hi"}) <> "\n"
+        )
 
       assert {:ok, reply} = recv_json(sock, 2_000)
       assert is_map(reply["error"])
@@ -152,7 +174,11 @@ defmodule SuperPi.RPC.ServerMoreDefectsTest do
       Phoenix.PubSub.subscribe(SuperPi.PubSub, "conversation:#{conv.id}")
 
       {_reply, _, _} =
-        handle("session.submit", %{"conversation_id" => conv.id, "text" => "long task", "async" => true})
+        handle("session.submit", %{
+          "conversation_id" => conv.id,
+          "text" => "long task",
+          "async" => true
+        })
 
       assert_receive {:responder_started, responder}, 5_000
       on_exit(fn -> if Process.alive?(responder), do: send(responder, :release) end)
@@ -190,7 +216,8 @@ defmodule SuperPi.RPC.ServerMoreDefectsTest do
           next
         end)
 
-      assert length(final.coalesced_queue) <= 1_000, "queue grew to #{length(final.coalesced_queue)} entries"
+      assert length(final.coalesced_queue) <= 1_000,
+             "queue grew to #{length(final.coalesced_queue)} entries"
     end
   end
 end

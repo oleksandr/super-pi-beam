@@ -51,7 +51,8 @@ defmodule SuperPi.RPC.Server do
   Processes a single raw JSON-RPC 2.0 line and returns `{reply_map | nil, updated_client_state, outbound_notifications}`.
   Pure state-transition function that is also used directly by `ExUnitProperties` (`REQ-PBT-07`).
   """
-  def handle_rpc_payload(raw_json, client_state) when is_binary(raw_json) and is_map(client_state) do
+  def handle_rpc_payload(raw_json, client_state)
+      when is_binary(raw_json) and is_map(client_state) do
     case Jason.decode(raw_json) do
       {:ok, %{"jsonrpc" => "2.0", "method" => method} = req} when is_binary(method) ->
         id = Map.get(req, "id")
@@ -64,7 +65,9 @@ defmodule SuperPi.RPC.Server do
 
             case with(:ok <- accepting(method), do: authorize(method, safe_params, client_state)) do
               :ok ->
-                {reply, next_state, notifs} = dispatch_method(method, safe_params, id, client_state)
+                {reply, next_state, notifs} =
+                  dispatch_method(method, safe_params, id, client_state)
+
                 reply = if has_id?, do: reply, else: nil
                 {reply, next_state, notifs}
 
@@ -96,7 +99,8 @@ defmodule SuperPi.RPC.Server do
   - If `map_size(client_state.in_flight) >= 2`, coalesces `event_payload` into `client_state.coalesced_queue`
     without emitting any wire frame until the client calls `session.ack`.
   """
-  def enqueue_watch_event(client_state, event_payload) when is_map(client_state) and is_map(event_payload) do
+  def enqueue_watch_event(client_state, event_payload)
+      when is_map(client_state) and is_map(event_payload) do
     in_flight = Map.get(client_state, :in_flight, %{})
     next_batch_id = Map.get(client_state, :next_batch_id, 1)
 
@@ -135,7 +139,8 @@ defmodule SuperPi.RPC.Server do
   Removes `batch_id` from `in_flight`; if `coalesced_queue` is non-empty and `map_size(in_flight) < 2`,
   flushes all coalesced events in a single consolidated `session.event` batch.
   """
-  def ack_watch_batch(client_state, batch_id) when is_map(client_state) and is_integer(batch_id) do
+  def ack_watch_batch(client_state, batch_id)
+      when is_map(client_state) and is_integer(batch_id) do
     in_flight = Map.get(client_state, :in_flight, %{}) |> Map.delete(batch_id)
     coalesced = Map.get(client_state, :coalesced_queue, [])
     next_batch_id = Map.get(client_state, :next_batch_id, 1)
@@ -184,7 +189,10 @@ defmodule SuperPi.RPC.Server do
       case Keyword.get(opts, :socket_path) do
         nil ->
           {:ok, sock} =
-            :gen_tcp.listen(Keyword.get(opts, :port, 0), base ++ [reuseaddr: true, ip: {127, 0, 0, 1}])
+            :gen_tcp.listen(
+              Keyword.get(opts, :port, 0),
+              base ++ [reuseaddr: true, ip: {127, 0, 0, 1}]
+            )
 
           {:ok, actual_port} = :inet.port(sock)
           {sock, actual_port, nil}
@@ -280,23 +288,28 @@ defmodule SuperPi.RPC.Server do
 
         # Deferred events go through the live backpressure window.
         next_state =
-          Enum.reduce(notifs, Map.update(client_state, :submit_tasks, [], &List.delete(&1, task_pid)), fn
-            {:deferred_event, event}, acc ->
-              {acc2, out} = enqueue_watch_event(acc, event)
-              Enum.each(out, &send_line(sock, Jason.encode!(&1) <> "\n"))
-              acc2
+          Enum.reduce(
+            notifs,
+            Map.update(client_state, :submit_tasks, [], &List.delete(&1, task_pid)),
+            fn
+              {:deferred_event, event}, acc ->
+                {acc2, out} = enqueue_watch_event(acc, event)
+                Enum.each(out, &send_line(sock, Jason.encode!(&1) <> "\n"))
+                acc2
 
-            notif, acc ->
-              send_line(sock, Jason.encode!(notif) <> "\n")
-              acc
-          end)
+              notif, acc ->
+                send_line(sock, Jason.encode!(notif) <> "\n")
+                acc
+            end
+          )
 
         client_loop(sock, next_state, buf)
 
       {:conversation_event, conv_id, event_payload} ->
         if MapSet.member?(client_state.watched_conversations, conv_id) do
           # The RPC renderer is the identity on the wire form, with the envelope (`v`, `turn_id`) filled in.
-          {wires, _} = SuperPi.Event.Renderer.RPC.render(SuperPi.Event.from_wire(event_payload), nil)
+          {wires, _} =
+            SuperPi.Event.Renderer.RPC.render(SuperPi.Event.from_wire(event_payload), nil)
 
           {next_state, notifications} =
             Enum.reduce(wires, {client_state, []}, fn wire, {st, notifs} ->
@@ -320,12 +333,14 @@ defmodule SuperPi.RPC.Server do
         Enum.each(Map.get(client_state, :submit_tasks, []), fn pid ->
           Process.exit(pid, :kill)
         end)
+
         close_transport(sock)
 
       {:tcp_error, ^sock, _reason} ->
         Enum.each(Map.get(client_state, :submit_tasks, []), fn pid ->
           Process.exit(pid, :kill)
         end)
+
         close_transport(sock)
 
       # Anything else on the conversation topic (for example job notices). Drop it, or it
@@ -456,7 +471,8 @@ defmodule SuperPi.RPC.Server do
       is_map(params) and Map.has_key?(params, "agent") and not is_map(params["agent"]) ->
         {:error, -32602, "Invalid params: agent must be an object"}
 
-      is_map(params) and Map.has_key?(params, "conversation_id") and not is_integer(params["conversation_id"]) ->
+      is_map(params) and Map.has_key?(params, "conversation_id") and
+          not is_integer(params["conversation_id"]) ->
         {:error, -32602, "Invalid params: conversation_id must be an integer"}
 
       true ->
@@ -597,7 +613,9 @@ defmodule SuperPi.RPC.Server do
 
   # A draining node takes no new sessions or turns (see SuperPi.Drain).
   defp accepting(method) when method in ["session.open", "session.submit"] do
-    if SuperPi.Drain.accepting?(), do: :ok, else: {:error, -32005, "Server is shutting down; retry on another node"}
+    if SuperPi.Drain.accepting?(),
+      do: :ok,
+      else: {:error, -32005, "Server is shutting down; retry on another node"}
   end
 
   defp accepting(_method), do: :ok
@@ -668,7 +686,8 @@ defmodule SuperPi.RPC.Server do
   defp dispatch_method("auth.login", params, id, client_state) do
     case Auth.authenticate(Map.get(params, "token")) do
       {:ok, principal} ->
-        {jsonrpc_result(id, %{"principal" => principal}), Map.put(client_state, :principal, principal), []}
+        {jsonrpc_result(id, %{"principal" => principal}),
+         Map.put(client_state, :principal, principal), []}
 
       :error ->
         {jsonrpc_error(id, -32001, "Unauthorized: invalid token"), client_state, []}
@@ -677,8 +696,11 @@ defmodule SuperPi.RPC.Server do
 
   defp dispatch_method("session.open", params, id, client_state) do
     case fetch_harness(params) do
-      {:ok, harness} -> open_session(harness, params, id, client_state)
-      {:error, reason} -> {jsonrpc_error(id, -32602, "Unknown harness: #{inspect(reason)}"), client_state, []}
+      {:ok, harness} ->
+        open_session(harness, params, id, client_state)
+
+      {:error, reason} ->
+        {jsonrpc_error(id, -32602, "Unknown harness: #{inspect(reason)}"), client_state, []}
     end
   end
 
@@ -702,12 +724,16 @@ defmodule SuperPi.RPC.Server do
         end
       end)
 
-      {jsonrpc_result(id, %{"status" => "accepted", "conversation_id" => conv_id, "seq" => Storage.current_seq()}),
-       client_state, []}
+      {jsonrpc_result(id, %{
+         "status" => "accepted",
+         "conversation_id" => conv_id,
+         "seq" => Storage.current_seq()
+       }), client_state, []}
     else
       case Machine.safe_submit(pid, text, mode: mode, timeout: 120_000) do
         {:ok, res} ->
-          {jsonrpc_result(id, %{"status" => "ok", "result" => res, "seq" => Storage.current_seq()}), client_state, []}
+          {jsonrpc_result(id, %{"status" => "ok", "result" => res, "seq" => Storage.current_seq()}),
+           client_state, []}
 
         {:error, reason} ->
           publish_machine_death(conv_id, reason)
@@ -719,9 +745,12 @@ defmodule SuperPi.RPC.Server do
   defp dispatch_method("session.fork", params, id, client_state) do
     parent_id = Map.fetch!(params, "conversation_id")
     at_entry_id = Map.fetch!(params, "at_entry_id")
+
     forked =
       try do
-        Storage.fork_conversation!(parent_id, at_entry_id, owner: principal(client_state) || Auth.anonymous())
+        Storage.fork_conversation!(parent_id, at_entry_id,
+          owner: principal(client_state) || Auth.anonymous()
+        )
       rescue
         Ecto.NoResultsError -> {:error, :entry_not_found}
       end
@@ -807,9 +836,13 @@ defmodule SuperPi.RPC.Server do
     next_state = Map.put(client_state, :watched_conversations, watched)
 
     {next_state, notifs} =
-      enqueue_watch_event(next_state, SuperPi.Event.to_wire(SuperPi.Event.watch_started(conv_id, Storage.current_seq())))
+      enqueue_watch_event(
+        next_state,
+        SuperPi.Event.to_wire(SuperPi.Event.watch_started(conv_id, Storage.current_seq()))
+      )
 
-    {jsonrpc_result(id, %{"watching" => conv_id, "max_in_flight" => @max_in_flight_batches}), next_state, notifs}
+    {jsonrpc_result(id, %{"watching" => conv_id, "max_in_flight" => @max_in_flight_batches}),
+     next_state, notifs}
   end
 
   defp dispatch_method("session.ack", params, id, client_state) do
@@ -824,8 +857,12 @@ defmodule SuperPi.RPC.Server do
     value = Map.get(params, "value")
 
     case SuperPi.UI.Broker.respond(req_id, value) do
-      :ok -> {jsonrpc_result(id, %{"resolved" => req_id}), client_state, []}
-      {:error, :unknown_request} -> {jsonrpc_error(id, -32004, "No question is waiting under request_id #{req_id}"), client_state, []}
+      :ok ->
+        {jsonrpc_result(id, %{"resolved" => req_id}), client_state, []}
+
+      {:error, :unknown_request} ->
+        {jsonrpc_error(id, -32004, "No question is waiting under request_id #{req_id}"),
+         client_state, []}
     end
   end
 
@@ -860,11 +897,15 @@ defmodule SuperPi.RPC.Server do
     Storage.configure_agent!(conv_id, patch)
     updated = Doc.snapshot("conversation", conv_id, "pi.agent")
 
-    {jsonrpc_result(id, %{"conversation_id" => conv_id, "agent" => updated, "seq" => Storage.current_seq()}),
-     client_state, []}
+    {jsonrpc_result(id, %{
+       "conversation_id" => conv_id,
+       "agent" => updated,
+       "seq" => Storage.current_seq()
+     }), client_state, []}
   end
 
-  defp dispatch_method(method, _params, id, client_state) when method in ["workspace.metadata", "metadata"] do
+  defp dispatch_method(method, _params, id, client_state)
+       when method in ["workspace.metadata", "metadata"] do
     reply =
       jsonrpc_result(id, %{
         "models" => SuperPi.CLI.models_catalog(),
@@ -896,7 +937,11 @@ defmodule SuperPi.RPC.Server do
             |> Permissions.apply_remote_mode(Map.get(base_agent, "executionMode"))
 
           agent_cfg = Map.merge(defaults, base_agent)
-          Storage.create_conversation!(agent: agent_cfg, owner: principal(client_state) || Auth.anonymous())
+
+          Storage.create_conversation!(
+            agent: agent_cfg,
+            owner: principal(client_state) || Auth.anonymous()
+          )
 
         conv_id ->
           if Map.has_key?(params, "agent") do
@@ -907,7 +952,8 @@ defmodule SuperPi.RPC.Server do
             end
           end
 
-          Repo.get(Conversation, conv_id) || throw({:rpc_error, -32004, "Conversation not found: #{conv_id}"})
+          Repo.get(Conversation, conv_id) ||
+            throw({:rpc_error, -32004, "Conversation not found: #{conv_id}"})
       end
 
     extensions = SuperPi.Harness.remote_extensions(harness)
@@ -945,7 +991,9 @@ defmodule SuperPi.RPC.Server do
     end
   end
 
-  defp sanitize_agent_param(agent) when is_map(agent), do: Permissions.sanitize_remote_agent(agent)
+  defp sanitize_agent_param(agent) when is_map(agent),
+    do: Permissions.sanitize_remote_agent(agent)
+
   defp sanitize_agent_param(other), do: other
 
   defp jsonrpc_result(id, result) do

@@ -22,15 +22,22 @@ defmodule SuperPi.Properties.CronTest do
   @dst_zones ["America/New_York", "Europe/London", "Australia/Sydney", "Europe/Berlin"]
 
   defp subset(range, max) do
-    gen all values <- uniq_list_of(integer(range), min_length: 1, max_length: max), do: Enum.sort(values)
+    gen(
+      all(
+        values <- uniq_list_of(integer(range), min_length: 1, max_length: max),
+        do: Enum.sort(values)
+      )
+    )
   end
 
   defp field(values), do: Enum.join(values, ",")
 
   # Minutes and hours as lists, every day: a match is never more than a day away.
   defp expression(hours \\ :any) do
-    gen all minutes <- subset(0..59, 4),
-            hour_values <- subset(0..23, 4) do
+    gen all(
+          minutes <- subset(0..59, 4),
+          hour_values <- subset(0..23, 4)
+        ) do
       hour_field = if hours == :every, do: "*", else: field(hour_values)
       "#{field(minutes)} #{hour_field} * * *"
     end
@@ -38,7 +45,7 @@ defmodule SuperPi.Properties.CronTest do
 
   # Whole minutes between 2026-01-01 and 2026-12-31.
   defp instant do
-    gen all offset <- integer(0..(365 * 24 * 60)) do
+    gen all(offset <- integer(0..(365 * 24 * 60))) do
       DateTime.add(~U[2026-01-01 00:00:00Z], offset * 60, :second)
     end
   end
@@ -54,7 +61,7 @@ defmodule SuperPi.Properties.CronTest do
   ]
 
   defp near_transition do
-    gen all base <- member_of(@transitions), offset <- integer(-(48 * 60)..(48 * 60)) do
+    gen all(base <- member_of(@transitions), offset <- integer(-(48 * 60)..(48 * 60))) do
       DateTime.add(base, offset * 60, :second)
     end
   end
@@ -71,10 +78,12 @@ defmodule SuperPi.Properties.CronTest do
   end
 
   property "the result is strictly after its argument and chaining it is strictly increasing" do
-    check all expr <- expression(),
-              zone <- member_of(@fixed_zones ++ @dst_zones),
-              start <- instant(),
-              max_runs: 80 do
+    check all(
+            expr <- expression(),
+            zone <- member_of(@fixed_zones ++ @dst_zones),
+            start <- instant(),
+            max_runs: 80
+          ) do
       {instants, _} =
         Enum.map_reduce(1..6, start, fn _, at ->
           {:ok, next} = Cron.next_after(expr, at, zone)
@@ -89,28 +98,34 @@ defmodule SuperPi.Properties.CronTest do
   end
 
   property "it never skips a matching minute (zones without a change, and every-hour expressions anywhere)" do
-    check all zone <- member_of(@fixed_zones),
-              expr <- expression(),
-              start <- instant(),
-              max_runs: 60 do
+    check all(
+            zone <- member_of(@fixed_zones),
+            expr <- expression(),
+            start <- instant(),
+            max_runs: 60
+          ) do
       {:ok, next} = Cron.next_after(expr, start, zone)
       assert next == brute_force(expr, zone, start, 24 * 60 + 5)
     end
 
-    check all zone <- member_of(@dst_zones),
-              expr <- expression(:every),
-              start <- one_of([instant(), near_transition()]),
-              max_runs: 60 do
+    check all(
+            zone <- member_of(@dst_zones),
+            expr <- expression(:every),
+            start <- one_of([instant(), near_transition()]),
+            max_runs: 60
+          ) do
       {:ok, next} = Cron.next_after(expr, start, zone)
       assert next == brute_force(expr, zone, start, 2 * 60 + 5)
     end
   end
 
   property "every-hour expressions across a change: no duplicate and no gap against the real clock" do
-    check all zone <- member_of(@dst_zones),
-              minute <- integer(0..59),
-              start <- near_transition(),
-              max_runs: 60 do
+    check all(
+            zone <- member_of(@dst_zones),
+            minute <- integer(0..59),
+            start <- near_transition(),
+            max_runs: 60
+          ) do
       expr = "#{minute} * * * *"
 
       {instants, _} =
@@ -140,11 +155,13 @@ defmodule SuperPi.Properties.CronTest do
   end
 
   property "a fixed-time daily expression fires once per local day, also across a change" do
-    check all zone <- member_of(@dst_zones),
-              hour <- integer(0..23),
-              minute <- integer(0..59),
-              start <- near_transition(),
-              max_runs: 60 do
+    check all(
+            zone <- member_of(@dst_zones),
+            hour <- integer(0..23),
+            minute <- integer(0..59),
+            start <- near_transition(),
+            max_runs: 60
+          ) do
       expr = "#{minute} #{hour} * * *"
 
       {instants, _} =
@@ -161,7 +178,10 @@ defmodule SuperPi.Properties.CronTest do
 
       # One fire per local date: no duplicate on fall-back, and no skipped day on spring-forward.
       assert local_dates == Enum.uniq(local_dates)
-      assert local_dates |> Enum.chunk_every(2, 1, :discard) |> Enum.all?(fn [a, b] -> Date.diff(b, a) == 1 end)
+
+      assert local_dates
+             |> Enum.chunk_every(2, 1, :discard)
+             |> Enum.all?(fn [a, b] -> Date.diff(b, a) == 1 end)
     end
   end
 end

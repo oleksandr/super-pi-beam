@@ -13,7 +13,9 @@ defmodule SuperPi.Plugins.CustomCompaction do
 
   def id, do: "custom_compaction"
   def name, do: "Tiered Custom Compaction"
-  def description, do: "Lightweight context compaction preserving key decisions and tool cut-points"
+
+  def description,
+    do: "Lightweight context compaction preserving key decisions and tool cut-points"
 
   @impl true
   def before_compact(%{entries: entries, opts: opts}, _ctx) do
@@ -21,7 +23,9 @@ defmodule SuperPi.Plugins.CustomCompaction do
       :default
     else
       summary = Keyword.get(opts, :summary) || build_milestone_summary(entries, opts)
-      {:compacted, summary, %{"strategy" => "milestone_distillation", "original_entries_count" => length(entries)}}
+
+      {:compacted, summary,
+       %{"strategy" => "milestone_distillation", "original_entries_count" => length(entries)}}
     end
   end
 

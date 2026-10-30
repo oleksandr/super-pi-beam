@@ -23,11 +23,24 @@ defmodule SuperPi.Properties.HooksSectionsTest do
 
     File.write!(
       injecting,
-      Jason.encode!(%{"p" => %{"SessionStart" => [%{"command" => ~s(echo '{"injectSteps":[{"systemMessage":{"systemMessage":"hello"}}]}')}]}})
+      Jason.encode!(%{
+        "p" => %{
+          "SessionStart" => [
+            %{
+              "command" =>
+                ~s(echo '{"injectSteps":[{"systemMessage":{"systemMessage":"hello"}}]}')
+            }
+          ]
+        }
+      })
     )
 
     silent = Path.join(dir, "silent.json")
-    File.write!(silent, Jason.encode!(%{"p" => %{"SessionStart" => [%{"command" => "echo '{}'"}]}}))
+
+    File.write!(
+      silent,
+      Jason.encode!(%{"p" => %{"SessionStart" => [%{"command" => "echo '{}'"}]}})
+    )
 
     on_exit(fn -> File.rm_rf!(dir) end)
     %{dir: dir, injecting: injecting, silent: silent}
@@ -36,7 +49,10 @@ defmodule SuperPi.Properties.HooksSectionsTest do
   defp sections do
     section =
       one_of([
-        map(string(:alphanumeric, min_length: 1, max_length: 6), &%{"id" => "x_" <> &1, "content" => &1}),
+        map(
+          string(:alphanumeric, min_length: 1, max_length: 6),
+          &%{"id" => "x_" <> &1, "content" => &1}
+        ),
         constant(%{"id" => @current, "content" => "old content"}),
         constant(%{"id" => @legacy, "content" => "legacy content"})
       ])
@@ -46,7 +62,11 @@ defmodule SuperPi.Properties.HooksSectionsTest do
 
   defp run(cfg, file, dir) do
     conv = Storage.create_conversation!()
-    Hooks.before_agent_start(Map.merge(cfg, %{"hooksFiles" => [file], "workspacePaths" => [dir]}), %{conversation_id: conv.id})
+
+    Hooks.before_agent_start(
+      Map.merge(cfg, %{"hooksFiles" => [file], "workspacePaths" => [dir]}),
+      %{conversation_id: conv.id}
+    )
   end
 
   defp ids(cfg), do: cfg |> Map.get("systemSections", []) |> Enum.map(& &1["id"])

@@ -55,7 +55,15 @@ defmodule SuperPi.AI.Providers.OpenAI do
       key when is_binary(key) and key != "" ->
         model = normalize_model(to_string(Map.get(payload, :model)))
         url = String.trim_trailing(base_url(), "/") <> "/chat/completions"
-        HTTP.stream(:openai, model, url, [{"authorization", "Bearer " <> key}], build_body(payload, model), opts)
+
+        HTTP.stream(
+          :openai,
+          model,
+          url,
+          [{"authorization", "Bearer " <> key}],
+          build_body(payload, model),
+          opts
+        )
 
       _ ->
         {:error, :missing_openai_api_key}
@@ -64,9 +72,17 @@ defmodule SuperPi.AI.Providers.OpenAI do
 
   @doc "The request body for a provider payload."
   def build_body(payload, model \\ nil) do
-    system = payload |> Map.get(:system_sections, []) |> Enum.map(&(Map.get(&1, "content") || "")) |> Enum.reject(&(&1 == "")) |> Enum.join("\n\n")
+    system =
+      payload
+      |> Map.get(:system_sections, [])
+      |> Enum.map(&(Map.get(&1, "content") || ""))
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join("\n\n")
+
     messages = payload |> Map.get(:messages, []) |> Enum.flat_map(&convert/1)
-    messages = if system == "", do: messages, else: [%{"role" => "system", "content" => system} | messages]
+
+    messages =
+      if system == "", do: messages, else: [%{"role" => "system", "content" => system} | messages]
 
     %{
       "model" => model || normalize_model(to_string(Map.get(payload, :model))),
@@ -105,13 +121,22 @@ defmodule SuperPi.AI.Providers.OpenAI do
   end
 
   defp put_response_format(body, schema) when is_map(schema) do
-    Map.put(body, "response_format", %{"type" => "json_schema", "json_schema" => %{"name" => "response", "schema" => schema}})
+    Map.put(body, "response_format", %{
+      "type" => "json_schema",
+      "json_schema" => %{"name" => "response", "schema" => schema}
+    })
   end
 
   defp put_response_format(body, _), do: body
 
   defp convert(%{"role" => "tool"} = m) do
-    [%{"role" => "tool", "tool_call_id" => m["tool_call_id"], "content" => tool_output(m["content"])}]
+    [
+      %{
+        "role" => "tool",
+        "tool_call_id" => m["tool_call_id"],
+        "content" => tool_output(m["content"])
+      }
+    ]
   end
 
   defp convert(%{"role" => "user", "content" => content}) do
@@ -122,24 +147,48 @@ defmodule SuperPi.AI.Providers.OpenAI do
   end
 
   defp convert(%{"role" => "assistant", "content" => content}) when is_list(content) do
-    text = content |> Enum.flat_map(fn %{"type" => "text", "text" => t} when is_binary(t) -> [t]; _ -> [] end) |> Enum.join("")
+    text =
+      content
+      |> Enum.flat_map(fn
+        %{"type" => "text", "text" => t} when is_binary(t) -> [t]
+        _ -> []
+      end)
+      |> Enum.join("")
 
     calls =
       for %{"type" => "tool_call", "id" => id, "name" => name} = b <- content do
-        %{"id" => id, "type" => "function", "function" => %{"name" => name, "arguments" => Jason.encode!(b["arguments"] || %{})}}
+        %{
+          "id" => id,
+          "type" => "function",
+          "function" => %{"name" => name, "arguments" => Jason.encode!(b["arguments"] || %{})}
+        }
       end
 
     cond do
-      calls != [] -> [%{"role" => "assistant", "content" => if(text == "", do: nil, else: text), "tool_calls" => calls}]
-      text != "" -> [%{"role" => "assistant", "content" => text}]
-      true -> []
+      calls != [] ->
+        [
+          %{
+            "role" => "assistant",
+            "content" => if(text == "", do: nil, else: text),
+            "tool_calls" => calls
+          }
+        ]
+
+      text != "" ->
+        [%{"role" => "assistant", "content" => text}]
+
+      true ->
+        []
     end
   end
 
-  defp convert(%{"role" => "assistant", "content" => text}) when is_binary(text) and text != "", do: [%{"role" => "assistant", "content" => text}]
+  defp convert(%{"role" => "assistant", "content" => text}) when is_binary(text) and text != "",
+    do: [%{"role" => "assistant", "content" => text}]
+
   defp convert(_other), do: []
 
-  defp user_content(text) when is_binary(text), do: if(String.trim(text) == "", do: nil, else: text)
+  defp user_content(text) when is_binary(text),
+    do: if(String.trim(text) == "", do: nil, else: text)
 
   defp user_content(blocks) when is_list(blocks) do
     parts =
@@ -148,7 +197,14 @@ defmodule SuperPi.AI.Providers.OpenAI do
           [%{"type" => "text", "text" => t}]
 
         %{"type" => "image", "source" => src} ->
-          [%{"type" => "image_url", "image_url" => %{"url" => "data:#{src["media_type"] || "image/png"};base64,#{src["data"] || ""}"}}]
+          [
+            %{
+              "type" => "image_url",
+              "image_url" => %{
+                "url" => "data:#{src["media_type"] || "image/png"};base64,#{src["data"] || ""}"
+              }
+            }
+          ]
 
         _ ->
           []
@@ -166,6 +222,8 @@ defmodule SuperPi.AI.Providers.OpenAI do
   defp tool_output(output) when is_binary(output), do: output
   defp tool_output(output), do: Jason.encode!(output)
 
-  defp api_key, do: Application.get_env(:super_pi, :openai_api_key) || System.get_env("OPENAI_API_KEY")
+  defp api_key,
+    do: Application.get_env(:super_pi, :openai_api_key) || System.get_env("OPENAI_API_KEY")
+
   defp base_url, do: Application.get_env(:super_pi, :openai_base_url, "https://api.openai.com/v1")
 end

@@ -14,7 +14,9 @@ defmodule SuperPi.Plugins.SlashCommands do
 
   def id, do: "slash_commands"
   def name, do: "Interactive Slash Commands"
-  def description, do: "Expands slash commands (/plan, /goal, /boost, /model, /mode) into runtime directives"
+
+  def description,
+    do: "Expands slash commands (/plan, /goal, /boost, /model, /mode) into runtime directives"
 
   alias SuperPi.Durable.{Doc, Storage}
 
@@ -34,7 +36,8 @@ defmodule SuperPi.Plugins.SlashCommands do
           :handled
 
         String.starts_with?(trimmed, "/mode ") ->
-          new_mode = trimmed |> String.replace_prefix("/mode ", "") |> String.trim() |> String.downcase()
+          new_mode =
+            trimmed |> String.replace_prefix("/mode ", "") |> String.trim() |> String.downcase()
 
           if new_mode in ["auto", "accept-edits", "plan"] do
             Storage.configure_agent!(ctx.conversation_id, %{"executionMode" => new_mode})
@@ -53,7 +56,11 @@ defmodule SuperPi.Plugins.SlashCommands do
 
         String.starts_with?(trimmed, "/goal ") ->
           rest = trimmed |> String.replace_prefix("/goal ", "") |> String.trim()
-          Storage.configure_agent!(ctx.conversation_id, %{"goalVerification" => true, "goal" => rest})
+
+          Storage.configure_agent!(ctx.conversation_id, %{
+            "goalVerification" => true,
+            "goal" => rest
+          })
 
           expanded =
             "[MODE: GOAL] Execute this task thoroughly until the goal is 100% verified and complete:\n" <>

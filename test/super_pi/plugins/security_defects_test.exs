@@ -10,6 +10,7 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
   use SuperPi.DataCase, async: false
 
   alias SuperPi.Harness.Code, as: CodeHarness
+
   alias SuperPi.Plugins.{
     AutoCommit,
     ConfirmDestructive,
@@ -21,7 +22,6 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
     Subagent,
     Todo
   }
-
 
   # --- helpers ---
 
@@ -85,21 +85,33 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
 
     for {label, tool, args} <- @read_style_bypasses do
       test "blocks #{label}" do
-        assert {:block, _} = ProtectedPaths.before_tool(unquote(tool), unquote(Macro.escape(args)), %{config: []})
+        assert {:block, _} =
+                 ProtectedPaths.before_tool(unquote(tool), unquote(Macro.escape(args)), %{
+                   config: []
+                 })
       end
     end
 
-    @missing_patterns [".ssh/id_ed25519", ".npmrc", ".netrc", "tls/server.key", ".aws/config", ".git"]
+    @missing_patterns [
+      ".ssh/id_ed25519",
+      ".npmrc",
+      ".netrc",
+      "tls/server.key",
+      ".aws/config",
+      ".git"
+    ]
 
     for path <- @missing_patterns do
       test "protects #{path}" do
-        assert {:block, _} = ProtectedPaths.before_tool("write", %{"path" => unquote(path)}, %{config: []})
+        assert {:block, _} =
+                 ProtectedPaths.before_tool("write", %{"path" => unquote(path)}, %{config: []})
       end
     end
 
     for path <- [".ENV", "Config/.Env", "ID_RSA"] do
       test "protects case variant #{path} (case-insensitive file systems)" do
-        assert {:block, _} = ProtectedPaths.before_tool("write", %{"path" => unquote(path)}, %{config: []})
+        assert {:block, _} =
+                 ProtectedPaths.before_tool("write", %{"path" => unquote(path)}, %{config: []})
       end
     end
 
@@ -109,7 +121,9 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
       File.ln_s!(Path.join(dir, ".env"), Path.join(dir, "innocent.txt"))
 
       assert {:block, _} =
-               ProtectedPaths.before_tool("read", %{"path" => Path.join(dir, "innocent.txt")}, %{config: []})
+               ProtectedPaths.before_tool("read", %{"path" => Path.join(dir, "innocent.txt")}, %{
+                 config: []
+               })
     end
   end
 
@@ -130,7 +144,10 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
 
     for cmd <- @destructive_variants do
       test "blocks `#{cmd}`" do
-        assert {:block, _} = ConfirmDestructive.before_tool("bash", %{"command" => unquote(cmd)}, %{config: []})
+        assert {:block, _} =
+                 ConfirmDestructive.before_tool("bash", %{"command" => unquote(cmd)}, %{
+                   config: []
+                 })
       end
     end
 
@@ -139,7 +156,9 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
 
       for tool <- ~w(sh terminal run_command exec) do
         assert {:block, _} =
-                 ConfirmDestructive.before_tool(tool, %{"command" => "rm -rf /tmp/x"}, %{config: cfg}),
+                 ConfirmDestructive.before_tool(tool, %{"command" => "rm -rf /tmp/x"}, %{
+                   config: cfg
+                 }),
                "#{tool} runs rm -rf unguarded under the Code harness config"
       end
     end
@@ -157,15 +176,22 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
     end
 
     test "InlineBash" do
-      assert {:transform, out, []} = InlineBash.on_input("x !{echo hi}", %{config: %{timeout_ms: 2_000}})
+      assert {:transform, out, []} =
+               InlineBash.on_input("x !{echo hi}", %{config: %{timeout_ms: 2_000}})
+
       assert out =~ "hi"
     end
 
     test "Subagent" do
       res =
-        Subagent.wrap_tool("delegate_subagent", %{"role" => "scout", "prompt" => "look"}, fn _ -> %{} end, %{
-          config: %{timeout_ms: 2_000}
-        })
+        Subagent.wrap_tool(
+          "delegate_subagent",
+          %{"role" => "scout", "prompt" => "look"},
+          fn _ -> %{} end,
+          %{
+            config: %{timeout_ms: 2_000}
+          }
+        )
 
       assert is_map(res)
     end
@@ -180,7 +206,10 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
       dir = init_repo!(tmp_dir!("ac_msg"))
       File.write!(Path.join(dir, "feature.txt"), "x\n")
 
-      AutoCommit.after_run(summary("Implemented feature X"), %{workspace_root: dir, config: [commit_prefix: "[t]"]})
+      AutoCommit.after_run(summary("Implemented feature X"), %{
+        workspace_root: dir,
+        config: [commit_prefix: "[t]"]
+      })
 
       {subject, 0} = git!(dir, ["log", "-1", "--format=%s"])
       assert subject =~ "Implemented feature X", "commit subject was: #{subject}"
@@ -226,7 +255,10 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
       dir = init_repo!(tmp_dir!("gc"))
       File.write!(Path.join(dir, "base.txt"), "modified by user\n")
 
-      GitCheckpoint.before_tool("write", %{"path" => "base.txt"}, %{workspace_root: dir, conversation_id: 1})
+      GitCheckpoint.before_tool("write", %{"path" => "base.txt"}, %{
+        workspace_root: dir,
+        conversation_id: 1
+      })
 
       {refs, 0} = git!(dir, ["for-each-ref", "--format=%(refname)"])
       {stashes, 0} = git!(dir, ["stash", "list"])
@@ -245,7 +277,11 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
 
   describe "InlineBash (inline_bash.ex:59-86)" do
     test "a command containing } is not cut at the first brace" do
-      {:transform, out, []} = InlineBash.on_input("!{echo ${UNSET_VAR_X:-ok}}", %{workspace_root: File.cwd!(), config: []})
+      {:transform, out, []} =
+        InlineBash.on_input("!{echo ${UNSET_VAR_X:-ok}}", %{
+          workspace_root: File.cwd!(),
+          config: []
+        })
 
       refute out =~ "failed with code", "command was truncated at the first }: #{out}"
       assert out =~ "ok"
@@ -253,7 +289,10 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
 
     test "truncation never splits a UTF-8 character" do
       {:transform, out, []} =
-        InlineBash.on_input("!{printf 'ééééé'}", %{workspace_root: File.cwd!(), config: [max_output_bytes: 3]})
+        InlineBash.on_input("!{printf 'ééééé'}", %{
+          workspace_root: File.cwd!(),
+          config: [max_output_bytes: 3]
+        })
 
       assert String.valid?(out), "output is not valid UTF-8: #{inspect(out)}"
     end
@@ -262,11 +301,17 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
       marker = "#{System.unique_integer([:positive]) + 900_000}"
       on_exit(fn -> System.cmd("pkill", ["-f", "sleep #{marker}"], stderr_to_stdout: true) end)
 
-      InlineBash.on_input("!{sleep #{marker}}", %{workspace_root: File.cwd!(), config: [timeout_ms: 200]})
+      InlineBash.on_input("!{sleep #{marker}}", %{
+        workspace_root: File.cwd!(),
+        config: [timeout_ms: 200]
+      })
+
       Process.sleep(300)
 
       {out, _} = System.cmd("pgrep", ["-f", "sleep #{marker}"], stderr_to_stdout: true)
-      assert String.trim(out) == "", "orphaned `sleep #{marker}` is still running (pids: #{String.trim(out)})"
+
+      assert String.trim(out) == "",
+             "orphaned `sleep #{marker}` is still running (pids: #{String.trim(out)})"
     end
   end
 
@@ -274,7 +319,10 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
 
   describe "Subagent (subagent.ex)" do
     test "a child that fails is reported as failed, never as a success" do
-      Application.put_env(:super_pi, :subagent_machine_opts, llm_responder: fn _p, _c -> {:error, "provider down"} end)
+      Application.put_env(:super_pi, :subagent_machine_opts,
+        llm_responder: fn _p, _c -> {:error, "provider down"} end
+      )
+
       on_exit(fn -> Application.delete_env(:super_pi, :subagent_machine_opts) end)
 
       conv = SuperPi.Durable.Storage.create_conversation!()
@@ -282,10 +330,15 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
       {:ok, running} = SuperPi.Durable.TaskEngine.start_task(task.id)
 
       res =
-        Subagent.wrap_tool("delegate_subagent", %{"role" => "reviewer", "prompt" => "audit the repo"}, fn _ -> %{} end, %{
-          conversation_id: conv.id,
-          active_task_id: running.id
-        })
+        Subagent.wrap_tool(
+          "delegate_subagent",
+          %{"role" => "reviewer", "prompt" => "audit the repo"},
+          fn _ -> %{} end,
+          %{
+            conversation_id: conv.id,
+            active_task_id: running.id
+          }
+        )
 
       assert [%{"task_id" => task_id}] = res["structured_output"]["subagents"]
       Oban.drain_queue(queue: :subagents)
@@ -305,11 +358,25 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
     end
 
     test "Questionnaire with a string instead of a list of questions", %{ctx: ctx} do
-      assert is_map(Questionnaire.wrap_tool("ask_question", %{"questions" => "oops"}, fn _ -> %{} end, ctx))
+      assert is_map(
+               Questionnaire.wrap_tool(
+                 "ask_question",
+                 %{"questions" => "oops"},
+                 fn _ -> %{} end,
+                 ctx
+               )
+             )
     end
 
     test "Questionnaire with a question entry that is not a map", %{ctx: ctx} do
-      assert is_map(Questionnaire.wrap_tool("ask_question", %{"questions" => ["just text"]}, fn _ -> %{} end, ctx))
+      assert is_map(
+               Questionnaire.wrap_tool(
+                 "ask_question",
+                 %{"questions" => ["just text"]},
+                 fn _ -> %{} end,
+                 ctx
+               )
+             )
     end
 
     test "Questionnaire with options that are not a list", %{ctx: ctx} do

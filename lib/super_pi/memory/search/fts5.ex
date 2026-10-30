@@ -28,7 +28,13 @@ defmodule SuperPi.Memory.Search.FTS5 do
     LIMIT ?5
     """
 
-    case SuperPi.Repo.active_repo().query(sql, [match, kind, id, Search.topic_pattern(topic), limit]) do
+    case SuperPi.Repo.active_repo().query(sql, [
+           match,
+           kind,
+           id,
+           Search.topic_pattern(topic),
+           limit
+         ]) do
       {:ok, %{rows: rows}} -> {:ok, Enum.map(rows, fn [id, rank] -> {id, rank / 1} end)}
       {:error, reason} -> {:error, reason}
     end

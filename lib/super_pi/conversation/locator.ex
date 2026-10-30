@@ -44,7 +44,9 @@ defmodule SuperPi.Conversation.Locator do
   @doc "All conversation ids that have a machine, with their pids (the whole cluster)."
   def all do
     @registry
-    |> Horde.Registry.select([{{{:conversation_machine, :"$1"}, :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
+    |> Horde.Registry.select([
+      {{{:conversation_machine, :"$1"}, :"$2", :_}, [], [{{:"$1", :"$2"}}]}
+    ])
     # The registry removes an entry a moment after its process exits. Skip the dead local ones.
     |> Enum.filter(fn {_id, pid} -> node(pid) != node() or Process.alive?(pid) end)
   end
@@ -81,11 +83,15 @@ defmodule SuperPi.Conversation.Locator do
 
   defp start(conversation_id, machine_opts, opts, retries \\ 50) do
     restart = Keyword.get(opts, :restart, :transient)
-    supervision = Keyword.get(opts, :supervision) || Application.get_env(:super_pi, :machine_supervision, :horde)
+
+    supervision =
+      Keyword.get(opts, :supervision) ||
+        Application.get_env(:super_pi, :machine_supervision, :horde)
 
     spec = %{
       id: {:conversation, conversation_id},
-      start: {Machine, :start_link, [Keyword.put(machine_opts, :conversation_id, conversation_id)]},
+      start:
+        {Machine, :start_link, [Keyword.put(machine_opts, :conversation_id, conversation_id)]},
       restart: restart,
       type: :worker
     }
@@ -97,9 +103,15 @@ defmodule SuperPi.Conversation.Locator do
       end
 
     case result do
-      {:ok, pid} -> {:ok, pid}
-      {:ok, pid, _info} -> {:ok, pid}
-      {:error, {:already_started, pid}} -> {:ok, pid}
+      {:ok, pid} ->
+        {:ok, pid}
+
+      {:ok, pid, _info} ->
+        {:ok, pid}
+
+      {:error, {:already_started, pid}} ->
+        {:ok, pid}
+
       # The registry still holds the entry of a machine that has just exited. It removes the
       # entry a moment later, so try again.
       {:error, {:process_not_registered_via, _}} when retries > 0 ->
@@ -107,7 +119,10 @@ defmodule SuperPi.Conversation.Locator do
         start(conversation_id, machine_opts, opts, retries - 1)
 
       other ->
-        Logger.warning("[Locator] could not start the machine of conversation #{inspect(conversation_id)}: #{inspect(other)}")
+        Logger.warning(
+          "[Locator] could not start the machine of conversation #{inspect(conversation_id)}: #{inspect(other)}"
+        )
+
         other
     end
   end
@@ -115,8 +130,12 @@ defmodule SuperPi.Conversation.Locator do
   @doc "Waits until the conversation has no registered machine. Returns `:ok` or `:timeout`."
   def await_gone(conversation_id, tries \\ 100) do
     cond do
-      whereis(conversation_id) == nil -> :ok
-      tries <= 0 -> :timeout
+      whereis(conversation_id) == nil ->
+        :ok
+
+      tries <= 0 ->
+        :timeout
+
       true ->
         Process.sleep(5)
         await_gone(conversation_id, tries - 1)

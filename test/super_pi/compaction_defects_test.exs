@@ -18,7 +18,6 @@ defmodule SuperPi.CompactionDefectsTest do
   alias SuperPi.TestSupport.Faults
   alias SuperPi.Workers.CompactionWorker
 
-
   setup do
     Process.flag(:trap_exit, true)
     :ok
@@ -43,7 +42,9 @@ defmodule SuperPi.CompactionDefectsTest do
 
     Storage.append_entry!(conv_id, "pi.message", %{
       "role" => "assistant",
-      "content" => [%{"type" => "tool_call", "id" => "c1", "name" => "read", "arguments" => %{"path" => "/x"}}]
+      "content" => [
+        %{"type" => "tool_call", "id" => "c1", "name" => "read", "arguments" => %{"path" => "/x"}}
+      ]
     })
 
     Storage.append_entry!(conv_id, "pi.message", %{
@@ -56,7 +57,7 @@ defmodule SuperPi.CompactionDefectsTest do
   end
 
   defp compaction_entries(conv_id) do
-    Repo.all(from e in Entry, where: e.conversation_id == ^conv_id and e.kind == "pi.compaction")
+    Repo.all(from(e in Entry, where: e.conversation_id == ^conv_id and e.kind == "pi.compaction"))
   end
 
   defp orphan_tool_messages(messages) do
@@ -84,7 +85,10 @@ defmodule SuperPi.CompactionDefectsTest do
       %{conv: conv, pid: pid}
     end
 
-    test "derived context after compaction has no orphan role=tool message", %{conv: conv, pid: pid} do
+    test "derived context after compaction has no orphan role=tool message", %{
+      conv: conv,
+      pid: pid
+    } do
       assert {:ok, _} = Machine.compact(pid)
 
       messages = Context.derive(conv.id).messages
@@ -165,7 +169,9 @@ defmodule SuperPi.CompactionDefectsTest do
              "compactedCount #{second.compacted_count} exceeds the #{active} active entries"
     end
 
-    test "a large keep_recent_tokens cannot move the head before an earlier compaction head", %{conv: conv} do
+    test "a large keep_recent_tokens cannot move the head before an earlier compaction head", %{
+      conv: conv
+    } do
       assert {:ok, first} = Compaction.compact!(conv.id, :manual, keep_recent_tokens: 300)
       assert {:ok, second} = Compaction.compact!(conv.id, :manual, keep_recent_tokens: 100_000)
 

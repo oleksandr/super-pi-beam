@@ -20,13 +20,20 @@ defmodule SuperPi.Web.Search.Brave do
       [
         url: Keyword.get(opts, :base_url, @url),
         params: [q: query, count: max_results],
-        headers: [{"accept", "application/json"}, {"x-subscription-token", Search.key(opts, "BRAVE_API_KEY")}]
+        headers: [
+          {"accept", "application/json"},
+          {"x-subscription-token", Search.key(opts, "BRAVE_API_KEY")}
+        ]
       ] ++ Search.req_options(opts)
 
     case Req.get(req) do
       {:ok, %Req.Response{status: 200, body: %{} = body}} ->
         results = get_in(body, ["web", "results"]) || []
-        {:ok, results |> Enum.map(&Search.result(&1["title"], &1["url"], &1["description"])) |> Enum.reject(&is_nil/1)}
+
+        {:ok,
+         results
+         |> Enum.map(&Search.result(&1["title"], &1["url"], &1["description"]))
+         |> Enum.reject(&is_nil/1)}
 
       {:ok, resp} ->
         Search.failed(resp)

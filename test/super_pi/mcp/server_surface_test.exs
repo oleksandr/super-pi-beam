@@ -8,7 +8,10 @@ defmodule SuperPi.MCP.ServerSurfaceTest do
   setup do
     SuperPi.Tools.ensure_catalog_ets!()
 
-    saved = for key <- [:permissions, :workspace_paths, :mcp_harness], do: {key, Application.fetch_env(:super_pi, key)}
+    saved =
+      for key <- [:permissions, :workspace_paths, :mcp_harness],
+          do: {key, Application.fetch_env(:super_pi, key)}
+
     Application.put_env(:super_pi, :permissions, allowNonWorkspaceAccess: true)
 
     on_exit(fn ->
@@ -29,17 +32,25 @@ defmodule SuperPi.MCP.ServerSurfaceTest do
     {reply, state}
   end
 
-  defp harness_task(state, args), do: rpc(state, "tools/call", %{"name" => "harness_task", "arguments" => args})
+  defp harness_task(state, args),
+    do: rpc(state, "tools/call", %{"name" => "harness_task", "arguments" => args})
 
   describe "tool annotations" do
     test "each of the eight tools states all four hints" do
       {reply, _} = rpc(%{}, "tools/list")
       tools = reply["result"]["tools"]
 
-      assert tools |> Enum.map(& &1["name"]) |> Enum.sort() == ~w(bash edit find grep harness_task ls read write)
+      assert tools |> Enum.map(& &1["name"]) |> Enum.sort() ==
+               ~w(bash edit find grep harness_task ls read write)
 
       for tool <- tools do
-        assert %{"readOnlyHint" => _, "destructiveHint" => _, "idempotentHint" => _, "openWorldHint" => _} = tool["annotations"]
+        assert %{
+                 "readOnlyHint" => _,
+                 "destructiveHint" => _,
+                 "idempotentHint" => _,
+                 "openWorldHint" => _
+               } = tool["annotations"]
+
         assert tool["annotations"] |> Map.values() |> Enum.all?(&is_boolean/1)
       end
     end
@@ -49,7 +60,8 @@ defmodule SuperPi.MCP.ServerSurfaceTest do
       by_name = Map.new(reply["result"]["tools"], &{&1["name"], &1["annotations"]})
 
       for name <- ~w(read grep find ls) do
-        assert %{"readOnlyHint" => true, "destructiveHint" => false, "idempotentHint" => true} = by_name[name]
+        assert %{"readOnlyHint" => true, "destructiveHint" => false, "idempotentHint" => true} =
+                 by_name[name]
       end
 
       for name <- ~w(write edit bash harness_task) do
@@ -66,7 +78,9 @@ defmodule SuperPi.MCP.ServerSurfaceTest do
       {reply, _} = rpc(%{}, "tools/list")
       tool = Enum.find(reply["result"]["tools"], &(&1["name"] == "harness_task"))
 
-      assert tool["inputSchema"]["properties"]["harness"]["enum"] == Enum.map(Harness.list(), & &1.id())
+      assert tool["inputSchema"]["properties"]["harness"]["enum"] ==
+               Enum.map(Harness.list(), & &1.id())
+
       assert tool["inputSchema"]["required"] == ["prompt"]
     end
   end
@@ -75,14 +89,20 @@ defmodule SuperPi.MCP.ServerSurfaceTest do
     test "harness_task returns its harness and conversation id" do
       {reply, _} = harness_task(%{}, %{"prompt" => "hello"})
 
-      assert %{"isError" => false, "structuredContent" => %{"harness" => harness, "conversation_id" => conv_id}} = reply["result"]
+      assert %{
+               "isError" => false,
+               "structuredContent" => %{"harness" => harness, "conversation_id" => conv_id}
+             } = reply["result"]
+
       assert harness == Harness.default().id()
       assert is_integer(conv_id)
       assert {:ok, _} = Jason.encode(reply)
     end
 
     test "a built-in tool passes its structured output through" do
-      {reply, _} = rpc(%{}, "tools/call", %{"name" => "ls", "arguments" => %{"path" => System.tmp_dir!()}})
+      {reply, _} =
+        rpc(%{}, "tools/call", %{"name" => "ls", "arguments" => %{"path" => System.tmp_dir!()}})
+
       assert reply["result"]["isError"] == false
       assert %{} = structured = reply["result"]["structuredContent"]
       assert map_size(structured) > 0
@@ -100,16 +120,28 @@ defmodule SuperPi.MCP.ServerSurfaceTest do
       {reply, _} = rpc(%{}, "prompts/list")
       prompts = reply["result"]["prompts"]
 
-      assert Enum.map(prompts, & &1["name"]) == Enum.map(Harness.list(), & &1.id()) ++ ["plan_architecture"]
-      assert Enum.all?(prompts, fn p -> [%{"name" => "goal", "required" => true}] = p["arguments"] end)
+      assert Enum.map(prompts, & &1["name"]) ==
+               Enum.map(Harness.list(), & &1.id()) ++ ["plan_architecture"]
+
+      assert Enum.all?(prompts, fn p ->
+               [%{"name" => "goal", "required" => true}] = p["arguments"]
+             end)
+
       assert Enum.all?(prompts, &is_binary(&1["description"]))
     end
 
     test "prompts/get for a harness points the host at harness_task with that harness" do
       [harness | _] = Harness.list()
-      {reply, _} = rpc(%{}, "prompts/get", %{"name" => harness.id(), "arguments" => %{"goal" => "map the repo"}})
 
-      assert [%{"role" => "user", "content" => %{"type" => "text", "text" => text}}] = reply["result"]["messages"]
+      {reply, _} =
+        rpc(%{}, "prompts/get", %{
+          "name" => harness.id(),
+          "arguments" => %{"goal" => "map the repo"}
+        })
+
+      assert [%{"role" => "user", "content" => %{"type" => "text", "text" => text}}] =
+               reply["result"]["messages"]
+
       assert text =~ "harness_task"
       assert text =~ harness.id()
       assert text =~ "map the repo"
@@ -126,8 +158,14 @@ defmodule SuperPi.MCP.ServerSurfaceTest do
     end
 
     test "plan_architecture still answers as it did" do
-      {reply, _} = rpc(%{}, "prompts/get", %{"name" => "plan_architecture", "arguments" => %{"goal" => "ship"}})
-      assert [%{"content" => %{"text" => "Please create an architectural plan for: ship"}}] = reply["result"]["messages"]
+      {reply, _} =
+        rpc(%{}, "prompts/get", %{
+          "name" => "plan_architecture",
+          "arguments" => %{"goal" => "ship"}
+        })
+
+      assert [%{"content" => %{"text" => "Please create an architectural plan for: ship"}}] =
+               reply["result"]["messages"]
     end
   end
 
@@ -170,9 +208,20 @@ defmodule SuperPi.MCP.ServerSurfaceTest do
 
     test "direct tool calls use the connection's harness for their permission session" do
       [_, second | _] = Harness.list()
-      {_reply, state} = rpc(%{harness: second.id()}, "tools/call", %{"name" => "ls", "arguments" => %{"path" => System.tmp_dir!()}})
 
-      agent = SuperPi.Durable.Doc.snapshot("conversation", state.tool_session.conversation_id, "pi.agent")
+      {_reply, state} =
+        rpc(%{harness: second.id()}, "tools/call", %{
+          "name" => "ls",
+          "arguments" => %{"path" => System.tmp_dir!()}
+        })
+
+      agent =
+        SuperPi.Durable.Doc.snapshot(
+          "conversation",
+          state.tool_session.conversation_id,
+          "pi.agent"
+        )
+
       assert agent["maxExecutionMode"] == second.agent_defaults()["maxExecutionMode"]
     end
   end
@@ -180,7 +229,8 @@ defmodule SuperPi.MCP.ServerSurfaceTest do
   describe "workspace" do
     @describetag :tmp_dir
 
-    test "working_directory and the tool session's workspace_root come from the configured workspace paths", %{tmp_dir: dir} do
+    test "working_directory and the tool session's workspace_root come from the configured workspace paths",
+         %{tmp_dir: dir} do
       Application.put_env(:super_pi, :workspace_paths, [dir])
 
       {reply, _} = rpc(%{}, "resources/read", %{"uri" => "superpi://workspace/context"})
@@ -198,7 +248,13 @@ defmodule SuperPi.MCP.ServerSurfaceTest do
     test "resources/templates/list names the transcript template" do
       {reply, _} = rpc(%{}, "resources/templates/list")
 
-      assert [%{"uriTemplate" => "superpi://conversation/{id}/transcript", "name" => _, "mimeType" => _}] =
+      assert [
+               %{
+                 "uriTemplate" => "superpi://conversation/{id}/transcript",
+                 "name" => _,
+                 "mimeType" => _
+               }
+             ] =
                reply["result"]["resourceTemplates"]
     end
 
@@ -211,7 +267,9 @@ defmodule SuperPi.MCP.ServerSurfaceTest do
       assert uri in Enum.map(list["result"]["resources"], & &1["uri"])
 
       {read, _} = rpc(state, "resources/read", %{"uri" => uri})
-      assert [%{"uri" => ^uri, "mimeType" => "application/x-ndjson", "text" => text}] = read["result"]["contents"]
+
+      assert [%{"uri" => ^uri, "mimeType" => "application/x-ndjson", "text" => text}] =
+               read["result"]["contents"]
 
       steps = text |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!/1)
       assert steps != []
@@ -221,9 +279,12 @@ defmodule SuperPi.MCP.ServerSurfaceTest do
 
     test "another principal does not find the conversation" do
       {task, state} = harness_task(%{principal: "token:alice"}, %{"prompt" => "secret plans"})
-      uri = "superpi://conversation/#{task["result"]["structuredContent"]["conversation_id"]}/transcript"
 
-      assert {%{"result" => %{"contents" => [_]}}, _} = rpc(state, "resources/read", %{"uri" => uri})
+      uri =
+        "superpi://conversation/#{task["result"]["structuredContent"]["conversation_id"]}/transcript"
+
+      assert {%{"result" => %{"contents" => [_]}}, _} =
+               rpc(state, "resources/read", %{"uri" => uri})
 
       {other, _} = rpc(%{principal: "token:bob"}, "resources/read", %{"uri" => uri})
       assert other["error"]["code"] == -32002

@@ -9,7 +9,11 @@ defmodule SuperPi.ToolsAndCodeModeTest do
   describe "Property-Based Tests: Codemode Deterministic Replay & 3-Channel Tools (Decision 06 & 07)" do
     property "Codemode script crash at any step replays completed tool calls with zero duplicate side effects on restart" do
       check all(
-              step_names <- list_of(member_of(["read", "write", "edit", "bash", "grep"]), min_length: 3, max_length: 10),
+              step_names <-
+                list_of(member_of(["read", "write", "edit", "bash", "grep"]),
+                  min_length: 3,
+                  max_length: 10
+                ),
               crash_idx <- integer(0..8),
               max_runs: 30
             ) do
@@ -40,7 +44,9 @@ defmodule SuperPi.ToolsAndCodeModeTest do
 
         # First run crashes right after `actual_crash_idx` has been persisted to the journal
         assert_raise RuntimeError, fn ->
-          Journal.run_script(task.id, steps_spec, executor_fun, simulate_crash_at_index: actual_crash_idx)
+          Journal.run_script(task.id, steps_spec, executor_fun,
+            simulate_crash_at_index: actual_crash_idx
+          )
         end
 
         # Reconcile task on open (simulating node/worker restart)
@@ -91,14 +97,22 @@ defmodule SuperPi.ToolsAndCodeModeTest do
     end
 
     test "built-in read, write, edit, grep, find, and ls return 3-channel outputs" do
-      tmp_dir = Path.join(System.tmp_dir!(), "super_pi_tools_#{System.unique_integer([:positive])}")
+      tmp_dir =
+        Path.join(System.tmp_dir!(), "super_pi_tools_#{System.unique_integer([:positive])}")
+
       File.mkdir_p!(tmp_dir)
       file_path = Path.join(tmp_dir, "hello.txt")
 
       w_res = Tools.execute("write", %{"path" => file_path, "content" => "line1\nline2\n"})
       assert w_res["structured_output"]["bytes"] == 12
 
-      e_res = Tools.execute("edit", %{"path" => file_path, "old_text" => "line2", "new_text" => "line2_edited"})
+      e_res =
+        Tools.execute("edit", %{
+          "path" => file_path,
+          "old_text" => "line2",
+          "new_text" => "line2_edited"
+        })
+
       assert e_res["structured_output"]["replacements"] == 1
 
       r_res = Tools.execute("read", %{"path" => file_path})

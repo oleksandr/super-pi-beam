@@ -87,11 +87,16 @@ defmodule SuperPi.Plugins.Subagent do
   @policies %{"all" => "all_settled", "fail_fast" => "fail_fast"}
 
   @role_prompts %{
-    "scout" => "You are a scout. Explore the codebase quickly and report where things are and how they connect. Read only. Answer concisely with file paths.",
-    "planner" => "You are a planner. Read the relevant code and return a concrete step-by-step plan. Read only. Do not change anything.",
-    "reviewer" => "You are a reviewer. Read the code or change you are given and report concrete problems, ordered by severity. Read only.",
-    "researcher" => "You are a researcher. Investigate the question using the files available and report findings with evidence. Read only.",
-    "worker" => "You are a worker. Carry out the task you are given using your tools, then report what you changed and the result."
+    "scout" =>
+      "You are a scout. Explore the codebase quickly and report where things are and how they connect. Read only. Answer concisely with file paths.",
+    "planner" =>
+      "You are a planner. Read the relevant code and return a concrete step-by-step plan. Read only. Do not change anything.",
+    "reviewer" =>
+      "You are a reviewer. Read the code or change you are given and report concrete problems, ordered by severity. Read only.",
+    "researcher" =>
+      "You are a researcher. Investigate the question using the files available and report findings with evidence. Read only.",
+    "worker" =>
+      "You are a worker. Carry out the task you are given using your tools, then report what you changed and the result."
   }
 
   @tool_spec %{
@@ -109,7 +114,11 @@ defmodule SuperPi.Plugins.Subagent do
       "type" => "object",
       "properties" => %{
         "role" => %{"type" => "string", "enum" => @roles, "description" => "Role of the subagent"},
-        "prompt" => %{"type" => "string", "description" => "Complete task description. The subagent sees nothing else from this conversation."},
+        "prompt" => %{
+          "type" => "string",
+          "description" =>
+            "Complete task description. The subagent sees nothing else from this conversation."
+        },
         "tasks" => %{
           "type" => "array",
           "description" => "Several tasks to run concurrently",
@@ -125,9 +134,13 @@ defmodule SuperPi.Plugins.Subagent do
         "wait_policy" => %{
           "type" => "string",
           "enum" => Map.keys(@policies),
-          "description" => "all (default): wake when every subagent has ended. fail_fast: wake at once when one fails and stop the others."
+          "description" =>
+            "all (default): wake when every subagent has ended. fail_fast: wake at once when one fails and stop the others."
         },
-        "timeout_ms" => %{"type" => "integer", "description" => "Maximum run time per subagent in milliseconds"}
+        "timeout_ms" => %{
+          "type" => "integer",
+          "description" => "Maximum run time per subagent in milliseconds"
+        }
       }
     }
   }
@@ -145,7 +158,8 @@ defmodule SuperPi.Plugins.Subagent do
   end
 
   @impl true
-  def wrap_tool("delegate_subagent", _args, _next, ctx) when not is_map_key(ctx, :conversation_id) do
+  def wrap_tool("delegate_subagent", _args, _next, ctx)
+      when not is_map_key(ctx, :conversation_id) do
     error("delegate_subagent needs a conversation context.", "invalid_context")
   end
 
@@ -188,7 +202,9 @@ defmodule SuperPi.Plugins.Subagent do
   end
 
   defp parse_args(args, config) when is_map(args) do
-    default_timeout = config_timeout(config) || Application.get_env(:super_pi, :subagent_timeout_ms, 120_000)
+    default_timeout =
+      config_timeout(config) || Application.get_env(:super_pi, :subagent_timeout_ms, 120_000)
+
     # The model may shorten the timeout but never raise it above the configured limit.
     timeout_ms = min(positive_int(args["timeout_ms"]) || default_timeout, default_timeout)
 
@@ -201,8 +217,11 @@ defmodule SuperPi.Plugins.Subagent do
 
     tasks =
       Enum.map(raw, fn
-        %{"role" => role, "prompt" => prompt} when is_binary(role) and is_binary(prompt) -> {role, String.trim(prompt)}
-        _ -> :invalid
+        %{"role" => role, "prompt" => prompt} when is_binary(role) and is_binary(prompt) ->
+          {role, String.trim(prompt)}
+
+        _ ->
+          :invalid
       end)
 
     policy = Map.get(@policies, Map.get(args, "wait_policy", "all"))
@@ -215,20 +234,25 @@ defmodule SuperPi.Plugins.Subagent do
         {:error, "invalid_arguments", "Every task needs a string `role` and a string `prompt`."}
 
       Enum.any?(tasks, fn {role, prompt} -> role not in @roles or prompt == "" end) ->
-        {:error, "invalid_arguments", "Role must be one of #{Enum.join(@roles, ", ")}, and the prompt must not be empty."}
+        {:error, "invalid_arguments",
+         "Role must be one of #{Enum.join(@roles, ", ")}, and the prompt must not be empty."}
 
       is_nil(policy) ->
-        {:error, "invalid_arguments", "`wait_policy` must be one of #{@policies |> Map.keys() |> Enum.join(", ")}."}
+        {:error, "invalid_arguments",
+         "`wait_policy` must be one of #{@policies |> Map.keys() |> Enum.join(", ")}."}
 
       true ->
         {:ok, tasks, timeout_ms, policy}
     end
   end
 
-  defp parse_args(_args, _config), do: {:error, "invalid_arguments", "Arguments must be an object."}
+  defp parse_args(_args, _config),
+    do: {:error, "invalid_arguments", "Arguments must be an object."}
 
   # The harness may set `{Subagent, [timeout_ms: ...]}`.
-  defp config_timeout(config) when is_list(config), do: positive_int(Keyword.get(config, :timeout_ms))
+  defp config_timeout(config) when is_list(config),
+    do: positive_int(Keyword.get(config, :timeout_ms))
+
   defp config_timeout(%{timeout_ms: ms}), do: positive_int(ms)
   defp config_timeout(_), do: nil
 
@@ -237,7 +261,9 @@ defmodule SuperPi.Plugins.Subagent do
 
   # The parent waits through its running task: without one there is nothing to wake.
   defp require_task(%{active_task_id: id}) when is_integer(id), do: {:ok, id}
-  defp require_task(_ctx), do: {:error, "invalid_context", "delegate_subagent needs a running turn."}
+
+  defp require_task(_ctx),
+    do: {:error, "invalid_context", "delegate_subagent needs a running turn."}
 
   # One wait per park: a second delegation would need the parent to watch two sets.
   defp check_idle(parent_task_id) do
@@ -246,7 +272,9 @@ defmodule SuperPi.Plugins.Subagent do
         Enum.any?(TaskEngine.live_children(parent_task_id), &(&1.kind == "pi.subagent"))
 
     if busy?,
-      do: {:error, "already_delegating", "Subagents are still running for this turn. Delegate every task in one call, and wait for their answers."},
+      do:
+        {:error, "already_delegating",
+         "Subagents are still running for this turn. Delegate every task in one call, and wait for their answers."},
       else: :ok
   end
 
@@ -284,10 +312,20 @@ defmodule SuperPi.Plugins.Subagent do
 
     input = %{"role" => role, "prompt" => prompt, "child_conversation_id" => child.id}
 
-    with {:ok, task} <- TaskEngine.create_task(ctx.conversation_id, "pi.subagent", input, owner_task_id: parent_task_id),
+    with {:ok, task} <-
+           TaskEngine.create_task(ctx.conversation_id, "pi.subagent", input,
+             owner_task_id: parent_task_id
+           ),
          # The child's machine finds its task here, to settle it when a resumed turn ends.
          _ <- Storage.configure_agent!(child.id, %{"subagentTaskId" => task.id}),
-         job = SubagentWorker.new(%{"task_id" => task.id, "child_conversation_id" => child.id, "role" => role, "prompt" => prompt, "timeout_ms" => timeout_ms}),
+         job =
+           SubagentWorker.new(%{
+             "task_id" => task.id,
+             "child_conversation_id" => child.id,
+             "role" => role,
+             "prompt" => prompt,
+             "timeout_ms" => timeout_ms
+           }),
          {:ok, _job} <- Oban.insert(job) do
       {:ok, %{"task_id" => task.id, "child_conversation_id" => child.id, "role" => role}}
     else
@@ -298,7 +336,10 @@ defmodule SuperPi.Plugins.Subagent do
   defp park_parent(parent_task_id, children, policy) do
     ids = Enum.map(children, & &1["task_id"])
 
-    case TaskEngine.wait_for_children(parent_task_id, ids, policy, phase: "awaiting_children", state: %{"children" => children}) do
+    case TaskEngine.wait_for_children(parent_task_id, ids, policy,
+           phase: "awaiting_children",
+           state: %{"children" => children}
+         ) do
       {:ok, _task} ->
         :ok
 
@@ -319,14 +360,33 @@ defmodule SuperPi.Plugins.Subagent do
   defp child_agent(role, parent_agent) do
     harness = Map.fetch!(@role_harness, role)
     model_opts = if model = parent_agent["model"], do: [model: model], else: []
-    workspace_opts = if paths = parent_agent["workspacePaths"], do: [workspace_paths: paths], else: []
+
+    workspace_opts =
+      if paths = parent_agent["workspacePaths"], do: [workspace_paths: paths], else: []
+
     defaults = harness.agent_defaults(model_opts ++ workspace_opts)
-    mode = if role in @read_only_roles, do: defaults["executionMode"], else: Map.get(parent_agent, "executionMode", "accept-edits")
+
+    mode =
+      if role in @read_only_roles,
+        do: defaults["executionMode"],
+        else: Map.get(parent_agent, "executionMode", "accept-edits")
 
     defaults
-    |> Map.merge(Map.take(parent_agent, ["workspacePaths", "workspace", "globalConfigDir", "appDataDir", "settingsOverride", "effort"]))
+    |> Map.merge(
+      Map.take(parent_agent, [
+        "workspacePaths",
+        "workspace",
+        "globalConfigDir",
+        "appDataDir",
+        "settingsOverride",
+        "effort"
+      ])
+    )
     |> Map.put("executionMode", mode)
-    |> Map.put("maxExecutionMode", Map.get(parent_agent, "maxExecutionMode", mode) |> lower_of(mode))
+    |> Map.put(
+      "maxExecutionMode",
+      Map.get(parent_agent, "maxExecutionMode", mode) |> lower_of(mode)
+    )
     |> Map.put("dangerouslySkipPermissions", parent_agent["dangerouslySkipPermissions"] == true)
     |> Map.put("subagentDepth", Map.get(parent_agent, "subagentDepth", 0) + 1)
     |> Map.put("systemSections", [%{"id" => "core", "content" => Map.fetch!(@role_prompts, role)}])
@@ -343,7 +403,9 @@ defmodule SuperPi.Plugins.Subagent do
     ids = Enum.map(children, & &1["child_conversation_id"])
 
     list =
-      Enum.map_join(children, "\n", fn c -> "- #{c["role"]}: child conversation #{c["child_conversation_id"]}" end)
+      Enum.map_join(children, "\n", fn c ->
+        "- #{c["role"]}: child conversation #{c["child_conversation_id"]}"
+      end)
 
     output =
       "Started #{length(children)} subagent(s) in the background. This is an acknowledgement, not their answer.\n#{list}\n" <>
@@ -351,10 +413,22 @@ defmodule SuperPi.Plugins.Subagent do
 
     %{
       "output" => output,
-      "structured_output" => %{"subagents" => Enum.map(children, &Map.put(&1, "status", "started"))},
-      "details" => %{"count" => length(children), "status" => "started", "child_conversation_ids" => ids},
+      "structured_output" => %{
+        "subagents" => Enum.map(children, &Map.put(&1, "status", "started"))
+      },
+      "details" => %{
+        "count" => length(children),
+        "status" => "started",
+        "child_conversation_ids" => ids
+      },
       "is_error" => false,
-      "control" => %{"await" => %{"task_ids" => Enum.map(children, & &1["task_id"]), "policy" => policy, "children" => children}}
+      "control" => %{
+        "await" => %{
+          "task_ids" => Enum.map(children, & &1["task_id"]),
+          "policy" => policy,
+          "children" => children
+        }
+      }
     }
   end
 

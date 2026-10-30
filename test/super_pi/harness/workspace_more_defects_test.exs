@@ -23,7 +23,12 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
   # --- helpers ---
 
   defp tmp_dir!(label, suffix \\ "") do
-    dir = Path.join(System.tmp_dir!(), "ws_more_#{label}_#{System.unique_integer([:positive])}#{suffix}")
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "ws_more_#{label}_#{System.unique_integer([:positive])}#{suffix}"
+      )
+
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf(dir) end)
     dir
@@ -57,7 +62,12 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
       dir = tmp_dir!("redir")
       out = Path.join(dir, "out.json")
 
-      _ = HooksJson.run_hook_command(%{"command" => "cat > #{out}; echo '{}'", "timeout" => 1}, payload(), dir)
+      _ =
+        HooksJson.run_hook_command(
+          %{"command" => "cat > #{out}; echo '{}'", "timeout" => 1},
+          payload(),
+          dir
+        )
 
       assert File.read(out) == {:ok, Jason.encode!(payload())},
              "redirect bound only to the last command, cat read nothing"
@@ -67,7 +77,12 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
       dir = tmp_dir!("comment")
       out = Path.join(dir, "out.json")
 
-      _ = HooksJson.run_hook_command(%{"command" => "cat > #{out} # log payload", "timeout" => 1}, payload(), dir)
+      _ =
+        HooksJson.run_hook_command(
+          %{"command" => "cat > #{out} # log payload", "timeout" => 1},
+          payload(),
+          dir
+        )
 
       assert File.read(out) == {:ok, Jason.encode!(payload())}
     end
@@ -77,7 +92,8 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
       put_tmpdir!(dir)
       out = Path.join(tmp_dir!("spaceout"), "out.json")
 
-      result = HooksJson.run_hook_command(%{"command" => "cat > #{out}", "timeout" => 1}, payload(), dir)
+      result =
+        HooksJson.run_hook_command(%{"command" => "cat > #{out}", "timeout" => 1}, payload(), dir)
 
       assert File.read(out) == {:ok, Jason.encode!(payload())}, "got: #{inspect(result)}"
     end
@@ -91,7 +107,12 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
       script = Path.join(tdir, "hook.sh")
       File.write!(script, cmd <> "\n")
 
-      _ = HooksJson.run_hook_command(%{"command" => "sh #{script}", "timeout" => 1}, payload(), tdir)
+      _ =
+        HooksJson.run_hook_command(
+          %{"command" => "sh #{script}", "timeout" => 1},
+          payload(),
+          tdir
+        )
 
       listing = File.read!(out)
       assert String.starts_with?(listing, "-rw-------"), "temp file mode: #{listing}"
@@ -108,7 +129,9 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
       pattern = "sleep #{secs}"
       on_exit(fn -> System.cmd("pkill", ["-f", pattern]) end)
 
-      result = HooksJson.run_hook_command(%{"command" => pattern, "timeout" => 1}, payload(), tdir)
+      result =
+        HooksJson.run_hook_command(%{"command" => pattern, "timeout" => 1}, payload(), tdir)
+
       Process.sleep(100)
       assert result == {:error, :hook_timeout}
       %{tdir: tdir, pattern: pattern}
@@ -146,7 +169,8 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
         Jason.encode!(%{"s" => %{"Stop" => [%{"command" => "sh #{script}", "timeout" => 1}]}})
       )
 
-      conv = conversation!(%{"hooksFiles" => [hooks], "workspacePaths" => [dir], "appDataDir" => dir})
+      conv =
+        conversation!(%{"hooksFiles" => [hooks], "workspacePaths" => [dir], "appDataDir" => dir})
 
       {:ok, pid} =
         Machine.start_link(
@@ -203,11 +227,21 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
       File.write!(
         hooks,
         Jason.encode!(%{
-          "p" => %{"PostInvocation" => [%{"command" => "touch #{marker}; echo '{\"terminationBehavior\":\"force_continue\"}'", "timeout" => 1}]}
+          "p" => %{
+            "PostInvocation" => [
+              %{
+                "command" =>
+                  "touch #{marker}; echo '{\"terminationBehavior\":\"force_continue\"}'",
+                "timeout" => 1
+              }
+            ]
+          }
         })
       )
 
-      conv = conversation!(%{"hooksFiles" => [hooks], "workspacePaths" => [dir], "appDataDir" => dir})
+      conv =
+        conversation!(%{"hooksFiles" => [hooks], "workspacePaths" => [dir], "appDataDir" => dir})
+
       _ = HooksJson.after_tools([%{"output" => "ok"}], %{conversation_id: conv.id})
 
       assert File.exists?(marker), "PostInvocation hook was never executed"
@@ -218,7 +252,9 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
 
       result =
         safe(fn ->
-          HooksJson.after_tool("bash", %{}, %{"is_error" => true, "output" => %{"code" => 1}}, %{conversation_id: conv.id})
+          HooksJson.after_tool("bash", %{}, %{"is_error" => true, "output" => %{"code" => 1}}, %{
+            conversation_id: conv.id
+          })
         end)
 
       assert {:ok, {:ok, _}} = result, "got: #{inspect(result)}"
@@ -228,7 +264,10 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
       dir = tmp_dir!("enc")
       bad = %{"toolCall" => %{"name" => "bash", "args" => %{"x" => {:a, :tuple}}}}
 
-      result = safe(fn -> HooksJson.run_hook_command(%{"command" => "echo '{}'", "timeout" => 1}, bad, dir) end)
+      result =
+        safe(fn ->
+          HooksJson.run_hook_command(%{"command" => "echo '{}'", "timeout" => 1}, bad, dir)
+        end)
 
       assert {:ok, {:error, _}} = result, "got: #{inspect(result)}"
     end
@@ -250,7 +289,11 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
   end
 
   defp discover(ws, manifest) do
-    File.write!(Path.join([ws, ".agents", "skills.json"]), if(is_binary(manifest), do: manifest, else: Jason.encode!(manifest)))
+    File.write!(
+      Path.join([ws, ".agents", "skills.json"]),
+      if(is_binary(manifest), do: manifest, else: Jason.encode!(manifest))
+    )
+
     g = tmp_dir!("glob")
     a = tmp_dir!("app")
     Discovery.discover_skills([ws], global_config_dir: g, app_data_dir: a)
@@ -347,11 +390,13 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
     end
 
     test "an indented nested key does not shadow the top-level key" do
-      assert {:ok, %{name: "top"}} = parse("---\nmetadata:\n  name: nested\nname: top\ndescription: d\n---\nbody")
+      assert {:ok, %{name: "top"}} =
+               parse("---\nmetadata:\n  name: nested\nname: top\ndescription: d\n---\nbody")
     end
 
     test "plain multi-line continuation is kept" do
-      assert {:ok, %{description: "first second"}} = parse("---\nname: n\ndescription: first\n  second\n---\nbody")
+      assert {:ok, %{description: "first second"}} =
+               parse("---\nname: n\ndescription: first\n  second\n---\nbody")
     end
 
     test "a leading BOM does not hide the frontmatter" do
@@ -382,11 +427,18 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
       ws1 = workspace!("repo1")
       ws2 = workspace!("repo2")
       write_skill!(Path.join(ws1, "shared"), "from-ws1")
-      File.write!(Path.join([ws1, ".agents", "skills.json"]), Jason.encode!(%{"entries" => [%{"path" => "shared"}]}))
+
+      File.write!(
+        Path.join([ws1, ".agents", "skills.json"]),
+        Jason.encode!(%{"entries" => [%{"path" => "shared"}]})
+      )
 
       names =
         [ws1, ws2]
-        |> Discovery.discover_skills(global_config_dir: tmp_dir!("g"), app_data_dir: tmp_dir!("a"))
+        |> Discovery.discover_skills(
+          global_config_dir: tmp_dir!("g"),
+          app_data_dir: tmp_dir!("a")
+        )
         |> Enum.map(& &1.name)
 
       assert "from-ws1" in names
@@ -470,7 +522,8 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
       Process.sleep(5)
       second = Brain.sync_transcript!(conv.id, app_data_dir: app)
 
-      assert File.read!(second.full_path) == first_body, "created_at is export time, not entry time"
+      assert File.read!(second.full_path) == first_body,
+             "created_at is export time, not entry time"
     end
 
     test "an empty conversation writes an empty transcript, not a lone newline" do
@@ -492,7 +545,11 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
     test "a non-map `permissions` setting does not crash" do
       conv = perms_conv!(%{"settingsOverride" => %{"permissions" => "oops"}})
 
-      result = safe(fn -> Permissions.before_tool("bash", %{"command" => "ls"}, %{conversation_id: conv.id}) end)
+      result =
+        safe(fn ->
+          Permissions.before_tool("bash", %{"command" => "ls"}, %{conversation_id: conv.id})
+        end)
+
       assert {:ok, _} = result, "got: #{inspect(result)}"
     end
 
@@ -511,7 +568,10 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
           "settingsOverride" => %{"allowNonWorkspaceAccess" => false}
         })
 
-      assert :allow = Permissions.before_tool("read", %{"path" => "/etc/hosts"}, %{conversation_id: conv.id})
+      assert :allow =
+               Permissions.before_tool("read", %{"path" => "/etc/hosts"}, %{
+                 conversation_id: conv.id
+               })
     end
   end
 
@@ -536,7 +596,9 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
     test "/goal enables goal verification (moduledoc line 8)", %{conv: conv} do
       _ = SlashCommands.on_input("/goal ship it", %{conversation_id: conv.id})
       agent = Doc.snapshot("conversation", conv.id, "pi.agent")
-      assert agent["goal"] || agent["goalVerification"], "no goal state recorded: #{inspect(agent)}"
+
+      assert agent["goal"] || agent["goalVerification"],
+             "no goal state recorded: #{inspect(agent)}"
     end
   end
 

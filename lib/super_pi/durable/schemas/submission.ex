@@ -17,16 +17,16 @@ defmodule SuperPi.Durable.Schemas.Submission do
   @type t :: %__MODULE__{}
 
   schema "submissions" do
-    field :conversation_id, :integer
-    field :request_id, :string
-    field :kind, :string, default: "input"
-    field :when_busy, :string, default: "follow_up"
-    field :status, :string, default: "queued"
-    field :entry_id, :integer
-    field :payload, :map, default: %{}
-    field :settlement, :map
-    field :created_seq, :integer
-    field :updated_seq, :integer
+    field(:conversation_id, :integer)
+    field(:request_id, :string)
+    field(:kind, :string, default: "input")
+    field(:when_busy, :string, default: "follow_up")
+    field(:status, :string, default: "queued")
+    field(:entry_id, :integer)
+    field(:payload, :map, default: %{})
+    field(:settlement, :map)
+    field(:created_seq, :integer)
+    field(:updated_seq, :integer)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -45,7 +45,14 @@ defmodule SuperPi.Durable.Schemas.Submission do
       :created_seq,
       :updated_seq
     ])
-    |> validate_required([:conversation_id, :kind, :when_busy, :status, :created_seq, :updated_seq])
+    |> validate_required([
+      :conversation_id,
+      :kind,
+      :when_busy,
+      :status,
+      :created_seq,
+      :updated_seq
+    ])
   end
 
   def transition_changeset(submission, _from, _to, params) do

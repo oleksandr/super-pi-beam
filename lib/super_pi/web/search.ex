@@ -29,7 +29,8 @@ defmodule SuperPi.Web.Search do
 
   @type result :: %{title: String.t(), url: String.t(), snippet: String.t()}
 
-  @callback search(query :: String.t(), max_results :: pos_integer(), opts :: keyword()) :: {:ok, [result()]} | {:error, String.t()}
+  @callback search(query :: String.t(), max_results :: pos_integer(), opts :: keyword()) ::
+              {:ok, [result()]} | {:error, String.t()}
   @callback configured?(opts :: keyword()) :: boolean()
 
   @max_snippet 500
@@ -40,7 +41,10 @@ defmodule SuperPi.Web.Search do
   """
   @spec configured(keyword()) :: {module(), keyword()} | nil
   def configured(plugin_opts) when is_list(plugin_opts) do
-    spec = Keyword.get(plugin_opts, :search) || Application.get_env(:super_pi, :web_search) || System.get_env("SUPER_PI_WEB_SEARCH")
+    spec =
+      Keyword.get(plugin_opts, :search) || Application.get_env(:super_pi, :web_search) ||
+        System.get_env("SUPER_PI_WEB_SEARCH")
+
     resolve(spec)
   end
 
@@ -67,7 +71,8 @@ defmodule SuperPi.Web.Search do
   def resolve(_), do: nil
 
   defp usable?(mod, opts) do
-    Code.ensure_loaded?(mod) and function_exported?(mod, :search, 3) and function_exported?(mod, :configured?, 1) and mod.configured?(opts)
+    Code.ensure_loaded?(mod) and function_exported?(mod, :search, 3) and
+      function_exported?(mod, :configured?, 1) and mod.configured?(opts)
   end
 
   defp adapter(name) when is_binary(name) do
@@ -91,7 +96,8 @@ defmodule SuperPi.Web.Search do
   defp adapter(_), do: nil
 
   @doc "Runs a search through a resolved provider. Never raises."
-  @spec run({module(), keyword()}, String.t(), pos_integer()) :: {:ok, [result()]} | {:error, String.t()}
+  @spec run({module(), keyword()}, String.t(), pos_integer()) ::
+          {:ok, [result()]} | {:error, String.t()}
   def run({mod, opts}, query, max_results) do
     case mod.search(query, max_results, opts) do
       {:ok, results} when is_list(results) -> {:ok, Enum.take(results, max_results)}
@@ -104,7 +110,8 @@ defmodule SuperPi.Web.Search do
   @doc false
   # Shared by the adapters: Req options with the dedicated pool and no retries.
   def req_options(opts) do
-    [finch: [name: SuperPi.WebFinch], retry: false, receive_timeout: 15_000] ++ Keyword.get(opts, :req_options, [])
+    [finch: [name: SuperPi.WebFinch], retry: false, receive_timeout: 15_000] ++
+      Keyword.get(opts, :req_options, [])
   end
 
   @doc false
@@ -118,9 +125,14 @@ defmodule SuperPi.Web.Search do
   def key(opts, env), do: Keyword.get(opts, :api_key) || System.get_env(env)
 
   @doc false
-  def failed(%Req.Response{status: status}), do: {:error, "The search provider answered HTTP #{status}."}
-  def failed(exception) when is_exception(exception), do: {:error, "The search request failed: #{Exception.message(exception)}"}
+  def failed(%Req.Response{status: status}),
+    do: {:error, "The search provider answered HTTP #{status}."}
 
-  defp text(value) when is_binary(value), do: value |> String.replace_invalid() |> String.replace(~r/<[^>]+>/, "") |> String.trim()
+  def failed(exception) when is_exception(exception),
+    do: {:error, "The search request failed: #{Exception.message(exception)}"}
+
+  defp text(value) when is_binary(value),
+    do: value |> String.replace_invalid() |> String.replace(~r/<[^>]+>/, "") |> String.trim()
+
   defp text(_), do: ""
 end

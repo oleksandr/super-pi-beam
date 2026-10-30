@@ -27,7 +27,11 @@ defmodule SuperPi.Web.Search.Tavily do
     case Req.request(req) do
       {:ok, %Req.Response{status: 200, body: %{} = body}} ->
         results = body["results"] || []
-        {:ok, results |> Enum.map(&Search.result(&1["title"], &1["url"], &1["content"])) |> Enum.reject(&is_nil/1)}
+
+        {:ok,
+         results
+         |> Enum.map(&Search.result(&1["title"], &1["url"], &1["content"]))
+         |> Enum.reject(&is_nil/1)}
 
       {:ok, resp} ->
         Search.failed(resp)

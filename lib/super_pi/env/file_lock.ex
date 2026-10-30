@@ -68,7 +68,9 @@ defmodule SuperPi.Env.FileLock do
   end
 
   def start_link({env_id, canonical_path}) do
-    GenServer.start_link(__MODULE__, {env_id, canonical_path}, name: via_tuple(env_id, canonical_path))
+    GenServer.start_link(__MODULE__, {env_id, canonical_path},
+      name: via_tuple(env_id, canonical_path)
+    )
   end
 
   @impl true

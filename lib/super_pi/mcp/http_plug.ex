@@ -63,7 +63,9 @@ defmodule SuperPi.MCP.HTTPPlug do
   defp route(conn, "DELETE"), do: delete(conn)
 
   defp route(conn, _other) do
-    conn |> put_resp_header("allow", "POST, DELETE") |> fail(405, "Method not allowed: this server sends no messages on its own")
+    conn
+    |> put_resp_header("allow", "POST, DELETE")
+    |> fail(405, "Method not allowed: this server sends no messages on its own")
   end
 
   # --- POST ---
@@ -86,13 +88,20 @@ defmodule SuperPi.MCP.HTTPPlug do
   end
 
   defp check_draining do
-    if SuperPi.Drain.accepting?(), do: :ok, else: {:error, 503, "This node is shutting down. Retry the request."}
+    if SuperPi.Drain.accepting?(),
+      do: :ok,
+      else: {:error, 503, "This node is shutting down. Retry the request."}
   end
 
   defp check_version(conn) do
     case get_req_header(conn, "mcp-protocol-version") do
-      [] -> :ok
-      [version | _] -> if version in Server.supported_versions(), do: :ok, else: {:error, 400, "Unsupported MCP-Protocol-Version: #{version}"}
+      [] ->
+        :ok
+
+      [version | _] ->
+        if version in Server.supported_versions(),
+          do: :ok,
+          else: {:error, 400, "Unsupported MCP-Protocol-Version: #{version}"}
     end
   end
 
@@ -121,7 +130,9 @@ defmodule SuperPi.MCP.HTTPPlug do
   defp messages([], conn), do: {:error, 400, "Invalid Request: an empty batch", conn}
   defp messages(list, conn) when is_list(list), do: {:ok, list, true, conn}
   defp messages(%{} = message, conn), do: {:ok, [message], false, conn}
-  defp messages(_other, conn), do: {:error, 400, "Invalid Request: expected a JSON-RPC object or array", conn}
+
+  defp messages(_other, conn),
+    do: {:error, 400, "Invalid Request: expected a JSON-RPC object or array", conn}
 
   defp open_session(conn, messages) do
     initializes = Enum.count(messages, &initialize?/1)
@@ -194,9 +205,15 @@ defmodule SuperPi.MCP.HTTPPlug do
 
         kind ->
           case Server.handle_mcp_line(Jason.encode!(message), state) do
-            {:reply, reply, state} -> {if(kind == :request or invalid?(reply), do: [reply | replies], else: replies), state, ended?}
-            {:noreply, state} -> {replies, state, ended?}
-            {:stop, _reason, state} -> {replies, state, true}
+            {:reply, reply, state} ->
+              {if(kind == :request or invalid?(reply), do: [reply | replies], else: replies),
+               state, ended?}
+
+            {:noreply, state} ->
+              {replies, state, ended?}
+
+            {:stop, _reason, state} ->
+              {replies, state, true}
           end
       end
     end)
@@ -208,7 +225,9 @@ defmodule SuperPi.MCP.HTTPPlug do
   end
 
   defp classify(%{"id" => _} = message) do
-    if Map.has_key?(message, "result") or Map.has_key?(message, "error"), do: :response, else: :invalid
+    if Map.has_key?(message, "result") or Map.has_key?(message, "error"),
+      do: :response,
+      else: :invalid
   end
 
   defp classify(_), do: :invalid
@@ -228,11 +247,17 @@ defmodule SuperPi.MCP.HTTPPlug do
   # `application/json` too (the spec requires both) gets plain JSON.
   defp event_stream?(conn) do
     accept = conn |> get_req_header("accept") |> Enum.join(",")
-    String.contains?(accept, "text/event-stream") and not String.contains?(accept, "application/json")
+
+    String.contains?(accept, "text/event-stream") and
+      not String.contains?(accept, "application/json")
   end
 
   defp stream(conn, status, body) do
-    conn = conn |> put_resp_content_type("text/event-stream") |> put_resp_header("cache-control", "no-cache") |> send_chunked(status)
+    conn =
+      conn
+      |> put_resp_content_type("text/event-stream")
+      |> put_resp_header("cache-control", "no-cache")
+      |> send_chunked(status)
 
     case chunk(conn, "event: message\ndata: " <> Jason.encode!(body) <> "\n\n") do
       {:ok, conn} -> conn
@@ -269,7 +294,9 @@ defmodule SuperPi.MCP.HTTPPlug do
         :ok
 
       [origin | _] ->
-        if Auth.required?() or origin_allowed?(origin), do: :ok, else: {:error, 403, "Origin not allowed: #{origin}"}
+        if Auth.required?() or origin_allowed?(origin),
+          do: :ok,
+          else: {:error, 403, "Origin not allowed: #{origin}"}
     end
   end
 
@@ -288,8 +315,16 @@ defmodule SuperPi.MCP.HTTPPlug do
 
   # A transport-level failure. It is a JSON-RPC error with no id, as the spec shows for these.
   defp fail(conn, status, message) do
-    body = %{"jsonrpc" => "2.0", "id" => nil, "error" => %{"code" => error_code(status), "message" => message}}
-    conn |> put_resp_content_type("application/json") |> send_resp(status, Jason.encode!(body)) |> halt()
+    body = %{
+      "jsonrpc" => "2.0",
+      "id" => nil,
+      "error" => %{"code" => error_code(status), "message" => message}
+    }
+
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(status, Jason.encode!(body))
+    |> halt()
   end
 
   defp error_code(400), do: -32600

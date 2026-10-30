@@ -24,7 +24,10 @@ defmodule SuperPi.Plugins.Handoff do
       "type" => "object",
       "properties" => %{
         "goal" => %{"type" => "string", "description" => "Clear objective of the new thread"},
-        "summary" => %{"type" => "string", "description" => "Synthesized background and decisions made so far"},
+        "summary" => %{
+          "type" => "string",
+          "description" => "Synthesized background and decisions made so far"
+        },
         "files" => %{
           "type" => "array",
           "items" => %{"type" => "string"},
@@ -71,13 +74,15 @@ defmodule SuperPi.Plugins.Handoff do
         ""
       end
 
-    distilled_prompt = """
-    ## Context Transfer
-    #{summary}#{files_bullet}
+    distilled_prompt =
+      """
+      ## Context Transfer
+      #{summary}#{files_bullet}
 
-    ## Task Goal
-    #{goal}
-    """ |> String.trim()
+      ## Task Goal
+      #{goal}
+      """
+      |> String.trim()
 
     parent_agent =
       if parent_conv_id do
@@ -93,13 +98,26 @@ defmodule SuperPi.Plugins.Handoff do
     child_agent =
       %{
         "systemSections" => [
-          %{"id" => "handoff_context", "content" => "You are working on a focused thread handed off from session #{parent_conv_id}."}
+          %{
+            "id" => "handoff_context",
+            "content" =>
+              "You are working on a focused thread handed off from session #{parent_conv_id}."
+          }
         ],
         "tools" => SuperPi.Tools.active_llm_tools(),
         "executionMode" => Map.get(parent_agent, "executionMode", "accept-edits"),
-        "dangerouslySkipPermissions" => Map.get(parent_agent, "dangerouslySkipPermissions") == true
+        "dangerouslySkipPermissions" =>
+          Map.get(parent_agent, "dangerouslySkipPermissions") == true
       }
-      |> Map.merge(Map.take(parent_agent, ["workspacePaths", "globalConfigDir", "appDataDir", "settingsOverride", "effort"]))
+      |> Map.merge(
+        Map.take(parent_agent, [
+          "workspacePaths",
+          "globalConfigDir",
+          "appDataDir",
+          "settingsOverride",
+          "effort"
+        ])
+      )
       |> then(fn a ->
         if parent_model, do: Map.put(a, "model", parent_model), else: a
       end)
@@ -120,7 +138,8 @@ defmodule SuperPi.Plugins.Handoff do
     Logger.info("[Handoff] Created child session #{child_conv.id} from parent #{parent_conv_id}")
 
     %{
-      "output" => "Handoff completed. Created child session #{child_conv.id} with distilled context.\nPrompt:\n#{distilled_prompt}",
+      "output" =>
+        "Handoff completed. Created child session #{child_conv.id} with distilled context.\nPrompt:\n#{distilled_prompt}",
       "structured_output" => %{
         "child_conversation_id" => child_conv.id,
         "parent_conversation_id" => parent_conv_id,

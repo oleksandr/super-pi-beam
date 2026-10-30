@@ -25,7 +25,8 @@ defmodule SuperPi.AI.Providers.Gemini do
 
   @impl true
   def handles?(model) do
-    String.starts_with?(model, "gemini-") or String.starts_with?(model, "google/") or alias?(model)
+    String.starts_with?(model, "gemini-") or String.starts_with?(model, "google/") or
+      alias?(model)
   end
 
   @impl true

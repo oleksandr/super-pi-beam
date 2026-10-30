@@ -210,7 +210,9 @@ defmodule SuperPi.Env.SandboxRunner do
               if final.spilled_path do
                 preview_raw = binary_part(output, 0, min(byte_size(output), @preview_bytes))
                 preview = safe_utf8_prefix(preview_raw)
-                preview <> "\n\n[Output exceeded #{spill_limit} bytes; full output spilled to #{final.spilled_path}]"
+
+                preview <>
+                  "\n\n[Output exceeded #{spill_limit} bytes; full output spilled to #{final.spilled_path}]"
               else
                 output
               end
@@ -265,7 +267,9 @@ defmodule SuperPi.Env.SandboxRunner do
         %{acc | bytes: new_bytes}
 
       new_bytes > spill_limit ->
-        spill_path = Path.join(System.tmp_dir!(), "super_pi_spill_#{System.unique_integer([:positive])}.log")
+        spill_path =
+          Path.join(System.tmp_dir!(), "super_pi_spill_#{System.unique_integer([:positive])}.log")
+
         File.touch!(spill_path)
         File.chmod!(spill_path, 0o600)
         {:ok, io} = File.open(spill_path, [:write, :binary])

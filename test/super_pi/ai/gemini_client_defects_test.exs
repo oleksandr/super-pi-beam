@@ -14,15 +14,19 @@ defmodule SuperPi.AI.GeminiClientDefectsTest do
 
   alias SuperPi.AI.GeminiClient
 
-
   setup do
     old_opts = Application.get_env(:req, :default_options)
     old_key = System.get_env("GEMINI_API_KEY")
     System.put_env("GEMINI_API_KEY", "test-key-abc123")
 
     on_exit(fn ->
-      if old_opts, do: Application.put_env(:req, :default_options, old_opts), else: Application.delete_env(:req, :default_options)
-      if old_key, do: System.put_env("GEMINI_API_KEY", old_key), else: System.delete_env("GEMINI_API_KEY")
+      if old_opts,
+        do: Application.put_env(:req, :default_options, old_opts),
+        else: Application.delete_env(:req, :default_options)
+
+      if old_key,
+        do: System.put_env("GEMINI_API_KEY", old_key),
+        else: System.delete_env("GEMINI_API_KEY")
     end)
 
     :ok
@@ -52,7 +56,10 @@ defmodule SuperPi.AI.GeminiClientDefectsTest do
   defp sse(map), do: "data: " <> Jason.encode!(map) <> "\n\n"
 
   defp payload(extra \\ %{}) do
-    Map.merge(%{model: "gemini-3-flash-preview", messages: [%{"role" => "user", "content" => "hi"}]}, extra)
+    Map.merge(
+      %{model: "gemini-3-flash-preview", messages: [%{"role" => "user", "content" => "hi"}]},
+      extra
+    )
   end
 
   describe "error and block responses on HTTP 200 (gemini_client.ex:77-104)" do
@@ -70,7 +77,11 @@ defmodule SuperPi.AI.GeminiClientDefectsTest do
   describe "usage (gemini_client.ex:77-104)" do
     test "usageMetadata that arrives after the finishReason chunk is not lost" do
       stub([
-        sse(%{"candidates" => [%{"content" => %{"parts" => [%{"text" => "hi"}]}, "finishReason" => "STOP"}]}),
+        sse(%{
+          "candidates" => [
+            %{"content" => %{"parts" => [%{"text" => "hi"}]}, "finishReason" => "STOP"}
+          ]
+        }),
         sse(%{"usageMetadata" => %{"promptTokenCount" => 11, "candidatesTokenCount" => 42}})
       ])
 
@@ -81,35 +92,76 @@ defmodule SuperPi.AI.GeminiClientDefectsTest do
 
   describe "request construction (gemini_client.ex:47,315)" do
     test "the API key is sent in a header, not in the URL" do
-      stub([sse(%{"candidates" => [%{"content" => %{"parts" => [%{"text" => "ok"}]}, "finishReason" => "STOP"}]})])
+      stub([
+        sse(%{
+          "candidates" => [
+            %{"content" => %{"parts" => [%{"text" => "ok"}]}, "finishReason" => "STOP"}
+          ]
+        })
+      ])
+
       GeminiClient.generate(payload())
 
       assert_received {:request, conn}
-      refute conn.query_string =~ "key=", "API key leaked into the query string: #{conn.query_string}"
+
+      refute conn.query_string =~ "key=",
+             "API key leaked into the query string: #{conn.query_string}"
+
       assert Plug.Conn.get_req_header(conn, "x-goog-api-key") == ["test-key-abc123"]
     end
 
-    for {label, model} <- [query_injection: "gemini-x?foo=bar", path_traversal: "gemini-../x", fragment: "gemini-x#frag"] do
+    for {label, model} <- [
+          query_injection: "gemini-x?foo=bar",
+          path_traversal: "gemini-../x",
+          fragment: "gemini-x#frag"
+        ] do
       test "a client-supplied model name with #{label} cannot alter the request URL" do
-        stub([sse(%{"candidates" => [%{"content" => %{"parts" => [%{"text" => "ok"}]}, "finishReason" => "STOP"}]})])
+        stub([
+          sse(%{
+            "candidates" => [
+              %{"content" => %{"parts" => [%{"text" => "ok"}]}, "finishReason" => "STOP"}
+            ]
+          })
+        ])
+
         GeminiClient.generate(payload(%{model: unquote(model)}))
 
         assert_received {:request, conn}
         refute conn.query_params["foo"], "model injected a query parameter"
-        refute ".." in conn.path_info, "model injected a path traversal: #{inspect(conn.path_info)}"
-        assert List.last(conn.path_info) =~ ":streamGenerateContent", "model truncated the URL: #{inspect(conn.path_info)}"
-        assert length(conn.path_info) == 3, "model changed the path shape: #{inspect(conn.path_info)}"
+
+        refute ".." in conn.path_info,
+               "model injected a path traversal: #{inspect(conn.path_info)}"
+
+        assert List.last(conn.path_info) =~ ":streamGenerateContent",
+               "model truncated the URL: #{inspect(conn.path_info)}"
+
+        assert length(conn.path_info) == 3,
+               "model changed the path shape: #{inspect(conn.path_info)}"
       end
     end
 
     test "a nil model does not raise" do
-      stub([sse(%{"candidates" => [%{"content" => %{"parts" => [%{"text" => "ok"}]}, "finishReason" => "STOP"}]})])
+      stub([
+        sse(%{
+          "candidates" => [
+            %{"content" => %{"parts" => [%{"text" => "ok"}]}, "finishReason" => "STOP"}
+          ]
+        })
+      ])
+
       result = try_generate(payload(%{model: nil}))
       refute match?({:raised, _}, result), "got #{inspect(result)}"
     end
 
     test "a non-string model does not raise" do
-      stub([sse(%{"candidates" => [%{"content" => %{"parts" => [%{"text" => "ok"}]}, "finishReason" => "STOP"}]})])
+      stub([
+        sse(%{
+          "candidates" => [
+            %{"content" => %{"parts" => [%{"text" => "ok"}]}, "finishReason" => "STOP"}
+          ]
+        })
+      ])
+
       result = try_generate(payload(%{model: 123}))
       refute match?({:raised, _}, result), "got #{inspect(result)}"
     end
@@ -122,7 +174,8 @@ defmodule SuperPi.AI.GeminiClientDefectsTest do
   end
 
   describe "history conversion (gemini_client.ex:202-214)" do
-    defp call(id, name), do: %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => %{}}
+    defp call(id, name),
+      do: %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => %{}}
 
     defp history do
       [
@@ -136,18 +189,28 @@ defmodule SuperPi.AI.GeminiClientDefectsTest do
     test "consecutive tool results are grouped into one content with one functionResponse per call" do
       %{"contents" => contents} = GeminiClient.build_gemini_body(%{messages: history()})
 
-      assert length(contents) == 3, "expected user, model, user(2 responses); got #{length(contents)} contents"
+      assert length(contents) == 3,
+             "expected user, model, user(2 responses); got #{length(contents)} contents"
+
       last = List.last(contents)
       assert Enum.count(last["parts"], &Map.has_key?(&1, "functionResponse")) == 2
     end
 
     test "a tool message without a name still answers its functionCall" do
-      msgs = List.replace_at(history(), 2, %{"role" => "tool", "tool_call_id" => "c1", "content" => "r1"})
+      msgs =
+        List.replace_at(history(), 2, %{
+          "role" => "tool",
+          "tool_call_id" => "c1",
+          "content" => "r1"
+        })
+
       %{"contents" => contents} = GeminiClient.build_gemini_body(%{messages: msgs})
 
       calls = for c <- contents, p <- c["parts"], Map.has_key?(p, "functionCall"), do: p
       responses = for c <- contents, p <- c["parts"], Map.has_key?(p, "functionResponse"), do: p
-      assert length(responses) == length(calls), "#{length(calls)} functionCalls but #{length(responses)} functionResponses (orphan call)"
+
+      assert length(responses) == length(calls),
+             "#{length(calls)} functionCalls but #{length(responses)} functionResponses (orphan call)"
     end
 
     test "a map tool output does not crash the conversion" do
@@ -167,12 +230,23 @@ defmodule SuperPi.AI.GeminiClientDefectsTest do
       msgs = [
         %{
           "role" => "user",
-          "content" => [%{"type" => "image", "source" => %{"type" => "base64", "media_type" => "image/png", "data" => "BASE64DATA"}}]
+          "content" => [
+            %{
+              "type" => "image",
+              "source" => %{
+                "type" => "base64",
+                "media_type" => "image/png",
+                "data" => "BASE64DATA"
+              }
+            }
+          ]
         }
       ]
 
       %{"contents" => [%{"parts" => parts}]} = GeminiClient.build_gemini_body(%{messages: msgs})
-      refute Enum.any?(parts, &(is_binary(&1["text"]) and &1["text"] =~ "BASE64DATA")), "image sent as inspect/1 text: #{inspect(parts)}"
+
+      refute Enum.any?(parts, &(is_binary(&1["text"]) and &1["text"] =~ "BASE64DATA")),
+             "image sent as inspect/1 text: #{inspect(parts)}"
     end
   end
 end

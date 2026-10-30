@@ -10,7 +10,6 @@ defmodule SuperPi.BinScriptDefectsTest do
   """
   use ExUnit.Case, async: false
 
-
   @repo File.cwd!()
   @script Path.join(@repo, "bin/super-pi")
 
@@ -75,7 +74,10 @@ defmodule SuperPi.BinScriptDefectsTest do
       {_out, 0} = run(ctx, ["mcp"])
 
       calls = recorded(ctx)
-      assert calls =~ "SuperPi.MCP.Server.run_stdio()", "mise was not invoked for mcp: #{inspect(calls)}"
+
+      assert calls =~ "SuperPi.MCP.Server.run_stdio()",
+             "mise was not invoked for mcp: #{inspect(calls)}"
+
       refute calls =~ "--no-halt", "VM stays alive after the MCP client closes stdin"
     end
   end

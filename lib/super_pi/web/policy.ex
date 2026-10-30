@@ -69,7 +69,8 @@ defmodule SuperPi.Web.Policy do
 
   Options: `:resolver` (default `system_resolver/1`) and `:unsafe_allow_local` (test only).
   """
-  @spec check_url(term(), keyword()) :: {:ok, target()} | {:error, {:refused, String.t()} | {:dns, term()}}
+  @spec check_url(term(), keyword()) ::
+          {:ok, target()} | {:error, {:refused, String.t()} | {:dns, term()}}
   def check_url(url, opts \\ []) do
     local? = Keyword.get(opts, :unsafe_allow_local, false) == true
 
@@ -105,9 +106,14 @@ defmodule SuperPi.Web.Policy do
     end
   end
 
-  def reserved?({0, 0, 0, 0, 0, 0xFFFF, hi, lo}) when hi in 0..0xFFFF and lo in 0..0xFFFF, do: reserved?(embedded(hi, lo))
-  def reserved?({0x64, 0xFF9B, 0, 0, 0, 0, hi, lo}) when hi in 0..0xFFFF and lo in 0..0xFFFF, do: reserved?(embedded(hi, lo))
-  def reserved?({0x2002, hi, lo, _, _, _, _, _}) when hi in 0..0xFFFF and lo in 0..0xFFFF, do: reserved?(embedded(hi, lo))
+  def reserved?({0, 0, 0, 0, 0, 0xFFFF, hi, lo}) when hi in 0..0xFFFF and lo in 0..0xFFFF,
+    do: reserved?(embedded(hi, lo))
+
+  def reserved?({0x64, 0xFF9B, 0, 0, 0, 0, hi, lo}) when hi in 0..0xFFFF and lo in 0..0xFFFF,
+    do: reserved?(embedded(hi, lo))
+
+  def reserved?({0x2002, hi, lo, _, _, _, _, _}) when hi in 0..0xFFFF and lo in 0..0xFFFF,
+    do: reserved?(embedded(hi, lo))
 
   def reserved?({w1, w2, _, _, _, _, _, _}) when w1 in 0..0xFFFF and w2 in 0..0xFFFF do
     cond do
@@ -133,7 +139,8 @@ defmodule SuperPi.Web.Policy do
     _ -> {:error, {:refused, "Redirect Location is not a valid URL."}}
   end
 
-  def redirect_url(_from, _location), do: {:error, {:refused, "Redirect without a valid Location."}}
+  def redirect_url(_from, _location),
+    do: {:error, {:refused, "Redirect without a valid Location."}}
 
   @doc """
   Builds the request target for a pinned-IP connect: the URI with the checked address as host
@@ -142,7 +149,8 @@ defmodule SuperPi.Web.Policy do
   Unverified, see the moduledoc.
   """
   @spec pin(target(), keyword()) :: {URI.t(), String.t()}
-  def pin(%{uri: uri, host: host, ips: [ip | _]}, _opts \\ []), do: {%{uri | host: ip_to_string(ip)}, host}
+  def pin(%{uri: uri, host: host, ips: [ip | _]}, _opts \\ []),
+    do: {%{uri | host: ip_to_string(ip)}, host}
 
   @doc "Default resolver: the system resolver, IPv4 and IPv6, every address returned."
   @spec system_resolver(String.t()) :: {:ok, [ip()]} | {:error, term()}
@@ -167,11 +175,20 @@ defmodule SuperPi.Web.Policy do
     url = String.trim(url)
 
     cond do
-      url == "" -> refuse("The URL is empty.")
-      byte_size(url) > @max_url_bytes -> refuse("The URL is longer than #{@max_url_bytes} bytes.")
-      String.contains?(url, "\\") -> refuse("The URL contains a backslash.")
-      Regex.match?(~r/[\x00-\x20\x7f]/, url) -> refuse("The URL contains whitespace or control characters.")
-      true -> parse_uri(URI.parse(url), local?)
+      url == "" ->
+        refuse("The URL is empty.")
+
+      byte_size(url) > @max_url_bytes ->
+        refuse("The URL is longer than #{@max_url_bytes} bytes.")
+
+      String.contains?(url, "\\") ->
+        refuse("The URL contains a backslash.")
+
+      Regex.match?(~r/[\x00-\x20\x7f]/, url) ->
+        refuse("The URL contains whitespace or control characters.")
+
+      true ->
+        parse_uri(URI.parse(url), local?)
     end
   end
 
@@ -182,13 +199,26 @@ defmodule SuperPi.Web.Policy do
     host = normalize_host(uri.host)
 
     cond do
-      scheme not in ["http", "https"] -> refuse("Only http and https URLs are allowed.")
-      uri.userinfo != nil -> refuse("URLs with credentials (user:password@) are not allowed.")
-      host == "" -> refuse("The URL has no host.")
-      not local? and effective_port(uri, scheme) not in @allowed_ports -> refuse("Only ports 80 and 443 are allowed.")
-      not local? and denied_name?(host) -> refuse("The host `#{host}` is not allowed.")
-      not host_syntax?(host) -> refuse("The host `#{host}` is not a valid ASCII host name or address.")
-      true -> {:ok, %{uri | scheme: scheme}, host}
+      scheme not in ["http", "https"] ->
+        refuse("Only http and https URLs are allowed.")
+
+      uri.userinfo != nil ->
+        refuse("URLs with credentials (user:password@) are not allowed.")
+
+      host == "" ->
+        refuse("The URL has no host.")
+
+      not local? and effective_port(uri, scheme) not in @allowed_ports ->
+        refuse("Only ports 80 and 443 are allowed.")
+
+      not local? and denied_name?(host) ->
+        refuse("The host `#{host}` is not allowed.")
+
+      not host_syntax?(host) ->
+        refuse("The host `#{host}` is not a valid ASCII host name or address.")
+
+      true ->
+        {:ok, %{uri | scheme: scheme}, host}
     end
   end
 
@@ -199,7 +229,8 @@ defmodule SuperPi.Web.Policy do
   defp effective_port(_uri, "https"), do: 443
   defp effective_port(_uri, _scheme), do: 80
 
-  defp denied_name?(host), do: host in @denied_names or Enum.any?(@denied_suffixes, &String.ends_with?(host, &1))
+  defp denied_name?(host),
+    do: host in @denied_names or Enum.any?(@denied_suffixes, &String.ends_with?(host, &1))
 
   defp host_syntax?(host) do
     if String.contains?(host, ":") do

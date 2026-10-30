@@ -72,7 +72,9 @@ defmodule SuperPi.ToolsDefectsTest do
         end
 
       raised = Enum.filter(results, &match?({:raised, _}, &1))
-      assert raised == [], "#{length(raised)} callers raised, first: #{inspect(List.first(raised))}"
+
+      assert raised == [],
+             "#{length(raised)} callers raised, first: #{inspect(List.first(raised))}"
     end
   end
 
@@ -82,7 +84,10 @@ defmodule SuperPi.ToolsDefectsTest do
         if :ets.whereis(@table) != :undefined, do: :ets.delete(@table, "zz_codemode_only")
       end)
 
-      Tools.register_tool!(%{"name" => "zz_codemode_only", "description" => "script only"}, :codemode)
+      Tools.register_tool!(
+        %{"name" => "zz_codemode_only", "description" => "script only"},
+        :codemode
+      )
 
       result = Tools.tool_search("zz_codemode_only")
       added = Enum.map(result["control"]["add_tools"], & &1["name"])

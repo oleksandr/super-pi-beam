@@ -16,7 +16,6 @@ defmodule SuperPi.Durable.DurableDefectsTest do
   alias SuperPi.Durable.{DeferredFlusher, Doc, Storage, TaskEngine}
   alias SuperPi.Durable.Schemas.Task, as: TaskSchema
 
-
   @usage_scope {"conversation", "pi.usage"}
 
   defp running_task(conv, opts \\ []) do
@@ -45,6 +44,7 @@ defmodule SuperPi.Durable.DurableDefectsTest do
 
       # A tuple cannot be JSON-encoded, so the DB write must fail.
       DeferredFlusher.stage_deferred("conversation", conv.id, "pi.live", %{"bad" => {:not, :json}})
+
       assert DeferredFlusher.pending_count() == 1
 
       raised? =
@@ -155,7 +155,10 @@ defmodule SuperPi.Durable.DurableDefectsTest do
     test "checkpoint_task on a waiting task is rejected" do
       conv = Storage.create_conversation!()
       parent = running_task(conv)
-      {:ok, pending_child} = TaskEngine.create_task(conv.id, "child", %{}, owner_task_id: parent.id)
+
+      {:ok, pending_child} =
+        TaskEngine.create_task(conv.id, "child", %{}, owner_task_id: parent.id)
+
       {:ok, waiting} = TaskEngine.wait_for_children(parent.id, [pending_child.id])
       assert waiting.status == "waiting"
 
@@ -169,9 +172,11 @@ defmodule SuperPi.Durable.DurableDefectsTest do
       conv = Storage.create_conversation!()
       task = running_task(conv)
 
-      assert {:ok, %TaskSchema{status: "completed"}} = TaskEngine.complete_task(task.id, %{"v" => 1})
+      assert {:ok, %TaskSchema{status: "completed"}} =
+               TaskEngine.complete_task(task.id, %{"v" => 1})
 
-      assert {:ok, %TaskSchema{status: "completed"}} = TaskEngine.complete_task(task.id, %{"v" => 1}),
+      assert {:ok, %TaskSchema{status: "completed"}} =
+               TaskEngine.complete_task(task.id, %{"v" => 1}),
              "a worker retry cannot tell 'already done' from a real failure"
     end
 

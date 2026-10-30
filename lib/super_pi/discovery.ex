@@ -165,7 +165,10 @@ defmodule SuperPi.Discovery do
 
     global_candidates =
       Enum.flat_map(global_dirs, fn dir ->
-        [Path.join(dir, "AGENTS.md"), Path.join(dir, "GEMINI.md") | list_markdown_files(Path.join(dir, "rules"))]
+        [
+          Path.join(dir, "AGENTS.md"),
+          Path.join(dir, "GEMINI.md") | list_markdown_files(Path.join(dir, "rules"))
+        ]
       end)
 
     (workspace_candidates ++ global_candidates)
@@ -257,9 +260,15 @@ defmodule SuperPi.Discovery do
             |> Enum.flat_map(fn item ->
               {item_path, inc_only, exc} =
                 cond do
-                  is_binary(item) -> {item, nil, nil}
-                  is_map(item) -> {Map.get(item, "path", ""), Map.get(item, "include_only"), Map.get(item, "exclude")}
-                  true -> {"", nil, nil}
+                  is_binary(item) ->
+                    {item, nil, nil}
+
+                  is_map(item) ->
+                    {Map.get(item, "path", ""), Map.get(item, "include_only"),
+                     Map.get(item, "exclude")}
+
+                  true ->
+                    {"", nil, nil}
                 end
 
               if is_binary(item_path) and item_path != "" do
@@ -282,9 +291,15 @@ defmodule SuperPi.Discovery do
             |> Enum.flat_map(fn item ->
               {item_path, inc_only, exc} =
                 cond do
-                  is_binary(item) -> {item, nil, nil}
-                  is_map(item) -> {Map.get(item, "path", ""), Map.get(item, "include_only"), Map.get(item, "exclude")}
-                  true -> {"", nil, nil}
+                  is_binary(item) ->
+                    {item, nil, nil}
+
+                  is_map(item) ->
+                    {Map.get(item, "path", ""), Map.get(item, "include_only"),
+                     Map.get(item, "exclude")}
+
+                  true ->
+                    {"", nil, nil}
                 end
 
               if is_binary(item_path) and item_path != "" do
@@ -329,7 +344,14 @@ defmodule SuperPi.Discovery do
             parsed_name = extract_top_level_yaml_field(yaml_block, "name")
             name = if is_nil(parsed_name) or parsed_name == "", do: dir_name, else: parsed_name
             desc = extract_top_level_yaml_field(yaml_block, "description") || ""
-            {:ok, %{name: name, description: desc, path: Path.expand(skill_md_path), body: String.trim(body)}}
+
+            {:ok,
+             %{
+               name: name,
+               description: desc,
+               path: Path.expand(skill_md_path),
+               body: String.trim(body)
+             }}
 
           _ ->
             {:error, :missing_frontmatter}
@@ -355,7 +377,9 @@ defmodule SuperPi.Discovery do
         continuation_lines =
           lines
           |> Enum.drop(idx + 1)
-          |> Enum.take_while(fn l -> String.starts_with?(l, " ") or String.starts_with?(l, "\t") end)
+          |> Enum.take_while(fn l ->
+            String.starts_with?(l, " ") or String.starts_with?(l, "\t")
+          end)
           |> Enum.map(&String.trim/1)
           |> Enum.reject(&(&1 == ""))
 
@@ -376,10 +400,12 @@ defmodule SuperPi.Discovery do
     trimmed = String.trim(val)
 
     cond do
-      String.starts_with?(trimmed, "\"") and String.ends_with?(trimmed, "\"") and byte_size(trimmed) >= 2 ->
+      String.starts_with?(trimmed, "\"") and String.ends_with?(trimmed, "\"") and
+          byte_size(trimmed) >= 2 ->
         binary_part(trimmed, 1, byte_size(trimmed) - 2)
 
-      String.starts_with?(trimmed, "'") and String.ends_with?(trimmed, "'") and byte_size(trimmed) >= 2 ->
+      String.starts_with?(trimmed, "'") and String.ends_with?(trimmed, "'") and
+          byte_size(trimmed) >= 2 ->
         binary_part(trimmed, 1, byte_size(trimmed) - 2)
 
       true ->

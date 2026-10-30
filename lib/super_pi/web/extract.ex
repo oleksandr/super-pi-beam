@@ -43,11 +43,33 @@ defmodule SuperPi.Web.Extract do
 
   # Windows-1252 differs from ISO-8859-1 in 0x80-0x9F.
   @cp1252 %{
-    0x80 => 0x20AC, 0x82 => 0x201A, 0x83 => 0x0192, 0x84 => 0x201E, 0x85 => 0x2026, 0x86 => 0x2020,
-    0x87 => 0x2021, 0x88 => 0x02C6, 0x89 => 0x2030, 0x8A => 0x0160, 0x8B => 0x2039, 0x8C => 0x0152,
-    0x8E => 0x017D, 0x91 => 0x2018, 0x92 => 0x2019, 0x93 => 0x201C, 0x94 => 0x201D, 0x95 => 0x2022,
-    0x96 => 0x2013, 0x97 => 0x2014, 0x98 => 0x02DC, 0x99 => 0x2122, 0x9A => 0x0161, 0x9B => 0x203A,
-    0x9C => 0x0153, 0x9E => 0x017E, 0x9F => 0x0178
+    0x80 => 0x20AC,
+    0x82 => 0x201A,
+    0x83 => 0x0192,
+    0x84 => 0x201E,
+    0x85 => 0x2026,
+    0x86 => 0x2020,
+    0x87 => 0x2021,
+    0x88 => 0x02C6,
+    0x89 => 0x2030,
+    0x8A => 0x0160,
+    0x8B => 0x2039,
+    0x8C => 0x0152,
+    0x8E => 0x017D,
+    0x91 => 0x2018,
+    0x92 => 0x2019,
+    0x93 => 0x201C,
+    0x94 => 0x201D,
+    0x95 => 0x2022,
+    0x96 => 0x2013,
+    0x97 => 0x2014,
+    0x98 => 0x02DC,
+    0x99 => 0x2122,
+    0x9A => 0x0161,
+    0x9B => 0x203A,
+    0x9C => 0x0153,
+    0x9E => 0x017E,
+    0x9F => 0x0178
   }
 
   @type kind :: :html | :json | :text | :pdf | :binary | :unknown
@@ -79,11 +101,20 @@ defmodule SuperPi.Web.Extract do
   end
 
   defp text_type?(t) do
-    String.starts_with?(t, "text/") or String.ends_with?(t, "+xml") or t in ~w(application/xml application/javascript application/x-ndjson application/yaml application/x-yaml application/toml)
+    String.starts_with?(t, "text/") or String.ends_with?(t, "+xml") or
+      t in ~w(application/xml application/javascript application/x-ndjson application/yaml application/x-yaml application/toml)
   end
 
   defp media_type(nil), do: ""
-  defp media_type(content_type), do: content_type |> String.split(";", parts: 2) |> hd() |> String.trim() |> String.downcase() |> json_suffix()
+
+  defp media_type(content_type),
+    do:
+      content_type
+      |> String.split(";", parts: 2)
+      |> hd()
+      |> String.trim()
+      |> String.downcase()
+      |> json_suffix()
 
   defp json_suffix(t), do: if(String.ends_with?(t, "+json"), do: "application/json", else: t)
 
@@ -124,7 +155,9 @@ defmodule SuperPi.Web.Extract do
       end
 
     text = scrub(text)
-    {chunk, info} = paginate(text, Keyword.get(opts, :offset, 0), Keyword.get(opts, :max_chars, :all))
+
+    {chunk, info} =
+      paginate(text, Keyword.get(opts, :offset, 0), Keyword.get(opts, :max_chars, :all))
 
     %{
       kind: kind,
@@ -155,7 +188,14 @@ defmodule SuperPi.Web.Extract do
         chunk = take(rest, n)
         taken = char_count(chunk)
         done? = offset + taken >= total
-        {chunk, %{chars: total, offset: offset, next_offset: if(done?, do: nil, else: offset + taken), truncated: not done?}}
+
+        {chunk,
+         %{
+           chars: total,
+           offset: offset,
+           next_offset: if(done?, do: nil, else: offset + taken),
+           truncated: not done?
+         }}
 
       _ ->
         {rest, %{chars: total, offset: offset, next_offset: nil, truncated: false}}
@@ -298,7 +338,10 @@ defmodule SuperPi.Web.Extract do
   defp join_inline(pieces) do
     {out, _} =
       Enum.reduce(pieces, {[], nil}, fn {element?, text}, {acc, prev} ->
-        glue? = element? and prev != nil and not String.match?(prev, ~r/\s\z/) and not String.match?(text, ~r/\A\s/)
+        glue? =
+          element? and prev != nil and not String.match?(prev, ~r/\s\z/) and
+            not String.match?(text, ~r/\A\s/)
+
         {[if(glue?, do: [" ", text], else: text) | acc], if(element?, do: text, else: nil)}
       end)
 
@@ -312,21 +355,31 @@ defmodule SuperPi.Web.Extract do
   defp render_node({:comment, _}, _ctx, _depth), do: ""
   defp render_node({:pi, _, _}, _ctx, _depth), do: ""
   defp render_node({:doctype, _, _, _}, _ctx, _depth), do: ""
-  defp render_node({tag, _attrs, _children} = node, _ctx, depth) when depth > @max_depth and is_binary(tag), do: block(collapse(Floki.text(node)))
+
+  defp render_node({tag, _attrs, _children} = node, _ctx, depth)
+       when depth > @max_depth and is_binary(tag), do: block(collapse(Floki.text(node)))
 
   defp render_node({tag, _attrs, _children}, _ctx, _depth) when tag in @inline_skip, do: ""
 
   defp render_node({tag, _attrs, children}, ctx, depth) when tag in ~w(h1 h2 h3 h4 h5 h6) do
     text = children |> render(ctx, depth + 1) |> flatten_inline()
     level = String.to_integer(String.slice(tag, 1, 1))
-    if text == "", do: "", else: block(if(ctx.mode == :markdown, do: String.duplicate("#", level) <> " " <> text, else: text))
+
+    if text == "",
+      do: "",
+      else:
+        block(
+          if(ctx.mode == :markdown, do: String.duplicate("#", level) <> " " <> text, else: text)
+        )
   end
 
   defp render_node({tag, _attrs, children}, ctx, depth) when tag in ~w(ul ol) do
     items =
       children
       |> Enum.filter(&match?({"li", _, _}, &1))
-      |> Enum.map(fn {"li", _, li} -> li |> render(ctx, depth + 1) |> String.trim() |> String.replace(~r/\n{2,}/, "\n") end)
+      |> Enum.map(fn {"li", _, li} ->
+        li |> render(ctx, depth + 1) |> String.trim() |> String.replace(~r/\n{2,}/, "\n")
+      end)
       |> Enum.reject(&(&1 == ""))
       |> Enum.with_index(1)
       |> Enum.map(fn {body, i} ->
@@ -339,12 +392,18 @@ defmodule SuperPi.Web.Extract do
 
   defp render_node({"pre", _, _} = node, ctx, _depth) do
     code = String.trim_trailing(Floki.text(node, sep: ""), "\n")
-    if code == "", do: "", else: block(if(ctx.mode == :markdown, do: "```\n" <> code <> "\n```", else: code))
+
+    if code == "",
+      do: "",
+      else: block(if(ctx.mode == :markdown, do: "```\n" <> code <> "\n```", else: code))
   end
 
   defp render_node({"code", _, children}, ctx, depth) do
     text = children |> render(ctx, depth + 1) |> String.trim()
-    if text == "" or ctx.mode == :text or String.contains?(text, "`"), do: text, else: "`" <> text <> "`"
+
+    if text == "" or ctx.mode == :text or String.contains?(text, "`"),
+      do: text,
+      else: "`" <> text <> "`"
   end
 
   defp render_node({tag, _, children}, ctx, depth) when tag in ~w(strong b em i) do
@@ -382,7 +441,9 @@ defmodule SuperPi.Web.Extract do
   end
 
   defp render_node({"br", _, _}, _ctx, _depth), do: "\n"
-  defp render_node({"hr", _, _}, ctx, _depth), do: if(ctx.mode == :markdown, do: block("---"), else: "\n\n")
+
+  defp render_node({"hr", _, _}, ctx, _depth),
+    do: if(ctx.mode == :markdown, do: block("---"), else: "\n\n")
 
   defp render_node({"blockquote", _, children}, ctx, depth) do
     text = children |> render(ctx, depth + 1) |> cleanup()
@@ -401,19 +462,36 @@ defmodule SuperPi.Web.Extract do
       |> Enum.map(fn {"tr", _, cells} ->
         cells
         |> Enum.filter(&match?({t, _, _} when t in ["td", "th"], &1))
-        |> Enum.map(fn {_, _, cell} -> cell |> render(ctx, depth + 1) |> flatten_inline() |> String.replace("|", "/") end)
+        |> Enum.map(fn {_, _, cell} ->
+          cell |> render(ctx, depth + 1) |> flatten_inline() |> String.replace("|", "/")
+        end)
       end)
       |> Enum.reject(&(&1 == []))
 
     case rows do
-      [] -> ""
-      [head | tail] when ctx.mode == :markdown -> block(Enum.join([row(head), row(Enum.map(head, fn _ -> "---" end)) | Enum.map(tail, &row/1)], "\n"))
-      all -> block(Enum.map_join(all, "\n", &Enum.join(&1, " | ")))
+      [] ->
+        ""
+
+      [head | tail] when ctx.mode == :markdown ->
+        block(
+          Enum.join(
+            [row(head), row(Enum.map(head, fn _ -> "---" end)) | Enum.map(tail, &row/1)],
+            "\n"
+          )
+        )
+
+      all ->
+        block(Enum.map_join(all, "\n", &Enum.join(&1, " | ")))
     end
   end
 
-  defp render_node({tag, _, children}, ctx, depth) when tag in @block, do: block(render(children, ctx, depth + 1))
-  defp render_node({tag, _, children}, ctx, depth) when tag in ~w(table thead tbody tfoot tr td th), do: block(render(children, ctx, depth + 1))
+  defp render_node({tag, _, children}, ctx, depth) when tag in @block,
+    do: block(render(children, ctx, depth + 1))
+
+  defp render_node({tag, _, children}, ctx, depth)
+       when tag in ~w(table thead tbody tfoot tr td th),
+       do: block(render(children, ctx, depth + 1))
+
   defp render_node({_tag, _attrs, children}, ctx, depth), do: render(children, ctx, depth + 1)
   defp render_node(_other, _ctx, _depth), do: ""
 

@@ -46,7 +46,13 @@ defmodule SuperPi.Durable.DeferredFlusher do
   def ensure_pending_ets! do
     case :ets.whereis(@pending_ets) do
       :undefined ->
-        :ets.new(@pending_ets, [:named_table, :public, :set, read_concurrency: true, write_concurrency: true])
+        :ets.new(@pending_ets, [
+          :named_table,
+          :public,
+          :set,
+          read_concurrency: true,
+          write_concurrency: true
+        ])
 
       _tid ->
         @pending_ets
@@ -58,9 +64,11 @@ defmodule SuperPi.Durable.DeferredFlusher do
     Process.flag(:trap_exit, true)
     ensure_pending_ets!()
     Doc.ensure_ets!()
+
     interval =
       Keyword.get(opts, :flush_interval_ms) ||
         Application.get_env(:super_pi, :deferred_flush_interval_ms, @default_flush_interval_ms)
+
     schedule_tick(interval)
     {:ok, %{interval: interval}}
   end

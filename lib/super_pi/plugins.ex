@@ -152,7 +152,12 @@ defmodule SuperPi.Plugins do
 
     preferred =
       Enum.reduce(resolved, %{}, fn entry, acc ->
-        mod = case entry do {m, _} -> m; m -> m end
+        mod =
+          case entry do
+            {m, _} -> m
+            m -> m
+          end
+
         case Map.get(acc, mod) do
           {_, _} -> acc
           _ -> Map.put(acc, mod, entry)
@@ -161,7 +166,12 @@ defmodule SuperPi.Plugins do
 
     {final_list, _seen} =
       Enum.reduce(resolved, {[], MapSet.new()}, fn entry, {list, seen} ->
-        mod = case entry do {m, _} -> m; m -> m end
+        mod =
+          case entry do
+            {m, _} -> m
+            m -> m
+          end
+
         if MapSet.member?(seen, mod) do
           {list, seen}
         else

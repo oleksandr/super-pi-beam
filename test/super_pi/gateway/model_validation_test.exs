@@ -84,7 +84,11 @@ defmodule SuperPi.Gateway.ModelValidationTest do
       def handles?(model), do: String.starts_with?(model, "acme-")
       def configured?, do: true
       def models, do: []
-      def generate(_payload, _opts), do: {:ok, %{"role" => "assistant", "content" => [%{"type" => "text", "text" => "from acme"}]}}
+
+      def generate(_payload, _opts),
+        do:
+          {:ok,
+           %{"role" => "assistant", "content" => [%{"type" => "text", "text" => "from acme"}]}}
     end
 
     Application.put_env(:super_pi, :providers, [Acme])

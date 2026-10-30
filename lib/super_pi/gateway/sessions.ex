@@ -21,10 +21,10 @@ defmodule SuperPi.Gateway.Sessions do
     use Ecto.Schema
 
     schema "gateway_sessions" do
-      field :principal, :string
-      field :session_id, :string
-      field :conversation_id, :integer
-      field :last_used_at, :utc_datetime_usec
+      field(:principal, :string)
+      field(:session_id, :string)
+      field(:conversation_id, :integer)
+      field(:last_used_at, :utc_datetime_usec)
 
       timestamps(type: :utc_datetime_usec)
     end
@@ -32,7 +32,12 @@ defmodule SuperPi.Gateway.Sessions do
 
   @doc "The conversation id for a session, or `nil`."
   def lookup(principal, session_id) do
-    Repo.one(from s in Row, where: s.principal == ^principal and s.session_id == ^session_id, select: s.conversation_id)
+    Repo.one(
+      from(s in Row,
+        where: s.principal == ^principal and s.session_id == ^session_id,
+        select: s.conversation_id
+      )
+    )
   end
 
   @doc """
@@ -40,7 +45,9 @@ defmodule SuperPi.Gateway.Sessions do
   """
   def fetch_or_create(principal, session_id, create_fun) when is_function(create_fun, 0) do
     case lookup(principal, session_id) do
-      nil -> create(principal, session_id, create_fun)
+      nil ->
+        create(principal, session_id, create_fun)
+
       conv_id ->
         touch(principal, session_id)
         {conv_id, false}
@@ -56,7 +63,16 @@ defmodule SuperPi.Gateway.Sessions do
     {_count, inserted} =
       Repo.insert_all(
         Row,
-        [%{principal: principal, session_id: session_id, conversation_id: conv.id, last_used_at: now, inserted_at: now, updated_at: now}],
+        [
+          %{
+            principal: principal,
+            session_id: session_id,
+            conversation_id: conv.id,
+            last_used_at: now,
+            inserted_at: now,
+            updated_at: now
+          }
+        ],
         on_conflict: :nothing,
         conflict_target: [:principal, :session_id],
         returning: [:id]
@@ -67,7 +83,7 @@ defmodule SuperPi.Gateway.Sessions do
       {conv.id, true}
     else
       # Another request created the session first. Use its conversation and drop ours.
-      Repo.delete_all(from c in Conversation, where: c.id == ^conv.id)
+      Repo.delete_all(from(c in Conversation, where: c.id == ^conv.id))
       {lookup(principal, session_id), false}
     end
   end
@@ -78,7 +94,10 @@ defmodule SuperPi.Gateway.Sessions do
     stale = DateTime.add(now, -60, :second)
 
     Repo.update_all(
-      from(s in Row, where: s.principal == ^principal and s.session_id == ^session_id and s.last_used_at < ^stale),
+      from(s in Row,
+        where:
+          s.principal == ^principal and s.session_id == ^session_id and s.last_used_at < ^stale
+      ),
       set: [last_used_at: now]
     )
 
@@ -91,18 +110,22 @@ defmodule SuperPi.Gateway.Sessions do
     limit = Application.get_env(:super_pi, :gateway_session_limit, 100_000)
     cutoff = DateTime.add(DateTime.utc_now(), -ttl_days * 86_400, :second)
 
-    {expired, _} = Repo.delete_all(from s in Row, where: s.last_used_at < ^cutoff)
+    {expired, _} = Repo.delete_all(from(s in Row, where: s.last_used_at < ^cutoff))
 
     over =
-      case Repo.one(from s in Row, select: count(s.id)) do
+      case Repo.one(from(s in Row, select: count(s.id))) do
         n when n > limit -> n - limit
         _ -> 0
       end
 
     excess =
       if over > 0 do
-        ids = Repo.all(from s in Row, order_by: [asc: s.last_used_at, asc: s.id], limit: ^over, select: s.id)
-        {n, _} = Repo.delete_all(from s in Row, where: s.id in ^ids)
+        ids =
+          Repo.all(
+            from(s in Row, order_by: [asc: s.last_used_at, asc: s.id], limit: ^over, select: s.id)
+          )
+
+        {n, _} = Repo.delete_all(from(s in Row, where: s.id in ^ids))
         n
       else
         0
@@ -112,5 +135,5 @@ defmodule SuperPi.Gateway.Sessions do
   end
 
   @doc "Number of stored sessions."
-  def count, do: Repo.one(from s in Row, select: count(s.id))
+  def count, do: Repo.one(from(s in Row, select: count(s.id)))
 end

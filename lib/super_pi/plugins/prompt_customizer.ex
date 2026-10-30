@@ -39,42 +39,60 @@ defmodule SuperPi.Plugins.PromptCustomizer do
 
     rules =
       if MapSet.member?(tool_names, "read") do
-        rules ++ ["- `read`: Use for file contents and images. Use offset and limit for files over 2,000 lines."]
+        rules ++
+          [
+            "- `read`: Use for file contents and images. Use offset and limit for files over 2,000 lines."
+          ]
       else
         rules
       end
 
     rules =
       if MapSet.member?(tool_names, "edit") do
-        rules ++ ["- `edit`: Replace exact unique substrings. Include surrounding context if target appears multiple times."]
+        rules ++
+          [
+            "- `edit`: Replace exact unique substrings. Include surrounding context if target appears multiple times."
+          ]
       else
         rules
       end
 
     rules =
       if MapSet.member?(tool_names, "write") do
-        rules ++ ["- `write`: Create new files or overwrite existing files completely. Create parent directories automatically."]
+        rules ++
+          [
+            "- `write`: Create new files or overwrite existing files completely. Create parent directories automatically."
+          ]
       else
         rules
       end
 
     rules =
       if MapSet.member?(tool_names, "bash") do
-        rules ++ ["- `bash`: Run non-interactive commands. Check exits, handle errors, and prefer targeted file tools over shell loops."]
+        rules ++
+          [
+            "- `bash`: Run non-interactive commands. Check exits, handle errors, and prefer targeted file tools over shell loops."
+          ]
       else
         rules
       end
 
     rules =
       if MapSet.member?(tool_names, "structured_output") do
-        rules ++ ["- `structured_output`: Emit final machine-readable results and terminate immediately without additional conversational turns."]
+        rules ++
+          [
+            "- `structured_output`: Emit final machine-readable results and terminate immediately without additional conversational turns."
+          ]
       else
         rules
       end
 
     rules =
       if MapSet.member?(tool_names, "ask_question") do
-        rules ++ ["- `ask_question`: When facing ambiguous requirements or design forks, ask clarification questions before acting."]
+        rules ++
+          [
+            "- `ask_question`: When facing ambiguous requirements or design forks, ask clarification questions before acting."
+          ]
       else
         rules
       end

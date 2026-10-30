@@ -6,11 +6,14 @@ defmodule SuperPi.Artifacts.Tools do
 
   @max_inline 100 * 1024
 
-  def run(_tool, _args, _ws, %{conversation_id: nil}), do: error("artifact tools need a conversation", "invalid_context")
+  def run(_tool, _args, _ws, %{conversation_id: nil}),
+    do: error("artifact tools need a conversation", "invalid_context")
 
   def run("artifact_put", args, ws, %{conversation_id: conv}) do
     name = args["name"]
-    content_type = if is_binary(args["content_type"]), do: args["content_type"], else: "text/plain"
+
+    content_type =
+      if is_binary(args["content_type"]), do: args["content_type"], else: "text/plain"
 
     with {:ok, data} <- source(args, ws),
          {:ok, %{size: size}} <- Artifacts.put(conv, name, data, content_type) do
@@ -44,7 +47,13 @@ defmodule SuperPi.Artifacts.Tools do
         _ -> Enum.map_join(items, "\n", &"#{&1.name}  #{&1.size} bytes  #{&1.content_type}")
       end
 
-    ok(text, %{"artifacts" => Enum.map(items, &%{"name" => &1.name, "size" => &1.size, "content_type" => &1.content_type})})
+    ok(text, %{
+      "artifacts" =>
+        Enum.map(
+          items,
+          &%{"name" => &1.name, "size" => &1.size, "content_type" => &1.content_type}
+        )
+    })
   end
 
   def run(other, _args, _ws, _ctx), do: error("unknown artifact tool #{other}", "unknown_tool")
@@ -70,11 +79,20 @@ defmodule SuperPi.Artifacts.Tools do
   defp write_out(ws, path, name, data) do
     if Workspace.supports?(ws, "write") do
       case ws.env.write_file(file_path(ws, path), data, []) do
-        :ok -> ok("Wrote artifact #{name} to #{path} (#{byte_size(data)} bytes).", %{"name" => name, "path" => path})
-        {:error, reason} -> error("Cannot write #{path}: #{inspect(reason)}", "write_failed")
+        :ok ->
+          ok("Wrote artifact #{name} to #{path} (#{byte_size(data)} bytes).", %{
+            "name" => name,
+            "path" => path
+          })
+
+        {:error, reason} ->
+          error("Cannot write #{path}: #{inspect(reason)}", "write_failed")
       end
     else
-      error("The #{ws.kind} workspace has no filesystem, so to_path is not possible.", "workspace_unsupported")
+      error(
+        "The #{ws.kind} workspace has no filesystem, so to_path is not possible.",
+        "workspace_unsupported"
+      )
     end
   end
 
@@ -84,23 +102,40 @@ defmodule SuperPi.Artifacts.Tools do
   defp inline(name, data, type, size) do
     cond do
       not String.valid?(data) ->
-        error("Artifact #{name} is binary (#{size} bytes). Use to_path to write it to a workspace file.", "binary")
+        error(
+          "Artifact #{name} is binary (#{size} bytes). Use to_path to write it to a workspace file.",
+          "binary"
+        )
 
       byte_size(data) > @max_inline ->
-        error("Artifact #{name} is #{size} bytes, too large to return. Use to_path to write it to a workspace file.", "too_large_to_return")
+        error(
+          "Artifact #{name} is #{size} bytes, too large to return. Use to_path to write it to a workspace file.",
+          "too_large_to_return"
+        )
 
       true ->
         ok(data, %{"name" => name, "size" => size, "content_type" => type})
     end
   end
 
-  defp describe(:invalid_name, _), do: "Invalid artifact name. Use letters, digits, . _ - and / (no .. and no leading /)."
+  defp describe(:invalid_name, _),
+    do: "Invalid artifact name. Use letters, digits, . _ - and / (no .. and no leading /)."
+
   defp describe(:not_found, name), do: "No artifact named #{name}."
-  defp describe({:too_large, max}, _), do: "The artifact is larger than the limit of #{max} bytes."
-  defp describe({:too_many, max}, _), do: "This conversation already has #{max} artifacts. Replace one, or delete what you do not need."
+
+  defp describe({:too_large, max}, _),
+    do: "The artifact is larger than the limit of #{max} bytes."
+
+  defp describe({:too_many, max}, _),
+    do:
+      "This conversation already has #{max} artifacts. Replace one, or delete what you do not need."
+
   defp describe(:missing_content, _), do: "Give `content` (text) or `path` (a workspace file)."
   defp describe({:read_failed, path, reason}, _), do: "Cannot read #{path}: #{inspect(reason)}"
-  defp describe({:no_filesystem, kind}, _), do: "The #{kind} workspace has no filesystem, so `path` is not possible. Give `content`."
+
+  defp describe({:no_filesystem, kind}, _),
+    do: "The #{kind} workspace has no filesystem, so `path` is not possible. Give `content`."
+
   defp describe(other, _), do: "Artifact error: #{inspect(other)}"
 
   defp status(:invalid_name), do: "invalid_name"
@@ -110,9 +145,15 @@ defmodule SuperPi.Artifacts.Tools do
   defp status(:missing_content), do: "invalid_arguments"
   defp status(_), do: "failed"
 
-  defp ok(text, structured), do: %{"output" => text, "structured_output" => structured, "details" => %{}}
+  defp ok(text, structured),
+    do: %{"output" => text, "structured_output" => structured, "details" => %{}}
 
   defp error(message, status) do
-    %{"output" => message, "structured_output" => %{"error" => message, "status" => status}, "details" => %{"status" => status}, "is_error" => true}
+    %{
+      "output" => message,
+      "structured_output" => %{"error" => message, "status" => status},
+      "details" => %{"status" => status},
+      "is_error" => true
+    }
   end
 end

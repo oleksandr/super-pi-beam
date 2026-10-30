@@ -64,7 +64,9 @@ defmodule SuperPi.CompactionTest do
         end)
 
         {visible, _} = Context.visible_entries_with_graph(conv.id)
-        {_prefix, tail, head_entry_id} = Compaction.find_safe_cut_point(visible, keep_recent_tokens)
+
+        {_prefix, tail, head_entry_id} =
+          Compaction.find_safe_cut_point(visible, keep_recent_tokens)
 
         assert is_integer(head_entry_id)
         assert hd(tail).id == head_entry_id
@@ -97,18 +99,25 @@ defmodule SuperPi.CompactionTest do
       for i <- 1..6 do
         Storage.append_entry!(conv.id, "pi.message", %{
           "role" => "user",
-          "content" => [%{"type" => "text", "text" => "Question #{i} " <> String.duplicate("x", 100)}]
+          "content" => [
+            %{"type" => "text", "text" => "Question #{i} " <> String.duplicate("x", 100)}
+          ]
         })
 
         Storage.append_entry!(conv.id, "pi.message", %{
           "role" => "assistant",
-          "content" => [%{"type" => "text", "text" => "Answer #{i} " <> String.duplicate("y", 100)}]
+          "content" => [
+            %{"type" => "text", "text" => "Answer #{i} " <> String.duplicate("y", 100)}
+          ]
         })
       end
 
       # Check threshold policy with a low window
-      assert {:threshold, _} = Compaction.check_policy(conv.id, context_window: 100, reserve_tokens: 50)
-      assert {:background, _} = Compaction.check_policy(conv.id, context_window: 50_000, background_tokens: 50)
+      assert {:threshold, _} =
+               Compaction.check_policy(conv.id, context_window: 100, reserve_tokens: 50)
+
+      assert {:background, _} =
+               Compaction.check_policy(conv.id, context_window: 50_000, background_tokens: 50)
 
       # Execute threshold compaction keeping only ~100 tokens
       {:ok, res} = Compaction.compact!(conv.id, :threshold, keep_recent_tokens: 100)
@@ -123,7 +132,9 @@ defmodule SuperPi.CompactionTest do
       assert length(derived.messages) == res.kept_count + 1
 
       # Enqueue background compaction job via Oban
-      assert {:enqueued, job} = Compaction.compact!(conv.id, :background, enqueue: true, keep_recent_tokens: 80)
+      assert {:enqueued, job} =
+               Compaction.compact!(conv.id, :background, enqueue: true, keep_recent_tokens: 80)
+
       assert job.queue == "compaction"
     end
   end

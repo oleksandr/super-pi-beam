@@ -64,7 +64,8 @@ defmodule SuperPi.Plugins.Scheduler do
           "trigger" => %{
             "type" => "string",
             "enum" => ["cron", "webhook"],
-            "description" => "'cron' (default) fires on a schedule. 'webhook' fires when a third party POSTs to the returned URL; omit `cron`. The body is added to the prompt, or put {{payload}} in the prompt to place it."
+            "description" =>
+              "'cron' (default) fires on a schedule. 'webhook' fires when a third party POSTs to the returned URL; omit `cron`. The body is added to the prompt, or put {{payload}} in the prompt to place it."
           }
         },
         else: %{}
@@ -84,10 +85,26 @@ defmodule SuperPi.Plugins.Scheduler do
             Map.merge(
               %{
                 "prompt" => %{"type" => "string", "description" => "What to do on each run."},
-                "cron" => %{"type" => "string", "description" => "Cron expression, for example '0 7 * * 1-5' (weekdays at 07:00)."},
-                "timezone" => %{"type" => "string", "description" => "IANA zone for `cron`, for example 'Europe/London'. Default #{opt(opts, :timezone, "Etc/UTC")}."},
-                "mode" => %{"type" => "string", "enum" => SuperPi.Durable.Schemas.Schedule.modes(), "description" => "Where a run happens. Default 'fork'."},
-                "catch_up" => %{"type" => "boolean", "description" => "Run once after downtime for fires that were missed. Default false: a late run is skipped or cancelled, not delivered stale."},
+                "cron" => %{
+                  "type" => "string",
+                  "description" =>
+                    "Cron expression, for example '0 7 * * 1-5' (weekdays at 07:00)."
+                },
+                "timezone" => %{
+                  "type" => "string",
+                  "description" =>
+                    "IANA zone for `cron`, for example 'Europe/London'. Default #{opt(opts, :timezone, "Etc/UTC")}."
+                },
+                "mode" => %{
+                  "type" => "string",
+                  "enum" => SuperPi.Durable.Schemas.Schedule.modes(),
+                  "description" => "Where a run happens. Default 'fork'."
+                },
+                "catch_up" => %{
+                  "type" => "boolean",
+                  "description" =>
+                    "Run once after downtime for fires that were missed. Default false: a late run is skipped or cancelled, not delivered stale."
+                },
                 "name" => %{"type" => "string", "description" => "Short label."}
               },
               trigger
@@ -98,16 +115,20 @@ defmodule SuperPi.Plugins.Scheduler do
       %{
         "name" => "schedule_list",
         "effects" => ["read"],
-        "description" => "List the schedules of this conversation with status, next fire and failures.",
+        "description" =>
+          "List the schedules of this conversation with status, next fire and failures.",
         "parameters" => %{"type" => "object", "properties" => %{}}
       },
       %{
         "name" => "schedule_cancel",
         "effects" => ["state_write"],
-        "description" => "Cancel a schedule of this conversation by id. A run that already started finishes.",
+        "description" =>
+          "Cancel a schedule of this conversation by id. A run that already started finishes.",
         "parameters" => %{
           "type" => "object",
-          "properties" => %{"id" => %{"type" => "integer", "description" => "Schedule id from schedule_list."}},
+          "properties" => %{
+            "id" => %{"type" => "integer", "description" => "Schedule id from schedule_list."}
+          },
           "required" => ["id"]
         }
       }
@@ -139,8 +160,11 @@ defmodule SuperPi.Plugins.Scheduler do
       is_nil(conv_id) ->
         error("no conversation")
 
-      Schedule.scheduled_run?(Map.get(ctx, :active_task_id)) and opt(cfg, :allow_nested, false) != true ->
-        error("schedule_create is blocked inside a scheduled run. A run that schedules runs multiplies without anyone to stop it.")
+      Schedule.scheduled_run?(Map.get(ctx, :active_task_id)) and
+          opt(cfg, :allow_nested, false) != true ->
+        error(
+          "schedule_create is blocked inside a scheduled run. A run that schedules runs multiplies without anyone to stop it."
+        )
 
       trigger == "webhook" and opt(cfg, :allow_webhooks, false) != true ->
         error("webhook triggers are not enabled for this harness")
@@ -173,7 +197,8 @@ defmodule SuperPi.Plugins.Scheduler do
 
   defp created(schedule, nil) do
     %{
-      "output" => "Created schedule ##{schedule.id}. Next run: #{iso(schedule.next_fire_at)} (#{schedule.timezone}, mode #{schedule.mode}).",
+      "output" =>
+        "Created schedule ##{schedule.id}. Next run: #{iso(schedule.next_fire_at)} (#{schedule.timezone}, mode #{schedule.mode}).",
       "structured_output" => summary(schedule),
       "details" => %{"action" => "create", "id" => schedule.id}
     }
@@ -219,7 +244,11 @@ defmodule SuperPi.Plugins.Scheduler do
     with true <- is_integer(conv_id) or {:error, "no conversation"},
          id when is_integer(id) <- to_int(arg(args, "id")) || {:error, "id must be an integer"},
          :ok <- Schedule.cancel(conv_id, id) |> not_found() do
-      %{"output" => "Cancelled schedule ##{id}.", "structured_output" => %{"id" => id, "status" => "cancelled"}, "details" => %{"action" => "cancel", "id" => id}}
+      %{
+        "output" => "Cancelled schedule ##{id}.",
+        "structured_output" => %{"id" => id, "status" => "cancelled"},
+        "details" => %{"action" => "cancel", "id" => id}
+      }
     else
       {:error, reason} -> error(reason)
     end
@@ -231,7 +260,10 @@ defmodule SuperPi.Plugins.Scheduler do
   defp line(s) do
     what = if s.kind == "webhook", do: "webhook", else: "#{s.cron} (#{s.timezone})"
     next = if s.kind == "cron", do: ", next #{iso(s.next_fire_at)}", else: ""
-    warn = if s.consecutive_failures > 0, do: ", #{s.consecutive_failures} failed in a row", else: ""
+
+    warn =
+      if s.consecutive_failures > 0, do: ", #{s.consecutive_failures} failed in a row", else: ""
+
     label = if s.name, do: " #{s.name}:", else: ""
     "##{s.id}#{label} #{what}, #{s.mode}, #{s.status}#{next}#{warn}"
   end
@@ -254,7 +286,12 @@ defmodule SuperPi.Plugins.Scheduler do
   end
 
   defp error(message) do
-    %{"output" => message, "structured_output" => %{"error" => message}, "details" => %{}, "is_error" => true}
+    %{
+      "output" => message,
+      "structured_output" => %{"error" => message},
+      "details" => %{},
+      "is_error" => true
+    }
   end
 
   defp iso(nil), do: nil

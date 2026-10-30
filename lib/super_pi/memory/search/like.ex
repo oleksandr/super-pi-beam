@@ -26,10 +26,11 @@ defmodule SuperPi.Memory.Search.Like do
     topic_pat = Search.topic_pattern(topic)
 
     base =
-      from m in M.scoped(scope),
+      from(m in M.scoped(scope),
         where: fragment("(' ' || ? || ' ') LIKE ? ESCAPE '\\'", m.topics, ^topic_pat),
         order_by: [desc: m.updated_seq],
         limit: ^@scan_limit
+      )
 
     query =
       case words do
@@ -49,7 +50,7 @@ defmodule SuperPi.Memory.Search.Like do
               )
             end)
 
-          from m in base, where: ^hit
+          from(m in base, where: ^hit)
       end
 
     rows =

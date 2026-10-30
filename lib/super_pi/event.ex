@@ -104,7 +104,11 @@ defmodule SuperPi.Event do
   @doc "Publishes an event on the conversation topic."
   @spec publish(t()) :: :ok
   def publish(%__MODULE__{conversation_id: conv_id} = ev) do
-    Phoenix.PubSub.broadcast(SuperPi.PubSub, topic(conv_id), {:conversation_event, conv_id, to_wire(ev)})
+    Phoenix.PubSub.broadcast(
+      SuperPi.PubSub,
+      topic(conv_id),
+      {:conversation_event, conv_id, to_wire(ev)}
+    )
   end
 
   @doc "PubSub topic of a conversation."
@@ -127,21 +131,30 @@ defmodule SuperPi.Event do
 
   @spec turn_completed(integer(), integer() | nil, map() | nil, integer()) :: t()
   def turn_completed(conv, turn, result, seq, stop_reason \\ "end_turn"),
-    do: new("turn_completed", conv, turn, %{"stop_reason" => stop_reason, "result" => result, "seq" => seq})
+    do:
+      new("turn_completed", conv, turn, %{
+        "stop_reason" => stop_reason,
+        "result" => result,
+        "seq" => seq
+      })
 
   @spec turn_error(integer(), integer() | nil, term(), integer()) :: t()
-  def turn_error(conv, turn, error, seq), do: new("turn_error", conv, turn, %{"error" => format_error(error), "seq" => seq})
+  def turn_error(conv, turn, error, seq),
+    do: new("turn_error", conv, turn, %{"error" => format_error(error), "seq" => seq})
 
   @spec turn_cancelled(integer(), integer() | nil, integer()) :: t()
   def turn_cancelled(conv, turn, seq), do: new("turn_cancelled", conv, turn, %{"seq" => seq})
 
   @spec text_delta(integer(), integer() | nil, integer(), String.t()) :: t()
-  def text_delta(conv, turn, index, delta), do: new("text_delta", conv, turn, %{"index" => index, "delta" => delta})
+  def text_delta(conv, turn, index, delta),
+    do: new("text_delta", conv, turn, %{"index" => index, "delta" => delta})
 
   @spec thinking_delta(integer(), integer() | nil, integer(), String.t()) :: t()
-  def thinking_delta(conv, turn, index, delta), do: new("thinking_delta", conv, turn, %{"index" => index, "delta" => delta})
+  def thinking_delta(conv, turn, index, delta),
+    do: new("thinking_delta", conv, turn, %{"index" => index, "delta" => delta})
 
-  @spec toolcall_delta(integer(), integer() | nil, integer(), String.t() | nil, term(), keyword()) :: t()
+  @spec toolcall_delta(integer(), integer() | nil, integer(), String.t() | nil, term(), keyword()) ::
+          t()
   def toolcall_delta(conv, turn, index, delta, partial_args, call \\ []) do
     data =
       %{"index" => index, "delta" => delta, "partial_args" => partial_args}
@@ -153,19 +166,43 @@ defmodule SuperPi.Event do
 
   @spec message_completed(integer(), integer() | nil, String.t(), [map()], map()) :: t()
   def message_completed(conv, turn, role, content, usage),
-    do: new("message_completed", conv, turn, %{"role" => role, "content" => content, "usage" => usage})
+    do:
+      new("message_completed", conv, turn, %{
+        "role" => role,
+        "content" => content,
+        "usage" => usage
+      })
 
-  @spec tool_started(integer(), integer() | nil, String.t(), String.t(), map(), [String.t()]) :: t()
+  @spec tool_started(integer(), integer() | nil, String.t(), String.t(), map(), [String.t()]) ::
+          t()
   def tool_started(conv, turn, tool_call_id, name, arguments, overwritten_keys \\ []),
-    do: new("tool_started", conv, turn, %{"tool_call_id" => tool_call_id, "name" => name, "arguments" => arguments, "overwritten_keys" => overwritten_keys})
+    do:
+      new("tool_started", conv, turn, %{
+        "tool_call_id" => tool_call_id,
+        "name" => name,
+        "arguments" => arguments,
+        "overwritten_keys" => overwritten_keys
+      })
 
   @spec tool_blocked(integer(), integer() | nil, String.t(), String.t(), String.t()) :: t()
   def tool_blocked(conv, turn, tool_call_id, name, reason),
-    do: new("tool_blocked", conv, turn, %{"tool_call_id" => tool_call_id, "name" => name, "reason" => reason})
+    do:
+      new("tool_blocked", conv, turn, %{
+        "tool_call_id" => tool_call_id,
+        "name" => name,
+        "reason" => reason
+      })
 
-  @spec tool_completed(integer(), integer() | nil, String.t(), String.t(), boolean(), term()) :: t()
+  @spec tool_completed(integer(), integer() | nil, String.t(), String.t(), boolean(), term()) ::
+          t()
   def tool_completed(conv, turn, tool_call_id, name, is_error, output),
-    do: new("tool_completed", conv, turn, %{"tool_call_id" => tool_call_id, "name" => name, "is_error" => is_error, "output" => output})
+    do:
+      new("tool_completed", conv, turn, %{
+        "tool_call_id" => tool_call_id,
+        "name" => name,
+        "is_error" => is_error,
+        "output" => output
+      })
 
   @doc """
   A tool call waits for a human decision. `request_id` answers through `SuperPi.UI.Broker.respond/2`
@@ -173,7 +210,12 @@ defmodule SuperPi.Event do
   """
   @spec permission_request(integer(), integer() | nil, map()) :: t()
   def permission_request(conv, turn, %{} = fields) do
-    new("permission_request", conv, turn, Map.take(fields, ~w(request_id tool_call_id tool_name arguments reason risk options)))
+    new(
+      "permission_request",
+      conv,
+      turn,
+      Map.take(fields, ~w(request_id tool_call_id tool_name arguments reason risk options))
+    )
   end
 
   @doc "The four permission options, with ACP `PermissionOptionKind` in `kind`."
@@ -189,29 +231,51 @@ defmodule SuperPi.Event do
 
   @spec ui_request(integer(), String.t(), map()) :: t()
   def ui_request(conv, request_id, %{} = request),
-    do: new("ui_request", conv, nil, Map.put(Map.drop(request, @envelope), "request_id", request_id))
+    do:
+      new(
+        "ui_request",
+        conv,
+        nil,
+        Map.put(Map.drop(request, @envelope), "request_id", request_id)
+      )
 
   @spec ui_resolved(integer(), String.t(), term()) :: t()
-  def ui_resolved(conv, request_id, outcome), do: new("ui_resolved", conv, nil, %{"request_id" => request_id, "outcome" => outcome})
+  def ui_resolved(conv, request_id, outcome),
+    do: new("ui_resolved", conv, nil, %{"request_id" => request_id, "outcome" => outcome})
 
   @spec state_changed(integer(), integer() | nil, String.t()) :: t()
-  def state_changed(conv, turn, status), do: new("state_changed", conv, turn, %{"status" => status})
+  def state_changed(conv, turn, status),
+    do: new("state_changed", conv, turn, %{"status" => status})
 
   @spec mode_changed(integer(), String.t(), String.t() | nil) :: t()
-  def mode_changed(conv, mode, max_mode), do: new("mode_changed", conv, nil, %{"mode" => mode, "max_mode" => max_mode})
+  def mode_changed(conv, mode, max_mode),
+    do: new("mode_changed", conv, nil, %{"mode" => mode, "max_mode" => max_mode})
 
   @spec stream_reset(integer(), integer() | nil, integer()) :: t()
-  def stream_reset(conv, turn, retry_in_ms), do: new("stream_reset", conv, turn, %{"retry_in_ms" => retry_in_ms})
+  def stream_reset(conv, turn, retry_in_ms),
+    do: new("stream_reset", conv, turn, %{"retry_in_ms" => retry_in_ms})
 
   @spec compaction_completed(integer(), term(), String.t() | nil) :: t()
   def compaction_completed(conv, head_entry_id, summary),
-    do: new("compaction_completed", conv, nil, %{"head_entry_id" => head_entry_id, "summary" => summary})
+    do:
+      new("compaction_completed", conv, nil, %{
+        "head_entry_id" => head_entry_id,
+        "summary" => summary
+      })
 
   @spec usage_updated(integer(), integer() | nil, map()) :: t()
-  def usage_updated(conv, turn, %{} = totals), do: new("usage_updated", conv, turn, Map.take(totals, ~w(input_tokens output_tokens total_input_tokens total_output_tokens)))
+  def usage_updated(conv, turn, %{} = totals),
+    do:
+      new(
+        "usage_updated",
+        conv,
+        turn,
+        Map.take(totals, ~w(input_tokens output_tokens total_input_tokens total_output_tokens))
+      )
 
   @spec plan_updated(integer(), [map()]) :: t()
-  def plan_updated(conv, entries) when is_list(entries), do: new("plan_updated", conv, nil, %{"entries" => entries})
+  def plan_updated(conv, entries) when is_list(entries),
+    do: new("plan_updated", conv, nil, %{"entries" => entries})
 
   @spec notice(integer(), integer() | nil, String.t(), String.t()) :: t()
   def notice(conv, turn, level, message) when level in ["info", "warning", "error"],
@@ -224,14 +288,31 @@ defmodule SuperPi.Event do
   # to the child, `status` one of "completed", "failed", "aborted".
   @spec subagent_started(integer(), integer() | nil, integer(), String.t(), String.t()) :: t()
   def subagent_started(conv, turn, child_conversation_id, role, task),
-    do: new("subagent_started", conv, turn, %{"child_conversation_id" => child_conversation_id, "role" => role, "task" => task})
+    do:
+      new("subagent_started", conv, turn, %{
+        "child_conversation_id" => child_conversation_id,
+        "role" => role,
+        "task" => task
+      })
 
-  @spec subagent_finished(integer(), integer() | nil, integer(), String.t(), String.t() | nil) :: t()
+  @spec subagent_finished(integer(), integer() | nil, integer(), String.t(), String.t() | nil) ::
+          t()
   def subagent_finished(conv, turn, child_conversation_id, status, summary),
-    do: new("subagent_finished", conv, turn, %{"child_conversation_id" => child_conversation_id, "status" => status, "summary" => summary})
+    do:
+      new("subagent_finished", conv, turn, %{
+        "child_conversation_id" => child_conversation_id,
+        "status" => status,
+        "summary" => summary
+      })
 
   defp new(type, conv, turn, data) when type in @types or is_binary(type) do
-    %__MODULE__{type: type, conversation_id: conv, turn_id: turn, timestamp_ms: System.system_time(:millisecond), data: data}
+    %__MODULE__{
+      type: type,
+      conversation_id: conv,
+      turn_id: turn,
+      timestamp_ms: System.system_time(:millisecond),
+      data: data
+    }
   end
 
   defp format_error(error) when is_binary(error), do: error

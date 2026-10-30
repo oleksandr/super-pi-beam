@@ -29,14 +29,23 @@ defmodule SuperPi.AI.Providers.HTTP do
         json: body,
         retry: false,
         receive_timeout: @default_timeout,
-        into: fn {:data, chunk}, {req, resp} -> {:cont, {req, feed(resp, chunk, init, on_delta)}} end
+        into: fn {:data, chunk}, {req, resp} ->
+          {:cont, {req, feed(resp, chunk, init, on_delta)}}
+        end
       ] ++ Application.get_env(:super_pi, :ai_req_options, [])
 
     case Req.post(url, req_opts) do
-      {:ok, %Req.Response{status: 200} = resp} -> finish(provider, model, resp, init, on_delta)
-      {:ok, %Req.Response{status: status} = resp} when status in [429, 529] -> {:retry_after, retry_after_ms(resp)}
-      {:ok, %Req.Response{status: status} = resp} -> {:error, {:http_error, status, error_message(resp)}}
-      {:error, exception} -> {:error, {:request_failed, Exception.message(exception)}}
+      {:ok, %Req.Response{status: 200} = resp} ->
+        finish(provider, model, resp, init, on_delta)
+
+      {:ok, %Req.Response{status: status} = resp} when status in [429, 529] ->
+        {:retry_after, retry_after_ms(resp)}
+
+      {:ok, %Req.Response{status: status} = resp} ->
+        {:error, {:http_error, status, error_message(resp)}}
+
+      {:error, exception} ->
+        {:error, {:request_failed, Exception.message(exception)}}
     end
   end
 
@@ -49,7 +58,10 @@ defmodule SuperPi.AI.Providers.HTTP do
     # Newest first; `finish/5` reverses once.
     resp
     |> Req.Response.put_private(:normalizer, next)
-    |> Req.Response.put_private(:events_rev, Enum.reverse(events, Req.Response.get_private(resp, :events_rev, [])))
+    |> Req.Response.put_private(
+      :events_rev,
+      Enum.reverse(events, Req.Response.get_private(resp, :events_rev, []))
+    )
   end
 
   defp feed(resp, chunk, _init, _on_delta) do
@@ -62,8 +74,17 @@ defmodule SuperPi.AI.Providers.HTTP do
     Enum.each(flushed, on_delta)
     events = Enum.reverse(Req.Response.get_private(resp, :events_rev, []), flushed)
 
-    error = Enum.find_value(events, fn {:error, err} -> err; _ -> nil end)
-    done = Enum.find_value(Enum.reverse(events), fn {:done, d} -> d; _ -> nil end)
+    error =
+      Enum.find_value(events, fn
+        {:error, err} -> err
+        _ -> nil
+      end)
+
+    done =
+      Enum.find_value(Enum.reverse(events), fn
+        {:done, d} -> d
+        _ -> nil
+      end)
 
     case {error, done} do
       {%{retryable: true} = err, _} ->

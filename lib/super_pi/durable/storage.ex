@@ -49,6 +49,7 @@ defmodule SuperPi.Durable.Storage do
           Enum.each(Process.get(:super_pi_tx_doc_keys, []), fn cache_key ->
             :ets.delete(:super_pi_doc_cache, cache_key)
           end)
+
           Process.delete(:super_pi_tx_doc_keys)
           reraise e, __STACKTRACE__
       catch
@@ -56,6 +57,7 @@ defmodule SuperPi.Durable.Storage do
           Enum.each(Process.get(:super_pi_tx_doc_keys, []), fn cache_key ->
             :ets.delete(:super_pi_doc_cache, cache_key)
           end)
+
           Process.delete(:super_pi_tx_doc_keys)
           :erlang.raise(kind, reason, __STACKTRACE__)
       else
@@ -76,6 +78,7 @@ defmodule SuperPi.Durable.Storage do
           Enum.each(Process.get(:super_pi_tx_doc_keys, []), fn cache_key ->
             :ets.delete(:super_pi_doc_cache, cache_key)
           end)
+
           Process.delete(:super_pi_tx_doc_keys)
           {:error, reason}
       end
@@ -131,10 +134,11 @@ defmodule SuperPi.Durable.Storage do
     import Ecto.Query
 
     Repo.one(
-      from c in Conversation,
+      from(c in Conversation,
         where: is_nil(c.owner_task_id) and is_nil(c.parent_conversation_id),
         order_by: [desc: c.id],
         limit: 1
+      )
     )
   end
 
@@ -147,7 +151,11 @@ defmodule SuperPi.Durable.Storage do
         existing
 
       nil ->
-        create_conversation!(owner_kind: "ownerless", agent: agent_config, id: @root_conversation_id)
+        create_conversation!(
+          owner_kind: "ownerless",
+          agent: agent_config,
+          id: @root_conversation_id
+        )
     end
   end
 
@@ -269,7 +277,8 @@ defmodule SuperPi.Durable.Storage do
   Updates the conversation's `pi.agent` rewindable document (`Conversation.configure()`).
   """
   def configure_agent!(conversation_id, changes) when is_map(changes) do
-    mode_before = (Doc.snapshot("conversation", conversation_id, "pi.agent") || %{})["executionMode"]
+    mode_before =
+      (Doc.snapshot("conversation", conversation_id, "pi.agent") || %{})["executionMode"]
 
     updated =
       commit(fn seq ->
@@ -288,8 +297,11 @@ defmodule SuperPi.Durable.Storage do
 
     # `mode_changed` tells a watcher that the permission mode moved (a client switched it, or a
     # handoff did), so a mode picker can follow.
-    with %{"executionMode" => mode} = agent when is_binary(mode) and mode != mode_before <- updated do
-      SuperPi.Event.publish(SuperPi.Event.mode_changed(conversation_id, mode, agent["maxExecutionMode"]))
+    with %{"executionMode" => mode} = agent when is_binary(mode) and mode != mode_before <-
+           updated do
+      SuperPi.Event.publish(
+        SuperPi.Event.mode_changed(conversation_id, mode, agent["maxExecutionMode"])
+      )
     end
 
     updated
@@ -300,7 +312,13 @@ defmodule SuperPi.Durable.Storage do
     Doc.put_doc("conversation", conv_id, "pi.provider", %{"sessionId" => Uniq.UUID.uuid7()}, seq)
     Doc.put_doc("conversation", conv_id, "pi.live", %{"status" => "idle"}, seq)
     Doc.put_doc("conversation", conv_id, "pi.inbox", %{"queued" => []}, seq)
-    Doc.put_doc("conversation", conv_id, "pi.usage", %{"inputTokens" => 0, "outputTokens" => 0, "costUsd" => 0.0}, seq)
-  end
 
+    Doc.put_doc(
+      "conversation",
+      conv_id,
+      "pi.usage",
+      %{"inputTokens" => 0, "outputTokens" => 0, "costUsd" => 0.0},
+      seq
+    )
+  end
 end

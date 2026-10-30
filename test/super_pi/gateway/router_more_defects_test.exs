@@ -22,7 +22,6 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
   @opts Router.init([])
 
-
   defmodule HandledExtension do
     @moduledoc false
     use SuperPi.Extension
@@ -88,11 +87,16 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
   end
 
   defp last_conversation_id do
-    Repo.one(from c in Conversation, order_by: [desc: c.id], limit: 1, select: c.id)
+    Repo.one(from(c in Conversation, order_by: [desc: c.id], limit: 1, select: c.id))
   end
 
   defp entries(conv_id) do
-    Repo.all(from e in Entry, where: e.conversation_id == ^conv_id and e.kind == "pi.message", order_by: e.seq)
+    Repo.all(
+      from(e in Entry,
+        where: e.conversation_id == ^conv_id and e.kind == "pi.message",
+        order_by: e.seq
+      )
+    )
   end
 
   defp start_machine(conv, opts) do
@@ -107,7 +111,13 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
       assert %Plug.Conn{status: 200} = post(chat([user("hi")]))
 
       conv_id = last_conversation_id()
-      [{pid, _}] = Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv_id})
+
+      [{pid, _}] =
+        Horde.Registry.lookup(
+          SuperPi.Conversation.Locator.registry(),
+          {:conversation_machine, conv_id}
+        )
+
       {:dictionary, dict} = Process.info(pid, :dictionary)
       ancestors = Keyword.get(dict, :"$ancestors", [])
 
@@ -123,13 +133,20 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
       conv = Storage.create_conversation!()
       start_machine(conv, llm_responder: fn _p, _c -> {:error, :provider_exploded} end)
 
-      conn = post(chat([user("hi")], %{"stream" => true}), [{"x-conversation-id", to_string(conv.id)}])
+      conn =
+        post(chat([user("hi")], %{"stream" => true}), [{"x-conversation-id", to_string(conv.id)}])
+
       assert %Plug.Conn{} = conn
 
       frames = sse_json(conn.resp_body)
 
       assert Enum.any?(frames, &Map.has_key?(&1, "error")) or
-               Enum.any?(frames, fn f -> match?(%{"choices" => [%{"finish_reason" => r} | _]} when r not in [nil, "stop"], f) end),
+               Enum.any?(frames, fn f ->
+                 match?(
+                   %{"choices" => [%{"finish_reason" => r} | _]} when r not in [nil, "stop"],
+                   f
+                 )
+               end),
              "client saw an empty success; frames: #{inspect(conn.resp_body)}"
     end
 
@@ -139,13 +156,20 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
       start_machine(conv,
         llm_responder: fn _p, _c ->
-          [{pid, _}] = Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv.id})
+          [{pid, _}] =
+            Horde.Registry.lookup(
+              SuperPi.Conversation.Locator.registry(),
+              {:conversation_machine, conv.id}
+            )
+
           Process.exit(pid, :kill)
           {:error, :unreachable}
         end
       )
 
-      conn = post(chat([user("hi")], %{"stream" => true}), [{"x-conversation-id", to_string(conv.id)}])
+      conn =
+        post(chat([user("hi")], %{"stream" => true}), [{"x-conversation-id", to_string(conv.id)}])
+
       assert %Plug.Conn{} = conn
 
       frames = sse_json(conn.resp_body)
@@ -160,7 +184,12 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
       start_machine(conv,
         llm_responder: fn _p, _c ->
-          [{pid, _}] = Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv.id})
+          [{pid, _}] =
+            Horde.Registry.lookup(
+              SuperPi.Conversation.Locator.registry(),
+              {:conversation_machine, conv.id}
+            )
+
           Process.exit(pid, :kill)
           {:error, :unreachable}
         end
@@ -178,14 +207,23 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
       Application.put_env(:super_pi, :extra_harnesses, [HandledHarness])
       on_exit(fn -> Application.delete_env(:super_pi, :extra_harnesses) end)
 
-      conn = post(chat([user("hi")], %{"model" => "Elixir.SuperPi.Gateway.RouterMoreDefectsTest.HandledHarness"}))
+      conn =
+        post(
+          chat([user("hi")], %{
+            "model" => "Elixir.SuperPi.Gateway.RouterMoreDefectsTest.HandledHarness"
+          })
+        )
+
       case conn do
         {:raised, e} ->
           flunk("router crashed on {:ok, :handled_by_extension}: #{Exception.message(e)}")
 
         %Plug.Conn{status: 200} ->
-          content = Jason.decode!(conn.resp_body)["choices"] |> hd() |> get_in(["message", "content"])
-          refute content =~ "handled_by_extension", "internal atom leaked to the client: #{inspect(content)}"
+          content =
+            Jason.decode!(conn.resp_body)["choices"] |> hd() |> get_in(["message", "content"])
+
+          refute content =~ "handled_by_extension",
+                 "internal atom leaked to the client: #{inspect(content)}"
 
         %Plug.Conn{} ->
           :ok
@@ -200,11 +238,14 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
       conv = Storage.create_conversation!()
 
       start_machine(conv,
-        llm_responder: Faults.tool_then_text_responder("read", %{"path" => "marker-path-123.txt"}, "done"),
+        llm_responder:
+          Faults.tool_then_text_responder("read", %{"path" => "marker-path-123.txt"}, "done"),
         tool_executor: fn _n, _a, _c -> %{"output" => "ok", "is_error" => false} end
       )
 
-      conn = post(chat([user("run")], %{"stream" => true}), [{"x-conversation-id", to_string(conv.id)}])
+      conn =
+        post(chat([user("run")], %{"stream" => true}), [{"x-conversation-id", to_string(conv.id)}])
+
       assert conn.status == 200
 
       reasoning =
@@ -216,7 +257,8 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
         end)
         |> Enum.join()
 
-      assert reasoning =~ "marker-path-123.txt", "preview lost the arguments: #{inspect(reasoning)}"
+      assert reasoning =~ "marker-path-123.txt",
+             "preview lost the arguments: #{inspect(reasoning)}"
     end
 
     test "non-string tool arguments and output do not crash the SSE handler" do
@@ -228,7 +270,12 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
         for ev <- [
               %{"type" => "tool_started", "name" => "x", "args" => weird, "arguments" => weird},
-              %{"type" => "tool_completed", "name" => "x", "output" => %{"a" => 1}, "is_error" => false}
+              %{
+                "type" => "tool_completed",
+                "name" => "x",
+                "output" => %{"a" => 1},
+                "is_error" => false
+              }
             ] do
           Phoenix.PubSub.broadcast(SuperPi.PubSub, topic, {:conversation_event, conv.id, ev})
         end
@@ -238,12 +285,18 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
       start_machine(conv, llm_responder: responder)
 
-      result = post(chat([user("go")], %{"stream" => true}), [{"x-conversation-id", to_string(conv.id)}])
+      result =
+        post(chat([user("go")], %{"stream" => true}), [{"x-conversation-id", to_string(conv.id)}])
 
       case result do
-        {:raised, e} -> flunk("SSE handler crashed on a non-string field: #{Exception.message(e)}")
-        {:exited, r} -> flunk("SSE handler exited: #{inspect(r)}")
-        %Plug.Conn{} = conn -> assert conn.resp_body =~ "[DONE]"
+        {:raised, e} ->
+          flunk("SSE handler crashed on a non-string field: #{Exception.message(e)}")
+
+        {:exited, r} ->
+          flunk("SSE handler exited: #{inspect(r)}")
+
+        %Plug.Conn{} = conn ->
+          assert conn.resp_body =~ "[DONE]"
       end
     end
   end
@@ -252,14 +305,21 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
   describe "seeding prior messages (router.ex:77-104,352-367)" do
     test "the last user prompt is stored exactly once when the final message is not a user message" do
-      messages = [user("first-question"), %{"role" => "assistant", "content" => "first-answer"}, user("second-question"), %{"role" => "assistant", "content" => "tail-answer"}]
+      messages = [
+        user("first-question"),
+        %{"role" => "assistant", "content" => "first-answer"},
+        user("second-question"),
+        %{"role" => "assistant", "content" => "tail-answer"}
+      ]
 
       assert %Plug.Conn{status: 200} = post(chat(messages))
 
       texts = last_conversation_id() |> entries() |> Enum.map(&inspect(&1.data))
       count = Enum.count(texts, &(&1 =~ "second-question" and not (&1 =~ "Echo")))
       assert count == 1, "second-question stored #{count} times (seeded and resubmitted)"
-      assert Enum.any?(texts, &(&1 =~ "tail-answer")), "the trailing assistant message was dropped"
+
+      assert Enum.any?(texts, &(&1 =~ "tail-answer")),
+             "the trailing assistant message was dropped"
     end
 
     test "tool messages and assistant tool calls from the client history are preserved" do
@@ -268,7 +328,13 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
         %{
           "role" => "assistant",
           "content" => nil,
-          "tool_calls" => [%{"id" => "call_9", "type" => "function", "function" => %{"name" => "bash", "arguments" => "{\"command\":\"ls\"}"}}]
+          "tool_calls" => [
+            %{
+              "id" => "call_9",
+              "type" => "function",
+              "function" => %{"name" => "bash", "arguments" => "{\"command\":\"ls\"}"}
+            }
+          ]
         },
         %{"role" => "tool", "tool_call_id" => "call_9", "content" => "file-one.txt"},
         user("thanks")
@@ -277,8 +343,12 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
       assert %Plug.Conn{status: 200} = post(chat(messages))
 
       data = last_conversation_id() |> entries() |> Enum.map(& &1.data)
-      assert Enum.any?(data, &(&1["role"] == "tool")), "tool result was dropped from seeded history"
-      assert Enum.any?(data, &(inspect(&1) =~ "call_9" and &1["role"] == "assistant")), "assistant tool call was dropped"
+
+      assert Enum.any?(data, &(&1["role"] == "tool")),
+             "tool result was dropped from seeded history"
+
+      assert Enum.any?(data, &(inspect(&1) =~ "call_9" and &1["role"] == "assistant")),
+             "assistant tool call was dropped"
     end
   end
 
@@ -298,10 +368,14 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
     end
 
     test "title responses do not report fabricated token counts" do
-      body = chat([%{"role" => "system", "content" => "You are a title generator"}, user("hello")])
+      body =
+        chat([%{"role" => "system", "content" => "You are a title generator"}, user("hello")])
+
       conn = post(body)
       usage = Jason.decode!(conn.resp_body)["usage"]
-      refute usage["prompt_tokens"] == 35 and usage["completion_tokens"] == 8, "title usage is hard-coded 35/8"
+
+      refute usage["prompt_tokens"] == 35 and usage["completion_tokens"] == 8,
+             "title usage is hard-coded 35/8"
     end
 
     test "stream usage does not reuse the previous turn's counts when this turn reports none" do
@@ -312,7 +386,11 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
         :counters.add(counter, 1, 1)
 
         if :counters.get(counter, 1) == 1 do
-          {:ok, Map.put(Faults.text_msg("one"), "usage", %{"input_tokens" => 111, "output_tokens" => 222})}
+          {:ok,
+           Map.put(Faults.text_msg("one"), "usage", %{
+             "input_tokens" => 111,
+             "output_tokens" => 222
+           })}
         else
           {:ok, Faults.text_msg("two")}
         end
@@ -333,17 +411,32 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
   describe "title detection (router.ex:66-70,160-168)" do
     test "a system prompt that merely mentions 'title generator' still runs the agent" do
-      body = chat([%{"role" => "system", "content" => "You are a coding agent. Never act as a title generator for PRs."}, user("real question")])
+      body =
+        chat([
+          %{
+            "role" => "system",
+            "content" => "You are a coding agent. Never act as a title generator for PRs."
+          },
+          user("real question")
+        ])
+
       conn = post(body)
       content = Jason.decode!(conn.resp_body)["choices"] |> hd() |> get_in(["message", "content"])
       assert content == "Echo: real question", "agent turn was hijacked: #{inspect(content)}"
     end
 
     test "a user message that starts with 'generate a title' runs the agent when a system prompt is present" do
-      body = chat([%{"role" => "system", "content" => "You are a coding agent."}, user("Generate a title case function in Elixir")])
+      body =
+        chat([
+          %{"role" => "system", "content" => "You are a coding agent."},
+          user("Generate a title case function in Elixir")
+        ])
+
       conn = post(body)
       content = Jason.decode!(conn.resp_body)["choices"] |> hd() |> get_in(["message", "content"])
-      assert content == "Echo: Generate a title case function in Elixir", "agent turn was hijacked: #{inspect(content)}"
+
+      assert content == "Echo: Generate a title case function in Elixir",
+             "agent turn was hijacked: #{inspect(content)}"
     end
   end
 
@@ -373,7 +466,10 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
   describe "client disconnect (router.ex:226-264,489-500)" do
     test "title streaming does not raise MatchError when the client is gone" do
-      body = chat([%{"role" => "system", "content" => "You are a title generator"}, user("hello")], %{"stream" => true})
+      body =
+        chat([%{"role" => "system", "content" => "You are a title generator"}, user("hello")], %{
+          "stream" => true
+        })
 
       case post(body, [], &closed_adapter/1) do
         {:raised, e} -> flunk("router raised #{inspect(e.__struct__)} on a closed connection")
@@ -394,9 +490,16 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
       start_machine(conv, llm_responder: responder)
 
-      assert %Plug.Conn{} = post(chat([user("hi")], %{"stream" => true}), [{"x-conversation-id", to_string(conv.id)}], &closed_adapter/1)
+      assert %Plug.Conn{} =
+               post(
+                 chat([user("hi")], %{"stream" => true}),
+                 [{"x-conversation-id", to_string(conv.id)}],
+                 &closed_adapter/1
+               )
 
-      refute_receive :turn_ran_to_completion, 800, "turn kept running after the client disconnected"
+      refute_receive :turn_ran_to_completion,
+                     800,
+                     "turn kept running after the client disconnected"
     end
   end
 
@@ -425,7 +528,11 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
     end
 
     test "user prompt text is not written to the info log" do
-      log = capture_log([level: :info], fn -> post(chat([user("my password is hunter2-secret-prompt")])) end)
+      log =
+        capture_log([level: :info], fn ->
+          post(chat([user("my password is hunter2-secret-prompt")]))
+        end)
+
       refute log =~ "hunter2-secret-prompt"
     end
 
@@ -433,8 +540,19 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
       conv = Storage.create_conversation!()
 
       responder = fn _p, _c ->
-        ev = %{"type" => "tool_started", "name" => "write", "args" => %{"path" => "a", "content" => "FILE-SECRET-BODY"}, "arguments" => %{"path" => "a", "content" => "FILE-SECRET-BODY"}}
-        Phoenix.PubSub.broadcast(SuperPi.PubSub, "conversation:#{conv.id}", {:conversation_event, conv.id, ev})
+        ev = %{
+          "type" => "tool_started",
+          "name" => "write",
+          "args" => %{"path" => "a", "content" => "FILE-SECRET-BODY"},
+          "arguments" => %{"path" => "a", "content" => "FILE-SECRET-BODY"}
+        }
+
+        Phoenix.PubSub.broadcast(
+          SuperPi.PubSub,
+          "conversation:#{conv.id}",
+          {:conversation_event, conv.id, ev}
+        )
+
         {:ok, Faults.text_msg("ok")}
       end
 
@@ -442,7 +560,9 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
 
       log =
         capture_log([level: :info], fn ->
-          post(chat([user("go")], %{"stream" => true}), [{"x-conversation-id", to_string(conv.id)}])
+          post(chat([user("go")], %{"stream" => true}), [
+            {"x-conversation-id", to_string(conv.id)}
+          ])
         end)
 
       refute log =~ "FILE-SECRET-BODY"

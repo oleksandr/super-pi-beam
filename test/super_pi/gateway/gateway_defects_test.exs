@@ -17,7 +17,6 @@ defmodule SuperPi.Gateway.GatewayDefectsTest do
 
   @opts Router.init([])
 
-
   setup do
     SuperPi.Tools.ensure_catalog_ets!()
     Router.ensure_session_cache!()
@@ -41,25 +40,38 @@ defmodule SuperPi.Gateway.GatewayDefectsTest do
   defp assert_openai_error(result, label) do
     case result do
       {:raised, e} ->
-        flunk("#{label}: router raised #{inspect(e.__struct__)} instead of returning an error response")
+        flunk(
+          "#{label}: router raised #{inspect(e.__struct__)} instead of returning an error response"
+        )
 
       %Plug.Conn{status: status, resp_body: body} ->
         assert status in 400..499, "#{label}: expected a 4xx status, got #{status}"
-        assert %{"error" => %{"message" => _}} = Jason.decode!(body), "#{label}: body is not an OpenAI error object"
+
+        assert %{"error" => %{"message" => _}} = Jason.decode!(body),
+               "#{label}: body is not an OpenAI error object"
     end
   end
 
   describe "malformed requests return OpenAI-style 400 errors (router.ex:60-74,340-381)" do
     test "messages is null" do
-      assert_openai_error(post(%{"model" => "super-pi-fast", "messages" => nil}), "messages: null")
+      assert_openai_error(
+        post(%{"model" => "super-pi-fast", "messages" => nil}),
+        "messages: null"
+      )
     end
 
     test "messages is not a list" do
-      assert_openai_error(post(%{"model" => "super-pi-fast", "messages" => "hello"}), "messages: string")
+      assert_openai_error(
+        post(%{"model" => "super-pi-fast", "messages" => "hello"}),
+        "messages: string"
+      )
     end
 
     test "a message entry is not an object" do
-      assert_openai_error(post(%{"model" => "super-pi-fast", "messages" => ["hello"]}), "messages: [string]")
+      assert_openai_error(
+        post(%{"model" => "super-pi-fast", "messages" => ["hello"]}),
+        "messages: [string]"
+      )
     end
 
     test "model is null" do
@@ -74,7 +86,11 @@ defmodule SuperPi.Gateway.GatewayDefectsTest do
 
   describe "stream flag (router.ex:63)" do
     test "the string \"false\" does not select streaming" do
-      body = %{"model" => "super-pi-fast", "stream" => "false", "messages" => [%{"role" => "user", "content" => "hi"}]}
+      body = %{
+        "model" => "super-pi-fast",
+        "stream" => "false",
+        "messages" => [%{"role" => "user", "content" => "hi"}]
+      }
 
       conn = post(body)
       assert %Plug.Conn{} = conn, "router raised: #{inspect(conn)}"
@@ -88,12 +104,21 @@ defmodule SuperPi.Gateway.GatewayDefectsTest do
     test "x-conversation-id cannot attach a client to a conversation it did not create" do
       other = SuperPi.Durable.Storage.create_conversation!()
 
-      body = %{"model" => "super-pi-fast", "messages" => [%{"role" => "user", "content" => "write into your conversation"}]}
-      conn = post(body, [{"x-conversation-id", Integer.to_string(other.id)}, {"x-session-id", "attacker-#{System.unique_integer([:positive])}"}])
+      body = %{
+        "model" => "super-pi-fast",
+        "messages" => [%{"role" => "user", "content" => "write into your conversation"}]
+      }
+
+      conn =
+        post(body, [
+          {"x-conversation-id", Integer.to_string(other.id)},
+          {"x-session-id", "attacker-#{System.unique_integer([:positive])}"}
+        ])
+
       assert %Plug.Conn{} = conn
 
       entries =
-        Repo.all(from e in SuperPi.Durable.Schemas.Entry, where: e.conversation_id == ^other.id)
+        Repo.all(from(e in SuperPi.Durable.Schemas.Entry, where: e.conversation_id == ^other.id))
 
       refute Enum.any?(entries, fn e -> inspect(e.data) =~ "write into your conversation" end),
              "an unauthenticated client appended to an existing conversation"
@@ -101,18 +126,22 @@ defmodule SuperPi.Gateway.GatewayDefectsTest do
 
     test "two concurrent first requests with the same new session id create one conversation" do
       session = "race-#{System.unique_integer([:positive])}"
-      before_count = Repo.one(from c in Conversation, select: count(c.id))
+      before_count = Repo.one(from(c in Conversation, select: count(c.id)))
 
       resolve = fn ->
         # Router.resolve_conversation/2 is private; drive it through the public route.
-        body = %{"model" => "super-pi-fast", "messages" => [%{"role" => "user", "content" => "hi"}]}
+        body = %{
+          "model" => "super-pi-fast",
+          "messages" => [%{"role" => "user", "content" => "hi"}]
+        }
+
         post(body, [{"x-session-id", session}])
       end
 
       tasks = for _ <- 1..2, do: Task.async(resolve)
       Enum.each(tasks, &Task.await(&1, 10_000))
 
-      created = Repo.one(from c in Conversation, select: count(c.id)) - before_count
+      created = Repo.one(from(c in Conversation, select: count(c.id))) - before_count
       assert created == 1, "#{created} conversations created for one session id"
     end
   end
@@ -141,7 +170,10 @@ defmodule SuperPi.Gateway.GatewayDefectsTest do
     end
 
     test "a gemini model without an API key returns an error, not a fake 'Echo:' answer" do
-      body = %{"model" => "gemini-2.5-flash", "messages" => [%{"role" => "user", "content" => "hello"}]}
+      body = %{
+        "model" => "gemini-2.5-flash",
+        "messages" => [%{"role" => "user", "content" => "hello"}]
+      }
 
       conn = post(body, [{"x-session-id", "nokey-#{System.unique_integer([:positive])}"}])
       assert %Plug.Conn{} = conn, "router raised: #{inspect(conn)}"
@@ -151,7 +183,10 @@ defmodule SuperPi.Gateway.GatewayDefectsTest do
     end
 
     test "a model that no provider serves returns an error, not an echo" do
-      body = %{"model" => "claude-sonnet-5-5", "messages" => [%{"role" => "user", "content" => "hello"}]}
+      body = %{
+        "model" => "claude-sonnet-5-5",
+        "messages" => [%{"role" => "user", "content" => "hello"}]
+      }
 
       conn = post(body, [{"x-session-id", "noprov-#{System.unique_integer([:positive])}"}])
 

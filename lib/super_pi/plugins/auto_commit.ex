@@ -48,7 +48,10 @@ defmodule SuperPi.Plugins.AutoCommit do
 
   defp merge_in_progress?(ws) do
     File.exists?(Path.join(ws, ".git/MERGE_HEAD")) or
-      case System.cmd("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], cd: ws, stderr_to_stdout: true) do
+      case System.cmd("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"],
+             cd: ws,
+             stderr_to_stdout: true
+           ) do
         {_, 0} -> true
         _ -> false
       end
@@ -125,7 +128,9 @@ defmodule SuperPi.Plugins.AutoCommit do
 
   defp get_config(config, key, default) when is_map(config) do
     case Map.fetch(config, key) do
-      {:ok, val} -> val
+      {:ok, val} ->
+        val
+
       :error ->
         case Map.fetch(config, to_string(key)) do
           {:ok, val} -> val

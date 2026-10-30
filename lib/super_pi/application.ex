@@ -14,40 +14,50 @@ defmodule SuperPi.Application do
       if Application.get_env(:super_pi, :start_gateway, false) do
         [
           {SuperPi.Gateway.Server,
-           port: Application.get_env(:super_pi, :gateway_port, 4000), ip: Application.get_env(:super_pi, :gateway_ip, {127, 0, 0, 1})}
+           port: Application.get_env(:super_pi, :gateway_port, 4000),
+           ip: Application.get_env(:super_pi, :gateway_ip, {127, 0, 0, 1})}
         ]
       else
         []
       end
 
-    children = [
-      SuperPi.Repo.active_repo(),
-      SuperPi.Repo.Migrator,
-      {Phoenix.PubSub, name: SuperPi.PubSub},
-      # Process groups across the connected nodes (UI broker).
-      SuperPi.UI.Broker,
-      SuperPi.UI.Pending,
-      SuperPi.Durable.DocCache,
-      {Registry, keys: :unique, name: SuperPi.Registry},
-      {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.FileLockSupervisor},
-      # One machine per conversation in the whole cluster (see SuperPi.Conversation.Locator).
-      {Horde.Registry, name: SuperPi.ConversationRegistry, keys: :unique, members: :auto},
-      # The restart budget is shared by every conversation, so it is generous: one conversation that
-      # crashes at start must not exhaust it for the others.
-      {Horde.DynamicSupervisor, name: SuperPi.MachineSupervisor, strategy: :one_for_one, members: :auto, max_restarts: 100, max_seconds: 5},
-      {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.LocalMachineSupervisor}
-    ] ++
-      SuperPi.Cluster.children() ++
+    children =
       [
-      {Finch, name: SuperPi.MCPFinch},
-      {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MCPClientSupervisor},
-      {Task.Supervisor, name: SuperPi.ToolTaskSupervisor},
-      # Agent-controlled egress (`web_fetch`) gets its own pool, apart from LLM traffic.
-      {Finch, name: SuperPi.WebFinch, pools: %{default: [size: 25, conn_opts: [transport_opts: [timeout: 10_000]]]}},
-      {TelemetryMetricsPrometheus.Core, name: SuperPi.Telemetry.reporter_name(), metrics: SuperPi.Telemetry.metrics()},
-      SuperPi.Durable.DeferredFlusher,
-      {Oban, Application.fetch_env!(:super_pi, Oban)}
-    ] ++ gateway_children
+        SuperPi.Repo.active_repo(),
+        SuperPi.Repo.Migrator,
+        {Phoenix.PubSub, name: SuperPi.PubSub},
+        # Process groups across the connected nodes (UI broker).
+        SuperPi.UI.Broker,
+        SuperPi.UI.Pending,
+        SuperPi.Durable.DocCache,
+        {Registry, keys: :unique, name: SuperPi.Registry},
+        {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.FileLockSupervisor},
+        # One machine per conversation in the whole cluster (see SuperPi.Conversation.Locator).
+        {Horde.Registry, name: SuperPi.ConversationRegistry, keys: :unique, members: :auto},
+        # The restart budget is shared by every conversation, so it is generous: one conversation that
+        # crashes at start must not exhaust it for the others.
+        {Horde.DynamicSupervisor,
+         name: SuperPi.MachineSupervisor,
+         strategy: :one_for_one,
+         members: :auto,
+         max_restarts: 100,
+         max_seconds: 5},
+        {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.LocalMachineSupervisor}
+      ] ++
+        SuperPi.Cluster.children() ++
+        [
+          {Finch, name: SuperPi.MCPFinch},
+          {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MCPClientSupervisor},
+          {Task.Supervisor, name: SuperPi.ToolTaskSupervisor},
+          # Agent-controlled egress (`web_fetch`) gets its own pool, apart from LLM traffic.
+          {Finch,
+           name: SuperPi.WebFinch,
+           pools: %{default: [size: 25, conn_opts: [transport_opts: [timeout: 10_000]]]}},
+          {TelemetryMetricsPrometheus.Core,
+           name: SuperPi.Telemetry.reporter_name(), metrics: SuperPi.Telemetry.metrics()},
+          SuperPi.Durable.DeferredFlusher,
+          {Oban, Application.fetch_env!(:super_pi, Oban)}
+        ] ++ gateway_children
 
     opts = [strategy: :rest_for_one, name: SuperPi.Supervisor]
     Supervisor.start_link(children, opts)

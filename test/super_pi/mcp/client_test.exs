@@ -41,14 +41,19 @@ defmodule SuperPi.MCP.ClientTest do
       pid = start_client()
       :ok = Client.await_ready(pid, 15_000)
 
-      assert {:ok, %{"content" => [%{"text" => "echo: hello"}]}} = Client.call_tool(pid, "echo", %{"text" => "hello"})
+      assert {:ok, %{"content" => [%{"text" => "echo: hello"}]}} =
+               Client.call_tool(pid, "echo", %{"text" => "hello"})
+
       assert {:ok, %{"isError" => true}} = Client.call_tool(pid, "fail", %{})
     end
 
     test "a protocol error is returned, not raised" do
       pid = start_client()
       :ok = Client.await_ready(pid, 15_000)
-      assert {:error, {:protocol_error, %{"message" => message}}} = Client.call_tool(pid, "nope", %{})
+
+      assert {:error, {:protocol_error, %{"message" => message}}} =
+               Client.call_tool(pid, "nope", %{})
+
       assert message =~ "unknown tool"
     end
 
@@ -69,13 +74,15 @@ defmodule SuperPi.MCP.ClientTest do
 
     test "a missing command is an error" do
       Process.flag(:trap_exit, true)
+
       assert {:error, {:command_not_found, "definitely-not-a-command"}} =
                Client.start_link(name: "x", command: "definitely-not-a-command")
     end
   end
 
   describe "Manager" do
-    test "starts enabled stdio servers, skips disabled ones and entries with no command or url, and exposes namespaced tools", %{dir: dir} do
+    test "starts enabled stdio servers, skips disabled ones and entries with no command or url, and exposes namespaced tools",
+         %{dir: dir} do
       write_config(dir, %{
         "fake srv" => %{"command" => "elixir", "args" => [@script]},
         "off" => %{"command" => "elixir", "args" => [@script], "disabled" => true},
@@ -133,7 +140,9 @@ defmodule SuperPi.MCP.ClientTest do
         "good" => %{"command" => "elixir", "args" => [@script]}
       })
 
-      by_name = dir |> then(&Manager.ensure_started(global_config_dir: &1)) |> Map.new(&{&1.server, &1})
+      by_name =
+        dir |> then(&Manager.ensure_started(global_config_dir: &1)) |> Map.new(&{&1.server, &1})
+
       assert %{status: {:error, _}} = by_name["bad"]
       assert %{status: :started} = by_name["good"]
     end
@@ -156,7 +165,11 @@ defmodule SuperPi.MCP.ClientTest do
 
   describe "permissions" do
     defp check(mode, tool) do
-      conv = SuperPi.Durable.Storage.create_conversation!(agent: %{"executionMode" => mode, "workspacePaths" => [File.cwd!()]})
+      conv =
+        SuperPi.Durable.Storage.create_conversation!(
+          agent: %{"executionMode" => mode, "workspacePaths" => [File.cwd!()]}
+        )
+
       SuperPi.Plugins.Permissions.before_tool(tool, %{}, %{conversation_id: conv.id})
     end
 
@@ -171,7 +184,9 @@ defmodule SuperPi.MCP.ClientTest do
   end
 
   describe "conversation" do
-    test "a conversation starts the configured servers and the model can call their tools", %{dir: dir} do
+    test "a conversation starts the configured servers and the model can call their tools", %{
+      dir: dir
+    } do
       write_config(dir, %{"fake" => %{"command" => "elixir", "args" => [@script]}})
       Application.put_env(:super_pi, :mcp_clients, true)
       on_exit(fn -> Application.put_env(:super_pi, :mcp_clients, false) end)
@@ -192,7 +207,13 @@ defmodule SuperPi.MCP.ClientTest do
         end
       end
 
-      {:ok, pid} = SuperPi.Conversation.Machine.start_link(conversation_id: conv.id, extensions: [], llm_responder: responder)
+      {:ok, pid} =
+        SuperPi.Conversation.Machine.start_link(
+          conversation_id: conv.id,
+          extensions: [],
+          llm_responder: responder
+        )
+
       assert {:ok, _} = SuperPi.Conversation.Machine.submit(pid, "use the tool", timeout: 30_000)
       assert_received {:messages, messages}
       assert messages =~ "echo: from model"

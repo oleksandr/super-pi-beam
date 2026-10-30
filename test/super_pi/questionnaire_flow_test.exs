@@ -6,25 +6,33 @@ defmodule SuperPi.QuestionnaireFlowTest do
   alias SuperPi.RPC.Server, as: RPC
   alias SuperPi.UI.Broker
 
-  @questions [%{"question" => "Which backend?", "options" => ["(Recommended) SQLite", "PostgreSQL"]}]
+  @questions [
+    %{"question" => "Which backend?", "options" => ["(Recommended) SQLite", "PostgreSQL"]}
+  ]
 
   setup do
     on_exit(fn -> Application.delete_env(:super_pi, :questionnaire_timeout_ms) end)
     %{conv: SuperPi.Durable.Storage.create_conversation!()}
   end
 
-  defp ask(conv_id), do: Questionnaire.wrap_tool("ask_question", %{"questions" => @questions}, fn _ -> %{} end, %{conversation_id: conv_id})
+  defp ask(conv_id),
+    do:
+      Questionnaire.wrap_tool("ask_question", %{"questions" => @questions}, fn _ -> %{} end, %{
+        conversation_id: conv_id
+      })
 
   # Runs `ask` in a process that watches the conversation like a client does.
   defp start_asking(conv_id) do
     me = self()
     Phoenix.PubSub.subscribe(SuperPi.PubSub, "conversation:#{conv_id}")
     Broker.register_responder(conv_id)
+
     task =
       Task.async(fn ->
         send(me, :asking)
         ask(conv_id)
       end)
+
     assert_receive {:conversation_event, ^conv_id, %{"type" => "ui_request"} = event}, 5_000
     {task, event}
   end
@@ -34,7 +42,11 @@ defmodule SuperPi.QuestionnaireFlowTest do
 
     assert event["kind"] == "questionnaire"
     assert [%{"question" => "Which backend?"}] = event["questions"]
-    assert :ok = Broker.respond(event["request_id"], [%{"question" => "Which backend?", "selected" => "PostgreSQL"}])
+
+    assert :ok =
+             Broker.respond(event["request_id"], [
+               %{"question" => "Which backend?", "selected" => "PostgreSQL"}
+             ])
 
     res = Task.await(task, 5_000)
     refute res["is_error"]
@@ -88,25 +100,43 @@ defmodule SuperPi.QuestionnaireFlowTest do
 
   test "empty or malformed questions are rejected before anything is asked", %{conv: conv} do
     for args <- [%{"questions" => []}, %{"questions" => [%{"options" => ["a"]}]}, %{}] do
-      res = Questionnaire.wrap_tool("ask_question", args, fn _ -> %{} end, %{conversation_id: conv.id})
+      res =
+        Questionnaire.wrap_tool("ask_question", args, fn _ -> %{} end, %{conversation_id: conv.id})
+
       assert res["structured_output"]["status"] == "invalid_arguments"
     end
   end
 
   describe "rpc" do
     defp rpc(state, method, params, id \\ 1) do
-      RPC.handle_rpc_payload(Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}), state)
+      RPC.handle_rpc_payload(
+        Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}),
+        state
+      )
     end
 
-    test "watch with interactive registers the client, ui.respond delivers the answer", %{conv: conv} do
+    test "watch with interactive registers the client, ui.respond delivers the answer", %{
+      conv: conv
+    } do
       refute Broker.responder?(conv.id)
-      {%{"result" => _}, state, _} = rpc(RPC.new_client_state(), "session.watch", %{"conversation_id" => conv.id, "interactive" => true})
+
+      {%{"result" => _}, state, _} =
+        rpc(RPC.new_client_state(), "session.watch", %{
+          "conversation_id" => conv.id,
+          "interactive" => true
+        })
+
       assert Broker.responder?(conv.id)
 
       task = Task.async(fn -> ask(conv.id) end)
-      assert_receive {:conversation_event, _, %{"type" => "ui_request", "request_id" => request_id}}, 5_000
 
-      {reply, _, _} = rpc(state, "ui.respond", %{"request_id" => request_id, "value" => "PostgreSQL"})
+      assert_receive {:conversation_event, _,
+                      %{"type" => "ui_request", "request_id" => request_id}},
+                     5_000
+
+      {reply, _, _} =
+        rpc(state, "ui.respond", %{"request_id" => request_id, "value" => "PostgreSQL"})
+
       assert %{"result" => %{"resolved" => ^request_id}} = reply
       assert Task.await(task, 5_000)["output"] =~ "PostgreSQL"
     end
@@ -117,12 +147,18 @@ defmodule SuperPi.QuestionnaireFlowTest do
     end
 
     test "ui.respond with an unknown id is an error" do
-      {reply, _, _} = rpc(RPC.new_client_state(), "ui.respond", %{"request_id" => "ui-nope", "value" => "x"})
+      {reply, _, _} =
+        rpc(RPC.new_client_state(), "ui.respond", %{"request_id" => "ui-nope", "value" => "x"})
+
       assert %{"error" => %{"code" => -32004}} = reply
     end
 
     test "session.cancel ends a waiting question", %{conv: conv} do
-      rpc(RPC.new_client_state(), "session.watch", %{"conversation_id" => conv.id, "interactive" => true})
+      rpc(RPC.new_client_state(), "session.watch", %{
+        "conversation_id" => conv.id,
+        "interactive" => true
+      })
+
       task = Task.async(fn -> ask(conv.id) end)
       assert_receive {:conversation_event, _, %{"type" => "ui_request"}}, 5_000
 
@@ -140,9 +176,14 @@ defmodule SuperPi.QuestionnaireFlowTest do
 
       rpc(alice, "session.watch", %{"conversation_id" => conv_id, "interactive" => true})
       task = Task.async(fn -> ask(conv_id) end)
-      assert_receive {:conversation_event, _, %{"type" => "ui_request", "request_id" => request_id}}, 5_000
 
-      {reply, _, _} = rpc(bob, "ui.respond", %{"request_id" => request_id, "value" => "PostgreSQL"})
+      assert_receive {:conversation_event, _,
+                      %{"type" => "ui_request", "request_id" => request_id}},
+                     5_000
+
+      {reply, _, _} =
+        rpc(bob, "ui.respond", %{"request_id" => request_id, "value" => "PostgreSQL"})
+
       assert %{"error" => %{"code" => -32004}} = reply
 
       {reply, _, _} = rpc(alice, "ui.respond", %{"request_id" => request_id, "value" => "SQLite"})

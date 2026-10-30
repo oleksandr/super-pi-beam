@@ -26,7 +26,9 @@ defmodule SuperPi.Plugins.JevRouter do
 
   def id, do: "jev_router"
   def name, do: "Jev Dynamic Model Router"
-  def description, do: "Cascades from deep planning model to fast implementation model on first edit"
+
+  def description,
+    do: "Cascades from deep planning model to fast implementation model on first edit"
 
   @impl true
   def before_request(derived_context, ctx) do
@@ -50,7 +52,6 @@ defmodule SuperPi.Plugins.JevRouter do
     if not explicit_models? and not SuperPi.AI.GeminiClient.configured?() do
       {:ok, derived_context}
     else
-
       planning_model =
         Keyword.get(merged_opts, :planning_model) ||
           System.get_env("JEV_PLANNING_MODEL") ||

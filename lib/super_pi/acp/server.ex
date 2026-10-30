@@ -45,7 +45,6 @@ defmodule SuperPi.ACP.Server do
 
   use GenServer
 
-
   alias SuperPi.ACP.Session
   alias SuperPi.Auth
   alias SuperPi.Conversation.Machine
@@ -78,7 +77,10 @@ defmodule SuperPi.ACP.Server do
 
     reader =
       spawn_link(fn ->
-        for line <- IO.stream(:stdio, :line), String.trim(line) != "", do: send(pid, {:acp_line, String.trim(line)})
+        for line <- IO.stream(:stdio, :line),
+            String.trim(line) != "",
+            do: send(pid, {:acp_line, String.trim(line)})
+
         GenServer.stop(pid)
       end)
 
@@ -90,7 +92,8 @@ defmodule SuperPi.ACP.Server do
   end
 
   @doc "Asks the client for the text of a file, including unsaved changes. Used by `SuperPi.Env.ClientFS`."
-  @spec read_text_file(pid(), integer(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  @spec read_text_file(pid(), integer(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
   def read_text_file(server, conversation_id, path, opts \\ []) do
     GenServer.call(server, {:fs_read, conversation_id, path, opts}, @fs_timeout_ms + 1_000)
   catch
@@ -101,17 +104,32 @@ defmodule SuperPi.ACP.Server do
 
   @impl true
   def init(opts) do
-    send_fun = Keyword.get(opts, :send) || raise ArgumentError, "ACP.Server needs a :send function"
+    send_fun =
+      Keyword.get(opts, :send) || raise ArgumentError, "ACP.Server needs a :send function"
+
     {:ok, %__MODULE__{send: send_fun}}
   end
 
   @impl true
   def handle_info({:acp_line, line}, st) do
     case Jason.decode(line) do
-      {:ok, %{"method" => method} = msg} -> {:noreply, handle_message(method, Map.get(msg, "id"), Map.get(msg, "params") || %{}, open_principal(st))}
-      {:ok, %{"id" => id} = msg} when is_map_key(msg, "result") or is_map_key(msg, "error") -> {:noreply, handle_response(id, msg, st)}
-      {:ok, _} -> {:noreply, reply_error(st, nil, -32600, "Invalid request")}
-      {:error, _} -> {:noreply, reply_error(st, nil, -32700, "Parse error")}
+      {:ok, %{"method" => method} = msg} ->
+        {:noreply,
+         handle_message(
+           method,
+           Map.get(msg, "id"),
+           Map.get(msg, "params") || %{},
+           open_principal(st)
+         )}
+
+      {:ok, %{"id" => id} = msg} when is_map_key(msg, "result") or is_map_key(msg, "error") ->
+        {:noreply, handle_response(id, msg, st)}
+
+      {:ok, _} ->
+        {:noreply, reply_error(st, nil, -32600, "Invalid request")}
+
+      {:error, _} ->
+        {:noreply, reply_error(st, nil, -32700, "Parse error")}
     end
   end
 
@@ -163,7 +181,12 @@ defmodule SuperPi.ACP.Server do
 
       session_id ->
         {id, st} = next_id(st)
-        params = %{"sessionId" => session_id, "path" => path} |> maybe_put("line", opts[:line]) |> maybe_put("limit", opts[:limit])
+
+        params =
+          %{"sessionId" => session_id, "path" => path}
+          |> maybe_put("line", opts[:line])
+          |> maybe_put("limit", opts[:limit])
+
         Process.send_after(self(), {:fs_timeout, id}, @fs_timeout_ms)
         st = put_in(st.pending[id], {:fs_read, from})
         {:noreply, send_request(st, id, "fs/read_text_file", params)}
@@ -172,7 +195,9 @@ defmodule SuperPi.ACP.Server do
 
   # With no gateway token configured the endpoint is open, and the principal is `anonymous`. The
   # check runs for each message, because the token configuration can change while the server runs.
-  defp open_principal(%{principal: nil} = st), do: if(Auth.required?(), do: st, else: %{st | principal: Auth.anonymous()})
+  defp open_principal(%{principal: nil} = st),
+    do: if(Auth.required?(), do: st, else: %{st | principal: Auth.anonymous()})
+
   defp open_principal(st), do: st
 
   # --- Requests and notifications from the client ---
@@ -181,7 +206,8 @@ defmodule SuperPi.ACP.Server do
     caps = Map.get(params, "clientCapabilities") || %{}
 
     result = %{
-      "protocolVersion" => min(Map.get(params, "protocolVersion", @protocol_version), @protocol_version),
+      "protocolVersion" =>
+        min(Map.get(params, "protocolVersion", @protocol_version), @protocol_version),
       "agentCapabilities" => %{
         "loadSession" => true,
         "promptCapabilities" => %{"image" => false, "audio" => false, "embeddedContext" => true},
@@ -189,7 +215,9 @@ defmodule SuperPi.ACP.Server do
       },
       "agentInfo" => %{"name" => "super-pi", "title" => "Super-Pi-BEAM", "version" => "0.1.0"},
       "authMethods" => auth_methods(),
-      "_meta" => %{"superPi" => %{"harnesses" => Enum.map(Harness.list(), &Harness.capabilities/1)}}
+      "_meta" => %{
+        "superPi" => %{"harnesses" => Enum.map(Harness.list(), &Harness.capabilities/1)}
+      }
     }
 
     st = %{st | client_caps: caps, initialized?: true}
@@ -205,7 +233,14 @@ defmodule SuperPi.ACP.Server do
     end
   end
 
-  defp handle_message(method, id, _params, %{principal: nil} = st) when method in ["session/new", "session/load", "session/prompt", "session/set_mode", "_superpi/session/fork"] do
+  defp handle_message(method, id, _params, %{principal: nil} = st)
+       when method in [
+              "session/new",
+              "session/load",
+              "session/prompt",
+              "session/set_mode",
+              "_superpi/session/fork"
+            ] do
     reply_error(st, id, -32000, "Authentication required")
   end
 
@@ -242,7 +277,8 @@ defmodule SuperPi.ACP.Server do
   end
 
   defp handle_message("_superpi/session/fork", id, params, st) do
-    with {:ok, session} <- fetch_session(st, params), {:ok, forked} <- Session.fork(st.principal, session) do
+    with {:ok, session} <- fetch_session(st, params),
+         {:ok, forked} <- Session.fork(st.principal, session) do
       st = attach(st, forked)
       reply(st, id, %{"sessionId" => forked.id})
     else
@@ -271,7 +307,8 @@ defmodule SuperPi.ACP.Server do
   end
 
   defp handle_message("session/set_mode", id, params, st) do
-    with {:ok, session} <- fetch_session(st, params), :ok <- Session.set_mode(session.conversation_id, params["modeId"]) do
+    with {:ok, session} <- fetch_session(st, params),
+         :ok <- Session.set_mode(session.conversation_id, params["modeId"]) do
       reply(st, id, %{})
     else
       {:error, message} -> reply_error(st, id, -32602, message)
@@ -302,7 +339,10 @@ defmodule SuperPi.ACP.Server do
   end
 
   # `selected` carries the option id. `cancelled` means the client dropped the prompt, which ends the turn.
-  defp answer_permission(broker_request_id, %{"result" => %{"outcome" => %{"outcome" => "selected", "optionId" => option}}}), do: Broker.respond(broker_request_id, option)
+  defp answer_permission(broker_request_id, %{
+         "result" => %{"outcome" => %{"outcome" => "selected", "optionId" => option}}
+       }),
+       do: Broker.respond(broker_request_id, option)
 
   defp answer_permission(broker_request_id, _other) do
     case Broker.conversation_of(broker_request_id) do
@@ -311,18 +351,29 @@ defmodule SuperPi.ACP.Server do
     end
   end
 
-  defp fs_result(%{"result" => %{"content" => content}}) when is_binary(content), do: {:ok, content}
+  defp fs_result(%{"result" => %{"content" => content}}) when is_binary(content),
+    do: {:ok, content}
+
   defp fs_result(%{"error" => %{"message" => message}}), do: {:error, message}
   defp fs_result(_), do: {:error, :bad_response}
 
   # --- Prompt ---
 
   defp start_prompt(st, session, rpc_id, text) do
-    pid = SuperPi.Conversation.Locator.ensure_started!(session.conversation_id, Harness.remote_extensions(harness_of(session)))
+    pid =
+      SuperPi.Conversation.Locator.ensure_started!(
+        session.conversation_id,
+        Harness.remote_extensions(harness_of(session))
+      )
+
     Broker.register_responder(session.conversation_id)
     register_fs(session.conversation_id, st)
 
-    task = Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn -> Machine.safe_submit(pid, text, mode: :queue, timeout: @prompt_timeout_ms) end)
+    task =
+      Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
+        Machine.safe_submit(pid, text, mode: :queue, timeout: @prompt_timeout_ms)
+      end)
+
     put_session(st, %{session | prompt: %{id: rpc_id, ref: task.ref}, last_end: nil})
   end
 
@@ -342,7 +393,10 @@ defmodule SuperPi.ACP.Server do
           if session.last_end == "turn_cancelled" do
             {st, "cancelled"}
           else
-            {notify_update(st, session_id, %{"sessionUpdate" => "agent_message_chunk", "content" => %{"type" => "text", "text" => "**Error:** #{format_reason(reason)}"}}), "refusal"}
+            {notify_update(st, session_id, %{
+               "sessionUpdate" => "agent_message_chunk",
+               "content" => %{"type" => "text", "text" => "**Error:** #{format_reason(reason)}"}
+             }), "refusal"}
           end
       end
 
@@ -387,7 +441,9 @@ defmodule SuperPi.ACP.Server do
   defp prompt_text(_), do: {:error, "`prompt` must be a list of content blocks"}
 
   defp harness_of(session) do
-    agent = SuperPi.Durable.Doc.snapshot("conversation", session.conversation_id, "pi.agent") || %{}
+    agent =
+      SuperPi.Durable.Doc.snapshot("conversation", session.conversation_id, "pi.agent") || %{}
+
     # The conversation keeps the loadout and prompt of its harness. The extensions come from the
     # harness named in the model field when there is one, else the default.
     case Harness.fetch(agent["harness"] || Harness.default().id()) do
@@ -398,7 +454,8 @@ defmodule SuperPi.ACP.Server do
 
   # --- Events ---
 
-  defp handle_event(session_id, %Event{type: type} = ev, st) when type in ["turn_completed", "turn_cancelled", "turn_error"] do
+  defp handle_event(session_id, %Event{type: type} = ev, st)
+       when type in ["turn_completed", "turn_cancelled", "turn_error"] do
     session = Map.fetch!(st.sessions, session_id)
     put_session(st, %{session | last_end: type}) |> render_event(session_id, ev)
   end
@@ -425,13 +482,25 @@ defmodule SuperPi.ACP.Server do
 
   defp reply(st, nil, _result), do: st
   defp reply(st, id, result), do: emit(st, %{"jsonrpc" => "2.0", "id" => id, "result" => result})
-  defp reply_error(st, id, code, message), do: emit(st, %{"jsonrpc" => "2.0", "id" => id, "error" => %{"code" => code, "message" => message}})
+
+  defp reply_error(st, id, code, message),
+    do:
+      emit(st, %{
+        "jsonrpc" => "2.0",
+        "id" => id,
+        "error" => %{"code" => code, "message" => message}
+      })
 
   defp notify_update(st, session_id, update) do
-    emit(st, %{"jsonrpc" => "2.0", "method" => "session/update", "params" => %{"sessionId" => session_id, "update" => update}})
+    emit(st, %{
+      "jsonrpc" => "2.0",
+      "method" => "session/update",
+      "params" => %{"sessionId" => session_id, "update" => update}
+    })
   end
 
-  defp send_request(st, id, method, params), do: emit(st, %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params})
+  defp send_request(st, id, method, params),
+    do: emit(st, %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params})
 
   defp emit(st, map) do
     st.send.(Jason.encode!(map))
@@ -439,8 +508,16 @@ defmodule SuperPi.ACP.Server do
   end
 
   defp send_commands(st, session) do
-    commands = Enum.map(SuperPi.CLI.slash_commands(), &%{"name" => String.trim_leading(&1["name"], "/"), "description" => &1["description"]})
-    notify_update(st, session.id, %{"sessionUpdate" => "available_commands_update", "availableCommands" => commands})
+    commands =
+      Enum.map(
+        SuperPi.CLI.slash_commands(),
+        &%{"name" => String.trim_leading(&1["name"], "/"), "description" => &1["description"]}
+      )
+
+    notify_update(st, session.id, %{
+      "sessionUpdate" => "available_commands_update",
+      "availableCommands" => commands
+    })
   end
 
   defp next_id(st), do: {"agent-#{st.next_id}", %{st | next_id: st.next_id + 1}}
@@ -466,7 +543,9 @@ defmodule SuperPi.ACP.Server do
   end
 
   defp fetch_cwd(%{"cwd" => cwd}) when is_binary(cwd) do
-    if Path.type(cwd) == :absolute, do: {:ok, cwd}, else: {:error, "`cwd` must be an absolute path"}
+    if Path.type(cwd) == :absolute,
+      do: {:ok, cwd},
+      else: {:error, "`cwd` must be an absolute path"}
   end
 
   defp fetch_cwd(_), do: {:error, "`cwd` is required"}
@@ -484,7 +563,9 @@ defmodule SuperPi.ACP.Server do
   # MCP servers that the client hands over. The manager starts them and adds their tools to the
   # catalog. A server that cannot start is logged by the manager and skipped.
   defp apply_mcp_servers(servers) when is_list(servers) and servers != [] do
-    if Application.get_env(:super_pi, :mcp_clients, true), do: SuperPi.MCP.Manager.add_servers(servers)
+    if Application.get_env(:super_pi, :mcp_clients, true),
+      do: SuperPi.MCP.Manager.add_servers(servers)
+
     :ok
   end
 
@@ -492,7 +573,13 @@ defmodule SuperPi.ACP.Server do
 
   defp auth_methods do
     if Auth.required?(),
-      do: [%{"id" => "token", "name" => "Gateway token", "description" => "A token from SUPER_PI_GATEWAY_TOKEN, sent in `_meta.token`"}],
+      do: [
+        %{
+          "id" => "token",
+          "name" => "Gateway token",
+          "description" => "A token from SUPER_PI_GATEWAY_TOKEN, sent in `_meta.token`"
+        }
+      ],
       else: []
   end
 

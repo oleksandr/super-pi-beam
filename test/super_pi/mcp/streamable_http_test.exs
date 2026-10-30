@@ -44,8 +44,16 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       pid = client(fake)
 
       assert :ok = Client.await_ready(pid, 5_000)
-      assert pid |> Client.tools() |> Enum.map(& &1["name"]) == ["echo", "mutate", "stream", "silent"]
-      assert {:ok, %{"content" => [%{"text" => "echo: hi"}]}} = Client.call_tool(pid, "echo", %{"text" => "hi"})
+
+      assert pid |> Client.tools() |> Enum.map(& &1["name"]) == [
+               "echo",
+               "mutate",
+               "stream",
+               "silent"
+             ]
+
+      assert {:ok, %{"content" => [%{"text" => "echo: hi"}]}} =
+               Client.call_tool(pid, "echo", %{"text" => "hi"})
 
       # `initialized` reaches the server before the first request that follows it.
       assert fake |> Fake.requests() |> Enum.map(& &1.body["method"]) ==
@@ -75,7 +83,10 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       fake = server()
       pid = client(fake)
       assert :ok = Client.await_ready(pid, 5_000)
-      assert [%{body: %{"method" => "notifications/initialized"}}] = Fake.requests(fake, "notifications/initialized")
+
+      assert [%{body: %{"method" => "notifications/initialized"}}] =
+               Fake.requests(fake, "notifications/initialized")
+
       assert {:ok, _} = Client.call_tool(pid, "echo", %{"text" => "after"})
     end
 
@@ -85,7 +96,10 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       :ok = Client.await_ready(pid, 5_000)
 
       started = System.monotonic_time(:millisecond)
-      assert {:error, {:protocol_error, %{"message" => message}}} = Client.call_tool(pid, "silent", %{}, 30_000)
+
+      assert {:error, {:protocol_error, %{"message" => message}}} =
+               Client.call_tool(pid, "silent", %{}, 30_000)
+
       assert message =~ "no response"
       assert System.monotonic_time(:millisecond) - started < 5_000
     end
@@ -94,7 +108,9 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       fake = server()
       pid = client(fake)
       :ok = Client.await_ready(pid, 5_000)
-      assert {:error, {:protocol_error, %{"message" => "unknown method tools/call"}}} = Client.call_tool(pid, "nope", %{})
+
+      assert {:error, {:protocol_error, %{"message" => "unknown method tools/call"}}} =
+               Client.call_tool(pid, "nope", %{})
     end
   end
 
@@ -103,14 +119,19 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       fake = server()
       pid = client(fake)
       :ok = Client.await_ready(pid, 5_000)
-      assert {:ok, %{"content" => [%{"text" => "stream done"}], "structuredContent" => %{"ok" => true}}} = Client.call_tool(pid, "stream", %{})
+
+      assert {:ok,
+              %{"content" => [%{"text" => "stream done"}], "structuredContent" => %{"ok" => true}}} =
+               Client.call_tool(pid, "stream", %{})
     end
 
     test "every response, the handshake included, as an event stream" do
       fake = server(sse_all: true)
       pid = client(fake)
       assert :ok = Client.await_ready(pid, 5_000)
-      assert {:ok, %{"content" => [%{"text" => "echo: sse"}]}} = Client.call_tool(pid, "echo", %{"text" => "sse"})
+
+      assert {:ok, %{"content" => [%{"text" => "echo: sse"}]}} =
+               Client.call_tool(pid, "echo", %{"text" => "sse"})
     end
   end
 
@@ -121,7 +142,9 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       :ok = Client.await_ready(pid, 5_000)
 
       Fake.expire_sessions(fake)
-      assert {:ok, %{"content" => [%{"text" => "echo: again"}]}} = Client.call_tool(pid, "echo", %{"text" => "again"})
+
+      assert {:ok, %{"content" => [%{"text" => "echo: again"}]}} =
+               Client.call_tool(pid, "echo", %{"text" => "again"})
 
       assert length(Fake.requests(fake, "initialize")) == 2
       assert length(Fake.requests(fake, "notifications/initialized")) == 2
@@ -131,7 +154,9 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       # The new session is kept for the next call.
       assert {:ok, _} = Client.call_tool(pid, "echo", %{"text" => "third"})
       assert length(Fake.requests(fake, "initialize")) == 2
-      assert fake |> Fake.requests("tools/call") |> List.last() |> header("mcp-session-id") == "sess-2"
+
+      assert fake |> Fake.requests("tools/call") |> List.last() |> header("mcp-session-id") ==
+               "sess-2"
     end
 
     test "stopping the client ends the session with a DELETE" do
@@ -151,10 +176,17 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       fake = server(legacy: true)
       pid = client(fake, url: fake.base <> "/mcp")
       assert :ok = Client.await_ready(pid, 5_000)
-      assert {:ok, %{"content" => [%{"text" => "echo: legacy"}]}} = Client.call_tool(pid, "echo", %{"text" => "legacy"})
+
+      assert {:ok, %{"content" => [%{"text" => "echo: legacy"}]}} =
+               Client.call_tool(pid, "echo", %{"text" => "legacy"})
 
       requests = Fake.requests(fake)
-      assert requests |> Enum.map(&{&1.method, &1.path}) |> Enum.take(2) == [{"POST", "/mcp"}, {"GET", "/mcp"}]
+
+      assert requests |> Enum.map(&{&1.method, &1.path}) |> Enum.take(2) == [
+               {"POST", "/mcp"},
+               {"GET", "/mcp"}
+             ]
+
       assert Enum.any?(requests, &(&1.method == "POST" and &1.path == "/messages"))
     end
 
@@ -162,6 +194,7 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       fake = server(legacy: true, endpoint: "http://evil.example.test/messages")
       Process.flag(:trap_exit, true)
       pid = client(fake, url: fake.base <> "/sse")
+
       # The URL of a legacy server is its event stream: a POST to it is a 404, which also falls back.
       assert {:error, _} = Client.await_ready(pid, 5_000)
       refute Enum.any?(Fake.requests(fake), &(&1.path == "/messages"))
@@ -171,7 +204,10 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
   describe "headers" do
     test "${ENV_VAR} is expanded and a header name is case-insensitive" do
       fake = server(require: {"authorization", "Bearer s3cret"})
-      pid = client(fake, headers: %{"Authorization" => "Bearer ${#{@token_var}}", "X-Plain" => "yes"})
+
+      pid =
+        client(fake, headers: %{"Authorization" => "Bearer ${#{@token_var}}", "X-Plain" => "yes"})
+
       assert :ok = Client.await_ready(pid, 5_000)
 
       [init | _] = Fake.requests(fake)
@@ -184,7 +220,11 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       Process.flag(:trap_exit, true)
 
       assert {:error, {:missing_env, ["SUPER_PI_NOT_SET_A", "SUPER_PI_NOT_SET_B"]}} =
-               Client.start_link(name: "x", url: fake.url, headers: %{"a" => "${SUPER_PI_NOT_SET_B}", "b" => "x ${SUPER_PI_NOT_SET_A}"})
+               Client.start_link(
+                 name: "x",
+                 url: fake.url,
+                 headers: %{"a" => "${SUPER_PI_NOT_SET_B}", "b" => "x ${SUPER_PI_NOT_SET_A}"}
+               )
 
       assert Fake.requests(fake) == []
     end
@@ -203,22 +243,31 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
     test "a wrong token is a handshake error that carries the status" do
       fake = server(require: {"authorization", "Bearer other"})
       pid = client(fake, headers: %{"authorization" => "Bearer s3cret"})
-      assert {:error, {:handshake_failed, %{"message" => "HTTP 401" <> _}}} = Client.await_ready(pid, 5_000)
+
+      assert {:error, {:handshake_failed, %{"message" => "HTTP 401" <> _}}} =
+               Client.await_ready(pid, 5_000)
     end
   end
 
   describe "bad entries" do
     test "an invalid URL" do
       Process.flag(:trap_exit, true)
-      assert {:error, {:invalid_url, "ftp://example.com"}} = Client.start_link(name: "x", url: "ftp://example.com")
-      assert {:error, {:invalid_url, "not a url"}} = Client.start_link(name: "x", url: "not a url")
+
+      assert {:error, {:invalid_url, "ftp://example.com"}} =
+               Client.start_link(name: "x", url: "ftp://example.com")
+
+      assert {:error, {:invalid_url, "not a url"}} =
+               Client.start_link(name: "x", url: "not a url")
     end
 
     test "a server that is not listening" do
       fake = server()
       Fake.stop(fake)
       pid = client(fake)
-      assert {:error, {:handshake_failed, %{"message" => message}}} = Client.await_ready(pid, 5_000)
+
+      assert {:error, {:handshake_failed, %{"message" => message}}} =
+               Client.await_ready(pid, 5_000)
+
       assert is_binary(message)
     end
   end
@@ -232,8 +281,14 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       fake = server(require: {"authorization", "Bearer s3cret"})
 
       write_config(dir, %{
-        "hosted" => %{"url" => fake.url, "headers" => %{"Authorization" => "Bearer ${#{@token_var}}"}},
-        "alias" => %{"serverUrl" => fake.url, "headers" => %{"Authorization" => "Bearer ${#{@token_var}}"}}
+        "hosted" => %{
+          "url" => fake.url,
+          "headers" => %{"Authorization" => "Bearer ${#{@token_var}}"}
+        },
+        "alias" => %{
+          "serverUrl" => fake.url,
+          "headers" => %{"Authorization" => "Bearer ${#{@token_var}}"}
+        }
       })
 
       results = Manager.ensure_started(global_config_dir: dir)
@@ -243,14 +298,21 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       assert Tools.effects("mcp__hosted__mutate") == ["net_write"]
       assert Tools.effects("mcp__hosted__stream") == ["net_write"]
 
-      assert %{"output" => "echo: hi", "is_error" => false} = Tools.execute("mcp__hosted__echo", %{"text" => "hi"})
+      assert %{"output" => "echo: hi", "is_error" => false} =
+               Tools.execute("mcp__hosted__echo", %{"text" => "hi"})
+
       assert %{"structured_output" => %{"ok" => true}} = Tools.execute("mcp__hosted__mutate", %{})
     end
 
     test "a url entry with a missing variable is reported and skipped", %{dir: dir} do
       fake = server()
-      write_config(dir, %{"hosted" => %{"url" => fake.url, "headers" => %{"x" => "${SUPER_PI_NOT_SET_C}"}}})
-      assert [%{status: {:error, {:missing_env, ["SUPER_PI_NOT_SET_C"]}}, tools: 0}] = Manager.ensure_started(global_config_dir: dir)
+
+      write_config(dir, %{
+        "hosted" => %{"url" => fake.url, "headers" => %{"x" => "${SUPER_PI_NOT_SET_C}"}}
+      })
+
+      assert [%{status: {:error, {:missing_env, ["SUPER_PI_NOT_SET_C"]}}, tools: 0}] =
+               Manager.ensure_started(global_config_dir: dir)
     end
 
     test "stop_all stops an HTTP client", %{dir: dir} do
@@ -277,18 +339,25 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       assert {:block, _} = decide.("plan", "mcp__hosted__mutate")
       assert :allow = decide.("auto", "mcp__hosted__mutate")
       # The network policy covers MCP tools.
-      assert {:block, _} = Permissions.decide("mcp__hosted__echo", %{}, %{"executionMode" => "auto"}, %{"network" => "deny"})
+      assert {:block, _} =
+               Permissions.decide("mcp__hosted__echo", %{}, %{"executionMode" => "auto"}, %{
+                 "network" => "deny"
+               })
     end
 
     test "the CLI writes a url entry that the manager starts", %{dir: dir} do
       fake = server()
       assert {0, _} = SuperPi.CLI.run(["mcp", "add", "hosted", fake.url], global_config_dir: dir)
 
-      assert %{"mcpServers" => %{"hosted" => %{"url" => url} = spec}} = dir |> Path.join("mcp_config.json") |> File.read!() |> Jason.decode!()
+      assert %{"mcpServers" => %{"hosted" => %{"url" => url} = spec}} =
+               dir |> Path.join("mcp_config.json") |> File.read!() |> Jason.decode!()
+
       assert url == fake.url
       refute Map.has_key?(spec, "command")
 
-      assert [%{name: "hosted", type: "http"}] = SuperPi.Plugins.TranscriptLogger.mcp_list(global_config_dir: dir)
+      assert [%{name: "hosted", type: "http"}] =
+               SuperPi.Plugins.TranscriptLogger.mcp_list(global_config_dir: dir)
+
       assert [%{status: :started, tools: 4}] = Manager.ensure_started(global_config_dir: dir)
     end
   end
@@ -306,7 +375,14 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       fake = server()
 
       assert [%{server: "acp-http", status: status, tools: tools}] =
-               Manager.add_servers([%{"type" => "http", "name" => "acp-http", "url" => fake.url, "headers" => [%{"name" => "x-test", "value" => "1"}]}])
+               Manager.add_servers([
+                 %{
+                   "type" => "http",
+                   "name" => "acp-http",
+                   "url" => fake.url,
+                   "headers" => [%{"name" => "x-test", "value" => "1"}]
+                 }
+               ])
 
       assert status in [:started, :running]
       assert tools > 0
@@ -316,7 +392,9 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
 
     test "an entry with no name or no way to start is skipped, a bad one does not raise" do
       assert [] = Manager.add_servers([%{"command" => "x"}, %{"name" => ""}])
-      assert [%{status: {:error, :no_command_or_url}}] = Manager.add_servers([%{"name" => "nothing"}])
+
+      assert [%{status: {:error, :no_command_or_url}}] =
+               Manager.add_servers([%{"name" => "nothing"}])
     end
   end
 end

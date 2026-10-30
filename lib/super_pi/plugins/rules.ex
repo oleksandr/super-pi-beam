@@ -17,7 +17,9 @@ defmodule SuperPi.Plugins.Rules do
 
   def id, do: "rules"
   def name, do: "Agent & Project Rules Injector"
-  def description, do: "Discovers and injects AGENTS.md, GEMINI.md, and rules within token budgets"
+
+  def description,
+    do: "Discovers and injects AGENTS.md, GEMINI.md, and rules within token budgets"
 
   alias SuperPi.Discovery
 
@@ -42,7 +44,9 @@ defmodule SuperPi.Plugins.Rules do
           _ -> [%{"id" => "core", "content" => "You are an intelligent AI assistant."}]
         end
 
-      clean_sections = Enum.reject(existing_sections, &(&1["id"] in ["user_rules", "agy_user_rules"]))
+      clean_sections =
+        Enum.reject(existing_sections, &(&1["id"] in ["user_rules", "agy_user_rules"]))
+
       updated_sections = clean_sections ++ [%{"id" => "user_rules", "content" => rendered_rules}]
 
       {:ok, Map.put(agent_cfg, "systemSections", updated_sections)}
@@ -52,7 +56,8 @@ defmodule SuperPi.Plugins.Rules do
   @doc """
   Truncates raw rule text to `@per_file_byte_limit` (`24,000` bytes) on a line boundary.
   """
-  def truncate_rule_to_limit(content, max_bytes \\ @per_file_byte_limit) when is_binary(content) do
+  def truncate_rule_to_limit(content, max_bytes \\ @per_file_byte_limit)
+      when is_binary(content) do
     if byte_size(content) <= max_bytes do
       content
     else
@@ -76,7 +81,8 @@ defmodule SuperPi.Plugins.Rules do
   Formats discovered rule files under `token_budget` (`20,000` tokens), demoting over-budget files
   to path pointers.
   """
-  def build_rules_section(rule_paths, token_budget \\ @default_rules_token_budget) when is_list(rule_paths) do
+  def build_rules_section(rule_paths, token_budget \\ @default_rules_token_budget)
+      when is_list(rule_paths) do
     {blocks, _used_tokens} =
       Enum.reduce(rule_paths, {[], 0}, fn path, {acc, used_tok} ->
         case File.read(path) do
@@ -88,7 +94,9 @@ defmodule SuperPi.Plugins.Rules do
               block = "<RULE[#{path}]>\n#{capped}\n</RULE[#{path}]>"
               {acc ++ [block], used_tok + est_tokens}
             else
-              demoted = "<RULE_POINTER[#{path}] (Demoted due to 20,000-token rules budget; read file on demand) />"
+              demoted =
+                "<RULE_POINTER[#{path}] (Demoted due to 20,000-token rules budget; read file on demand) />"
+
               {acc ++ [demoted], used_tok}
             end
 
@@ -99,6 +107,4 @@ defmodule SuperPi.Plugins.Rules do
 
     Enum.join(blocks, "\n")
   end
-
-
 end

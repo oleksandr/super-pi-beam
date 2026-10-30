@@ -4,7 +4,8 @@ defmodule SuperPi.TestSupport.Faults do
   executors and extensions that raise, block, or request termination on demand.
   """
 
-  def text_msg(text), do: %{"role" => "assistant", "content" => [%{"type" => "text", "text" => text}]}
+  def text_msg(text),
+    do: %{"role" => "assistant", "content" => [%{"type" => "text", "text" => text}]}
 
   def tool_call_msg(id, name, args) do
     %{

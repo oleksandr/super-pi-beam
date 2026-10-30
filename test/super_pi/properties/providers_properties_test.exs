@@ -17,8 +17,13 @@ defmodule SuperPi.Properties.ProvidersTest do
       quote bind_quoted: [id: opts[:id], prefix: opts[:prefix]] do
         @behaviour SuperPi.AI.Provider
         def id, do: unquote(id)
-        def handles?(model), do: unquote(prefix) == "" or String.starts_with?(model, unquote(prefix))
-        def configured?, do: Application.get_env(:super_pi, :"fake_configured_#{unquote(id)}", true)
+
+        def handles?(model),
+          do: unquote(prefix) == "" or String.starts_with?(model, unquote(prefix))
+
+        def configured?,
+          do: Application.get_env(:super_pi, :"fake_configured_#{unquote(id)}", true)
+
         def models, do: [%{"id" => unquote(id) <> "-model", "label" => unquote(id)}]
         def generate(_payload, _opts), do: {:ok, %{"role" => "assistant", "content" => []}}
       end
@@ -44,7 +49,9 @@ defmodule SuperPi.Properties.ProvidersTest do
   @fakes [A, B, AB, Any]
 
   setup do
-    keys = [:mock_llm, :providers, :gemini_api_key] ++ Enum.map(@fakes, &:"fake_configured_#{&1.id()}")
+    keys =
+      [:mock_llm, :providers, :gemini_api_key] ++ Enum.map(@fakes, &:"fake_configured_#{&1.id()}")
+
     saved = Enum.map(keys, &{&1, Application.fetch_env(:super_pi, &1)})
     System.delete_env("GEMINI_API_KEY")
 
@@ -65,7 +72,11 @@ defmodule SuperPi.Properties.ProvidersTest do
 
   defp models do
     one_of([
-      map({member_of(["a-", "b-", "a", "gemini-", "google/", "super-pi-", "claude-", "gpt-", ""]), string(:printable, max_length: 12)}, fn {p, r} -> p <> r end),
+      map(
+        {member_of(["a-", "b-", "a", "gemini-", "google/", "super-pi-", "claude-", "gpt-", ""]),
+         string(:printable, max_length: 12)},
+        fn {p, r} -> p <> r end
+      ),
       string(:printable, max_length: 20),
       binary(max_length: 20)
     ])
@@ -114,7 +125,9 @@ defmodule SuperPi.Properties.ProvidersTest do
   property "resolve never raises, for any binary" do
     check all(model <- one_of([binary(), string(:printable), string(:utf8)]), max_runs: 300) do
       Application.put_env(:super_pi, :providers, [SuperPi.AI.Providers.Gemini])
-      assert match?({:ok, _, _}, Providers.resolve(model)) or match?({:error, _}, Providers.resolve(model))
+
+      assert match?({:ok, _, _}, Providers.resolve(model)) or
+               match?({:error, _}, Providers.resolve(model))
     end
   end
 

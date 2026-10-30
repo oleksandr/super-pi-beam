@@ -25,7 +25,13 @@ defmodule SuperPi.ClusterTest do
     Support.become_controller()
     peers = Support.start_peers(3, mock_llm: true)
     on_exit(fn -> Support.stop_peers(peers) end)
-    wait_until(fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 3)) end, 30_000, "Horde members to join")
+
+    wait_until(
+      fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 3)) end,
+      30_000,
+      "Horde members to join"
+    )
+
     # Owned by the setup_all process, which lives for the whole module, so on_exit can read it.
     created = :ets.new(:cluster_created, [:public, :bag])
     %{peers: peers, created: created}
@@ -42,7 +48,9 @@ defmodule SuperPi.ClusterTest do
   end
 
   defp call(%{node: node}, mod, fun, args), do: :erpc.call(node, mod, fun, args, 60_000)
-  defp registry_members(node), do: :erpc.call(node, SuperPi.Cluster, :status, [])[:registry_members] || []
+
+  defp registry_members(node),
+    do: :erpc.call(node, SuperPi.Cluster, :status, [])[:registry_members] || []
 
   defp conversation(peer, created, agent \\ %{"model" => "m"}) do
     id = call(peer, Support, :create_conversation, [agent])
@@ -52,7 +60,8 @@ defmodule SuperPi.ClusterTest do
 
   defp owner_of(peer, id), do: call(peer, SuperPi.Conversation.Locator, :whereis, [id])
 
-  defp ensure(peer, id), do: call(peer, SuperPi.Conversation.Locator, :ensure_started, [id, [extensions: []]])
+  defp ensure(peer, id),
+    do: call(peer, SuperPi.Conversation.Locator, :ensure_started, [id, [extensions: []]])
 
   # Stops a machine through the supervisor on its own node, by pid. (Looking it up by conversation
   # right after it started can miss: the registry replica on another node is not up to date yet.)
@@ -64,8 +73,12 @@ defmodule SuperPi.ClusterTest do
     {:ok, pid} = ensure(peer, id)
 
     cond do
-      node(pid) == host_node -> pid
-      tries == 0 -> flunk("the machine did not start on #{host_node}; it is on #{node(pid)}")
+      node(pid) == host_node ->
+        pid
+
+      tries == 0 ->
+        flunk("the machine did not start on #{host_node}; it is on #{node(pid)}")
+
       true ->
         stop_machine(pid)
         wait_until(fn -> owner_of(peer, id) == nil end, 10_000, "the machine to stop")
@@ -95,7 +108,10 @@ defmodule SuperPi.ClusterTest do
     end
   end
 
-  test "a conversation has one machine in the cluster, whichever node asks", %{peers: [a, b, c], created: created} do
+  test "a conversation has one machine in the cluster, whichever node asks", %{
+    peers: [a, b, c],
+    created: created
+  } do
     id = conversation(a, created)
 
     {:ok, pid_a} = ensure(a, id)
@@ -118,28 +134,48 @@ defmodule SuperPi.ClusterTest do
     assert length(pids) == 1
   end
 
-  test "a turn submitted from another node runs on the owner and is stored", %{peers: [a, b | _], created: created} do
+  test "a turn submitted from another node runs on the owner and is stored", %{
+    peers: [a, b | _],
+    created: created
+  } do
     id = conversation(a, created)
     {:ok, pid} = ensure(a, id)
     other = Enum.find([a, b], &(&1.node != node(pid)))
 
     # `other` calls the machine through its pid, across nodes.
-    assert {:ok, msg} = call(other, SuperPi.Conversation.Machine, :submit, [pid, "hello cluster", [timeout: 30_000]])
+    assert {:ok, msg} =
+             call(other, SuperPi.Conversation.Machine, :submit, [
+               pid,
+               "hello cluster",
+               [timeout: 30_000]
+             ])
+
     assert inspect(msg) =~ "Echo: hello cluster"
 
     assert Enum.any?(call(a, Support, :messages, [id]), &(inspect(&1) =~ "Echo: hello cluster"))
   end
 
-  test "a document written on one node is seen on another within a second", %{peers: [a, b | _], created: created} do
+  test "a document written on one node is seen on another within a second", %{
+    peers: [a, b | _],
+    created: created
+  } do
     id = conversation(a, created, %{"model" => "before"})
 
     # Warm b's cache.
-    assert call(b, SuperPi.Durable.Doc, :snapshot, ["conversation", id, "pi.agent"])["model"] == "before"
+    assert call(b, SuperPi.Durable.Doc, :snapshot, ["conversation", id, "pi.agent"])["model"] ==
+             "before"
 
     call(a, SuperPi.Durable.Storage, :configure_agent!, [id, %{model: "after"}])
 
     # The TTL is 5 s on a cluster, so only the invalidation message can make this fast.
-    wait_until(fn -> call(b, SuperPi.Durable.Doc, :snapshot, ["conversation", id, "pi.agent"])["model"] == "after" end, 1_000, "b to see the new value")
+    wait_until(
+      fn ->
+        call(b, SuperPi.Durable.Doc, :snapshot, ["conversation", id, "pi.agent"])["model"] ==
+          "after"
+      end,
+      1_000,
+      "b to see the new value"
+    )
   end
 
   test "concurrent usage updates from two nodes add up", %{peers: [a, b | _], created: created} do
@@ -153,12 +189,20 @@ defmodule SuperPi.ClusterTest do
     assert call(a, Support, :doc, [id, "pi.usage"])["inputTokens"] == 20
   end
 
-  test "a question asked on one node is answered from another", %{peers: [a, b, c], created: created} do
+  test "a question asked on one node is answered from another", %{
+    peers: [a, b, c],
+    created: created
+  } do
     id = conversation(a, created)
 
     call(b, Support, :start_responder, [id, self()])
     assert_receive {:responder_ready, _}, 10_000
-    wait_until(fn -> call(a, SuperPi.UI.Broker, :responder?, [id]) end, 10_000, "the responder group to replicate")
+
+    wait_until(
+      fn -> call(a, SuperPi.UI.Broker, :responder?, [id]) end,
+      10_000,
+      "the responder group to replicate"
+    )
 
     call(a, Support, :start_asker, [id, self()])
     assert_receive {:ui_request, responder_node, %{"request_id" => request_id}}, 10_000
@@ -196,7 +240,10 @@ defmodule SuperPi.ClusterTest do
     assert after_start.attempt == 0
   end
 
-  test "recovery resets and resumes a task that this node ran before", %{peers: [a, b, c], created: created} do
+  test "recovery resets and resumes a task that this node ran before", %{
+    peers: [a, b, c],
+    created: created
+  } do
     id = conversation(a, created)
     {:ok, probe} = ensure(a, id)
     host = Enum.find([a, b, c], &(&1.node == node(probe)))
@@ -204,20 +251,38 @@ defmodule SuperPi.ClusterTest do
     wait_until(fn -> owner_of(a, id) == nil end, 10_000, "the probe machine to stop")
 
     # A turn that this node had started: user message stored, task running, no machine (it crashed).
-    call(host, SuperPi.Durable.Storage, :append_entry!, [id, "pi.message", %{"role" => "user", "content" => [%{"type" => "text", "text" => "pick this up"}]}])
+    call(host, SuperPi.Durable.Storage, :append_entry!, [
+      id,
+      "pi.message",
+      %{"role" => "user", "content" => [%{"type" => "text", "text" => "pick this up"}]}
+    ])
+
     task = call(a, Support, :create_running_task, [id, host.node])
 
     ensure_on(a, id, host.node)
-    wait_until(fn -> call(a, Support, :get_task, [task.id]).status == "completed" end, 20_000, "the resumed turn to complete")
+
+    wait_until(
+      fn -> call(a, Support, :get_task, [task.id]).status == "completed" end,
+      20_000,
+      "the resumed turn to complete"
+    )
+
     assert call(a, Support, :get_task, [task.id]).attempt == 1
   end
 
   describe "node failure" do
-    test "the conversation resumes on a surviving node and the turn completes", %{created: created} do
+    test "the conversation resumes on a surviving node and the turn completes", %{
+      created: created
+    } do
       # This test kills a node, so it uses its own peers (slow replies make the turn interruptible).
       peers = Support.start_peers(3, mock_llm: true, mock_llm_delay_ms: 4_000)
       on_exit(fn -> Support.stop_peers(peers) end)
-      wait_until(fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 3)) end, 30_000, "Horde members to join")
+
+      wait_until(
+        fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 3)) end,
+        30_000,
+        "Horde members to join"
+      )
 
       [a | _] = peers
       id = conversation(a, created)
@@ -231,7 +296,13 @@ defmodule SuperPi.ClusterTest do
       # list on an interval. A node that dies inside that interval takes the unreplicated child
       # with it, and nothing restarts it until the next request calls `ensure_started`.
       wait_until(fn -> running_task?(hd(survivors), id) end, 20_000, "the turn to start")
-      wait_until(fn -> supervised_on?(hd(survivors), pid) end, 20_000, "a survivor to learn the machine")
+
+      wait_until(
+        fn -> supervised_on?(hd(survivors), pid) end,
+        20_000,
+        "a survivor to learn the machine"
+      )
+
       :erpc.cast(victim.node, :erlang, :halt, [1])
 
       # Horde usually restarts the machine on a survivor within seconds. In some runs it does not
@@ -258,15 +329,29 @@ defmodule SuperPi.ClusterTest do
 
       unless restarted?, do: {:ok, _} = ensure(hd(survivors), id)
 
-      wait_until(fn -> task_status(hd(survivors), id) == "completed" end, 60_000, "the resumed turn to complete")
+      wait_until(
+        fn -> task_status(hd(survivors), id) == "completed" end,
+        60_000,
+        "the resumed turn to complete"
+      )
 
-      assert Enum.any?(call(hd(survivors), Support, :messages, [id]), &(inspect(&1) =~ "Echo: survive this"))
+      assert Enum.any?(
+               call(hd(survivors), Support, :messages, [id]),
+               &(inspect(&1) =~ "Echo: survive this")
+             )
     end
 
-    test "a draining node refuses new turns, finishes the running one, and hands over", %{created: created} do
+    test "a draining node refuses new turns, finishes the running one, and hands over", %{
+      created: created
+    } do
       peers = Support.start_peers(2, mock_llm: true, mock_llm_delay_ms: 1_500)
       on_exit(fn -> Support.stop_peers(peers) end)
-      wait_until(fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 2)) end, 30_000, "Horde members to join")
+
+      wait_until(
+        fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 2)) end,
+        30_000,
+        "Horde members to join"
+      )
 
       [a | _] = peers
       id = conversation(a, created)
@@ -277,7 +362,9 @@ defmodule SuperPi.ClusterTest do
 
       started = System.monotonic_time(:millisecond)
       assert :drained = call(owner, SuperPi.Drain, :drain, [20_000])
-      assert System.monotonic_time(:millisecond) - started >= 500, "drain returned before the turn finished"
+
+      assert System.monotonic_time(:millisecond) - started >= 500,
+             "drain returned before the turn finished"
 
       assert_receive {:turn, {:ok, _}}, 5_000
       refute call(owner, SuperPi.Drain, :accepting?, [])
@@ -286,23 +373,39 @@ defmodule SuperPi.ClusterTest do
   end
 
   describe "scheduler" do
-    test "a fire runs once with several peers up, and the run survives its node dying", %{created: created} do
+    test "a fire runs once with several peers up, and the run survives its node dying", %{
+      created: created
+    } do
       # The run is a turn that takes a few seconds, so a node can be killed in the middle of it.
       peers = Support.start_peers(3, mock_llm: true, mock_llm_delay_ms: 4_000)
       on_exit(fn -> Support.stop_peers(peers) end)
-      wait_until(fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 3)) end, 30_000, "Horde members to join")
+
+      wait_until(
+        fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 3)) end,
+        30_000,
+        "Horde members to join"
+      )
 
       [a, b | _] = peers
       id = conversation(a, created)
 
-      attrs = %{conversation_id: id, prompt: "morning briefing", cron: "0 7 * * *", mode: "append", catch_up: true}
+      attrs = %{
+        conversation_id: id,
+        prompt: "morning briefing",
+        cron: "0 7 * * *",
+        mode: "append",
+        catch_up: true
+      }
+
       {:ok, schedule, nil} = call(a, SuperPi.Schedule, :create, [attrs])
       fire = %{"schedule_id" => schedule.id, "fire_at" => "2026-10-30T07:00:00Z"}
 
       # A duplicated job: two peers run the same fire at once. The conditional claim lets one through.
       results =
         [a, b]
-        |> Task.async_stream(fn peer -> call(peer, SuperPi.Schedule, :run, [fire]) end, timeout: 60_000)
+        |> Task.async_stream(fn peer -> call(peer, SuperPi.Schedule, :run, [fire]) end,
+          timeout: 60_000
+        )
         |> Enum.map(fn {:ok, result} -> result end)
 
       assert Enum.count(results, &match?({:ok, task_id} when is_integer(task_id), &1)) == 1
@@ -313,7 +416,13 @@ defmodule SuperPi.ClusterTest do
       victim = Enum.find(peers, &(&1.node == node(pid)))
       survivors = peers -- [victim]
       wait_until(fn -> running_task?(hd(survivors), id) end, 20_000, "the run to start")
-      wait_until(fn -> supervised_on?(hd(survivors), pid) end, 20_000, "a survivor to learn the machine")
+
+      wait_until(
+        fn -> supervised_on?(hd(survivors), pid) end,
+        20_000,
+        "a survivor to learn the machine"
+      )
+
       :erpc.cast(victim.node, :erlang, :halt, [1])
 
       # As in the node failure test: Horde restarts the machine, or the next request does.
@@ -337,15 +446,22 @@ defmodule SuperPi.ClusterTest do
 
       unless restarted?, do: {:ok, _} = ensure(hd(survivors), id)
 
-      wait_until(fn -> task_status(hd(survivors), id) == "completed" end, 60_000, "the resumed run to complete")
-      assert Enum.any?(call(hd(survivors), Support, :messages, [id]), &(inspect(&1) =~ "Echo: morning briefing"))
+      wait_until(
+        fn -> task_status(hd(survivors), id) == "completed" end,
+        60_000,
+        "the resumed run to complete"
+      )
+
+      assert Enum.any?(
+               call(hd(survivors), Support, :messages, [id]),
+               &(inspect(&1) =~ "Echo: morning briefing")
+             )
 
       # The same fire again, from a survivor, still makes no second run.
       assert {:ok, :skipped} = call(hd(survivors), SuperPi.Schedule, :run, [fire])
       assert call(hd(survivors), Support, :generation_count, [id]) == 1
     end
   end
-
 
   describe "subagents" do
     # A child turn that outlives a node. `kill: :machine` kills the node that hosts the child's
@@ -357,14 +473,27 @@ defmodule SuperPi.ClusterTest do
       test "a child survives its node being killed (#{kill})", %{created: created} do
         peers = Support.start_peers(3, mock_llm: true, mock_llm_delay_ms: 4_000)
         on_exit(fn -> Support.stop_peers(peers) end)
-        wait_until(fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 3)) end, 30_000, "Horde members to join")
+
+        wait_until(
+          fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 3)) end,
+          30_000,
+          "Horde members to join"
+        )
 
         [a | _] = peers
         {parent_id, parent_task_id} = call(a, Support, :create_parent_turn, [])
         :ets.insert(created, {:conv, parent_id})
 
-        res = call(a, Support, :delegate, [parent_id, parent_task_id, %{"role" => "scout", "prompt" => "survive this", "timeout_ms" => 100_000}])
-        assert [%{"task_id" => sub_task_id, "child_conversation_id" => child_id}] = res["structured_output"]["subagents"]
+        res =
+          call(a, Support, :delegate, [
+            parent_id,
+            parent_task_id,
+            %{"role" => "scout", "prompt" => "survive this", "timeout_ms" => 100_000}
+          ])
+
+        assert [%{"task_id" => sub_task_id, "child_conversation_id" => child_id}] =
+                 res["structured_output"]["subagents"]
+
         :ets.insert(created, {:conv, child_id})
         assert call(a, Support, :get_task, [parent_task_id]).status == "waiting"
 
@@ -374,16 +503,37 @@ defmodule SuperPi.ClusterTest do
         runner = if @kill == :job, do: host, else: Enum.find(peers, &(&1.node != host.node))
         :erpc.cast(runner.node, Support, :run_subagent_jobs, [])
 
-        wait_until(fn -> call(a, Support, :generation_status, [child_id]) == "running" end, 20_000, "the child's turn to start")
+        wait_until(
+          fn -> call(a, Support, :generation_status, [child_id]) == "running" end,
+          20_000,
+          "the child's turn to start"
+        )
+
         pid = owner_of(a, child_id)
         survivors = peers -- [host]
-        wait_until(fn -> supervised_on?(hd(survivors), pid) end, 20_000, "a survivor to learn the machine")
+
+        wait_until(
+          fn -> supervised_on?(hd(survivors), pid) end,
+          20_000,
+          "a survivor to learn the machine"
+        )
+
         :erpc.cast(host.node, :erlang, :halt, [1])
 
         # Horde may not restart the machine (see the node failure test). The next request does.
         restarted? =
           try do
-            wait_until(fn -> match?(new when is_pid(new) and node(new) != host.node, owner_of(hd(survivors), child_id)) end, 20_000, "the machine to restart")
+            wait_until(
+              fn ->
+                match?(
+                  new when is_pid(new) and node(new) != host.node,
+                  owner_of(hd(survivors), child_id)
+                )
+              end,
+              20_000,
+              "the machine to restart"
+            )
+
             true
           rescue
             ExUnit.AssertionError -> false
@@ -391,11 +541,21 @@ defmodule SuperPi.ClusterTest do
 
         # In the `:machine` case the job's node is alive and starts the machine itself.
         unless restarted? or @kill == :machine do
-          {:ok, _} = call(hd(survivors), SuperPi.Conversation.Locator, :ensure_started, [child_id, SuperPi.Workers.SubagentWorker.machine_opts("scout")])
+          {:ok, _} =
+            call(hd(survivors), SuperPi.Conversation.Locator, :ensure_started, [
+              child_id,
+              SuperPi.Workers.SubagentWorker.machine_opts("scout")
+            ])
         end
 
-        wait_until(fn -> call(hd(survivors), Support, :get_task, [sub_task_id]).status == "completed" end, 60_000, "the child to complete")
-        assert call(hd(survivors), Support, :get_task, [sub_task_id]).result["summary"] =~ "survive this"
+        wait_until(
+          fn -> call(hd(survivors), Support, :get_task, [sub_task_id]).status == "completed" end,
+          60_000,
+          "the child to complete"
+        )
+
+        assert call(hd(survivors), Support, :get_task, [sub_task_id]).result["summary"] =~
+                 "survive this"
 
         # The child's end woke the parent.
         assert call(hd(survivors), Support, :get_task, [parent_task_id]).status == "pending"
@@ -409,7 +569,9 @@ defmodule SuperPi.ClusterTest do
   end
 
   defp supervised_on?(peer, pid) do
-    children = :erpc.call(peer.node, Horde.DynamicSupervisor, :which_children, [SuperPi.MachineSupervisor])
+    children =
+      :erpc.call(peer.node, Horde.DynamicSupervisor, :which_children, [SuperPi.MachineSupervisor])
+
     Enum.any?(children, fn {_id, child, _type, _modules} -> child == pid end)
   end
 

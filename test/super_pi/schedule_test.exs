@@ -23,16 +23,26 @@ defmodule SuperPi.ScheduleTest do
 
   defp conversation!(agent \\ %{}) do
     conv = Storage.create_conversation!(agent: Map.merge(%{"model" => "m"}, agent))
-    Storage.append_entry!(conv.id, "pi.message", %{"role" => "user", "content" => [%{"type" => "text", "text" => "hello"}]})
+
+    Storage.append_entry!(conv.id, "pi.message", %{
+      "role" => "user",
+      "content" => [%{"type" => "text", "text" => "hello"}]
+    })
+
     conv
   end
 
   defp ctx(conv, extra \\ %{}), do: Map.merge(%{conversation_id: conv.id, config: []}, extra)
 
-  defp tool(name, args, conv, extra \\ %{}), do: Scheduler.wrap_tool(name, args, fn _ -> flunk("fell through") end, ctx(conv, extra))
+  defp tool(name, args, conv, extra \\ %{}),
+    do: Scheduler.wrap_tool(name, args, fn _ -> flunk("fell through") end, ctx(conv, extra))
 
   defp create!(conv, attrs \\ %{}) do
-    {:ok, schedule, _token} = Sched.create(Map.merge(%{conversation_id: conv.id, prompt: "do it", cron: "0 7 * * *"}, attrs))
+    {:ok, schedule, _token} =
+      Sched.create(
+        Map.merge(%{conversation_id: conv.id, prompt: "do it", cron: "0 7 * * *"}, attrs)
+      )
+
     schedule
   end
 
@@ -40,17 +50,40 @@ defmodule SuperPi.ScheduleTest do
   @now ~U[2026-10-30 12:03:00Z]
   defp minute(offset_min \\ 0), do: DateTime.add(@now, offset_min * 60, :second)
 
-  defp set!(schedule, fields), do: Repo.update_all(from(s in Schedule, where: s.id == ^schedule.id), set: fields)
-  defp reload(schedule), do: Repo.get!(Schedule, schedule.id)
-  defp run_jobs, do: Repo.all(from j in Oban.Job, where: j.worker == "SuperPi.Workers.ScheduleRunWorker", order_by: j.id)
+  defp set!(schedule, fields),
+    do: Repo.update_all(from(s in Schedule, where: s.id == ^schedule.id), set: fields)
 
-  defp tasks(conv_id), do: Repo.all(from t in TaskSchema, where: t.conversation_id == ^conv_id and t.kind == "pi.generation", order_by: t.id)
-  defp all_run_tasks, do: Repo.all(from t in TaskSchema, where: t.kind == "pi.generation", order_by: t.id)
+  defp reload(schedule), do: Repo.get!(Schedule, schedule.id)
+
+  defp run_jobs,
+    do:
+      Repo.all(
+        from(j in Oban.Job,
+          where: j.worker == "SuperPi.Workers.ScheduleRunWorker",
+          order_by: j.id
+        )
+      )
+
+  defp tasks(conv_id),
+    do:
+      Repo.all(
+        from(t in TaskSchema,
+          where: t.conversation_id == ^conv_id and t.kind == "pi.generation",
+          order_by: t.id
+        )
+      )
+
+  defp all_run_tasks,
+    do: Repo.all(from(t in TaskSchema, where: t.kind == "pi.generation", order_by: t.id))
 
   defp eventually(fun, tries \\ 400) do
     cond do
-      fun.() -> :ok
-      tries == 0 -> flunk("condition never held")
+      fun.() ->
+        :ok
+
+      tries == 0 ->
+        flunk("condition never held")
+
       true ->
         Process.sleep(10)
         eventually(fun, tries - 1)
@@ -58,7 +91,9 @@ defmodule SuperPi.ScheduleTest do
   end
 
   defp fail_task!(conv_id, schedule, error \\ "boom") do
-    {:ok, task} = TaskEngine.create_task(conv_id, "pi.generation", %{"schedule_id" => schedule.id})
+    {:ok, task} =
+      TaskEngine.create_task(conv_id, "pi.generation", %{"schedule_id" => schedule.id})
+
     {:ok, running} = TaskEngine.start_task(task.id)
     TaskEngine.fail_task(running.id, error)
     set!(schedule, last_task_id: task.id)
@@ -70,7 +105,13 @@ defmodule SuperPi.ScheduleTest do
       {:ok, cfg} = Scheduler.before_agent_start(%{"tools" => [%{"name" => "x"}]}, ctx(%{id: 1}))
       {:ok, again} = Scheduler.before_agent_start(cfg, ctx(%{id: 1}))
 
-      assert Enum.map(cfg["tools"], & &1["name"]) == ["x", "schedule_create", "schedule_list", "schedule_cancel"]
+      assert Enum.map(cfg["tools"], & &1["name"]) == [
+               "x",
+               "schedule_create",
+               "schedule_list",
+               "schedule_cancel"
+             ]
+
       assert again == cfg
 
       effects = Map.new(cfg["tools"], &{&1["name"], &1["effects"]})
@@ -83,7 +124,10 @@ defmodule SuperPi.ScheduleTest do
     end
 
     test "the trigger argument is offered only when webhooks are allowed" do
-      props = fn opts -> opts |> Scheduler.tool_specs() |> hd() |> get_in(["parameters", "properties"]) end
+      props = fn opts ->
+        opts |> Scheduler.tool_specs() |> hd() |> get_in(["parameters", "properties"])
+      end
+
       refute Map.has_key?(props.([]), "trigger")
       assert Map.has_key?(props.(allow_webhooks: true), "trigger")
     end
@@ -91,7 +135,18 @@ defmodule SuperPi.ScheduleTest do
     test "schedule_create, schedule_list and schedule_cancel" do
       conv = conversation!(%{"executionMode" => "accept-edits"})
 
-      created = tool("schedule_create", %{"prompt" => "Summarize my inbox", "cron" => "0 7 * * 1-5", "timezone" => "Europe/London", "name" => "briefing"}, conv)
+      created =
+        tool(
+          "schedule_create",
+          %{
+            "prompt" => "Summarize my inbox",
+            "cron" => "0 7 * * 1-5",
+            "timezone" => "Europe/London",
+            "name" => "briefing"
+          },
+          conv
+        )
+
       refute created["is_error"]
       assert created["output"] =~ "Created schedule #"
 
@@ -128,12 +183,32 @@ defmodule SuperPi.ScheduleTest do
 
     test "invalid input is reported, not raised" do
       conv = conversation!()
-      assert %{"is_error" => true, "output" => out} = tool("schedule_create", %{"prompt" => "x", "cron" => "nonsense"}, conv)
+
+      assert %{"is_error" => true, "output" => out} =
+               tool("schedule_create", %{"prompt" => "x", "cron" => "nonsense"}, conv)
+
       assert out =~ "expression"
-      assert %{"is_error" => true} = tool("schedule_create", %{"prompt" => "x", "cron" => "0 7 * * *", "timezone" => "Mars/Olympus"}, conv)
-      assert %{"is_error" => true} = tool("schedule_create", %{"prompt" => "", "cron" => "0 7 * * *"}, conv)
-      assert %{"is_error" => true} = tool("schedule_create", %{"prompt" => "x", "cron" => "0 7 * * *", "mode" => "teleport"}, conv)
-      assert %{"is_error" => true, "output" => interval} = tool("schedule_create", %{"prompt" => "x", "cron" => "* * * * *"}, conv)
+
+      assert %{"is_error" => true} =
+               tool(
+                 "schedule_create",
+                 %{"prompt" => "x", "cron" => "0 7 * * *", "timezone" => "Mars/Olympus"},
+                 conv
+               )
+
+      assert %{"is_error" => true} =
+               tool("schedule_create", %{"prompt" => "", "cron" => "0 7 * * *"}, conv)
+
+      assert %{"is_error" => true} =
+               tool(
+                 "schedule_create",
+                 %{"prompt" => "x", "cron" => "0 7 * * *", "mode" => "teleport"},
+                 conv
+               )
+
+      assert %{"is_error" => true, "output" => interval} =
+               tool("schedule_create", %{"prompt" => "x", "cron" => "* * * * *"}, conv)
+
       assert interval =~ "at least 5 minutes"
       assert Sched.list(conv.id) == []
     end
@@ -141,16 +216,34 @@ defmodule SuperPi.ScheduleTest do
     test "a conversation has a limited number of schedules" do
       conv = conversation!()
       config = [max_per_conversation: 2]
-      for _ <- 1..2, do: refute(tool("schedule_create", %{"prompt" => "x", "cron" => "0 7 * * *"}, conv, %{config: config})["is_error"])
-      assert %{"is_error" => true, "output" => out} = tool("schedule_create", %{"prompt" => "x", "cron" => "0 7 * * *"}, conv, %{config: config})
+
+      for _ <- 1..2,
+          do:
+            refute(
+              tool("schedule_create", %{"prompt" => "x", "cron" => "0 7 * * *"}, conv, %{
+                config: config
+              })["is_error"]
+            )
+
+      assert %{"is_error" => true, "output" => out} =
+               tool("schedule_create", %{"prompt" => "x", "cron" => "0 7 * * *"}, conv, %{
+                 config: config
+               })
+
       assert out =~ "limit 2"
     end
 
     test "webhook triggers are off unless the harness opts in" do
       conv = conversation!()
-      assert %{"is_error" => true} = tool("schedule_create", %{"prompt" => "x", "trigger" => "webhook"}, conv)
 
-      result = tool("schedule_create", %{"prompt" => "x", "trigger" => "webhook"}, conv, %{config: [allow_webhooks: true]})
+      assert %{"is_error" => true} =
+               tool("schedule_create", %{"prompt" => "x", "trigger" => "webhook"}, conv)
+
+      result =
+        tool("schedule_create", %{"prompt" => "x", "trigger" => "webhook"}, conv, %{
+          config: [allow_webhooks: true]
+        })
+
       refute result["is_error"]
       assert "/v1/triggers/" <> token = result["structured_output"]["path"]
 
@@ -213,7 +306,11 @@ defmodule SuperPi.ScheduleTest do
       due = minute(-1)
       set!(schedule, next_fire_at: due)
 
-      assert :ok = ScheduleTickWorker.perform(%Oban.Job{scheduled_at: DateTime.add(minute(), 17, :second)})
+      assert :ok =
+               ScheduleTickWorker.perform(%Oban.Job{
+                 scheduled_at: DateTime.add(minute(), 17, :second)
+               })
+
       assert [%{args: %{"fire_at" => fire_at}}] = run_jobs()
       assert fire_at == DateTime.to_iso8601(due)
     end
@@ -244,7 +341,9 @@ defmodule SuperPi.ScheduleTest do
       assert job.args["schedule_id"] == catch_up.id
       # The missed minutes collapse into the one run, and both schedules move on.
       assert job.args["fire_at"] == DateTime.to_iso8601(minute(-30))
-      for s <- [late, catch_up], do: assert(DateTime.compare(reload(s).next_fire_at, minute()) != :lt)
+
+      for s <- [late, catch_up],
+          do: assert(DateTime.compare(reload(s).next_fire_at, minute()) != :lt)
     end
 
     test "a schedule that cannot be computed pauses with a note" do
@@ -255,12 +354,15 @@ defmodule SuperPi.ScheduleTest do
       Sched.tick(minute())
 
       assert reload(schedule).status == "paused"
-      assert [%{"kind" => "schedule_paused"}] = Doc.snapshot("conversation", conv.id, "pi.inbox")["notes"]
+
+      assert [%{"kind" => "schedule_paused"}] =
+               Doc.snapshot("conversation", conv.id, "pi.inbox")["notes"]
     end
   end
 
   describe "run" do
-    defp fire_args(schedule, fire_at), do: %{"schedule_id" => schedule.id, "fire_at" => DateTime.to_iso8601(fire_at)}
+    defp fire_args(schedule, fire_at),
+      do: %{"schedule_id" => schedule.id, "fire_at" => DateTime.to_iso8601(fire_at)}
 
     test "the same fire twice makes one run task" do
       conv = conversation!()
@@ -316,7 +418,12 @@ defmodule SuperPi.ScheduleTest do
       set!(paused, status: "paused")
 
       for s <- [active, cancelled, paused] do
-        assert :ok = ScheduleRunWorker.perform(%Oban.Job{args: fire_args(s, minute(-1)), attempt: 1, max_attempts: 3})
+        assert :ok =
+                 ScheduleRunWorker.perform(%Oban.Job{
+                   args: fire_args(s, minute(-1)),
+                   attempt: 1,
+                   max_attempts: 3
+                 })
       end
 
       assert [task] = tasks(conv.id)
@@ -332,8 +439,18 @@ defmodule SuperPi.ScheduleTest do
       {:ok, b} = Sched.run(fire_args(catching, minute(-1)))
 
       task_a = Repo.get!(TaskSchema, a)
-      assert %{background: true, restart_limit: 2, abandon_on_restart: true, status: "pending", kind: "pi.generation"} = task_a
-      assert %{background: true, restart_limit: 2, abandon_on_restart: false} = Repo.get!(TaskSchema, b)
+
+      assert %{
+               background: true,
+               restart_limit: 2,
+               abandon_on_restart: true,
+               status: "pending",
+               kind: "pi.generation"
+             } = task_a
+
+      assert %{background: true, restart_limit: 2, abandon_on_restart: false} =
+               Repo.get!(TaskSchema, b)
+
       assert task_a.input["prompt"] == "do it"
       assert reload(plain).last_task_id == a
     end
@@ -370,13 +487,18 @@ defmodule SuperPi.ScheduleTest do
 
     test "fresh mode starts a new conversation from the stored agent snapshot" do
       conv = conversation!(%{"executionMode" => "accept-edits", "effort" => "low"})
-      schedule = create!(conv, %{mode: "fresh", agent: %{"model" => "snapshot", "effort" => "high"}})
+
+      schedule =
+        create!(conv, %{mode: "fresh", agent: %{"model" => "snapshot", "effort" => "high"}})
+
       # `create!` passes the snapshot; the tool captures it from `pi.agent`.
       {:ok, task_id} = Sched.run(fire_args(schedule, minute(-1)))
       child = Repo.get!(Conversation, Repo.get!(TaskSchema, task_id).conversation_id)
 
       assert is_nil(child.parent_conversation_id)
-      assert %{"model" => "snapshot", "effort" => "high"} = Doc.snapshot("conversation", child.id, "pi.agent")
+
+      assert %{"model" => "snapshot", "effort" => "high"} =
+               Doc.snapshot("conversation", child.id, "pi.agent")
     end
 
     test "append mode adds the turn to the owning conversation" do
@@ -417,9 +539,14 @@ defmodule SuperPi.ScheduleTest do
       # An unreadable fire time makes the claim raise.
       args = %{"schedule_id" => schedule.id, "fire_at" => "not a time"}
 
-      assert {:error, _} = ScheduleRunWorker.perform(%Oban.Job{args: args, attempt: 1, max_attempts: 3})
+      assert {:error, _} =
+               ScheduleRunWorker.perform(%Oban.Job{args: args, attempt: 1, max_attempts: 3})
+
       assert reload(schedule).consecutive_failures == 0
-      assert {:error, _} = ScheduleRunWorker.perform(%Oban.Job{args: args, attempt: 3, max_attempts: 3})
+
+      assert {:error, _} =
+               ScheduleRunWorker.perform(%Oban.Job{args: args, attempt: 3, max_attempts: 3})
+
       assert reload(schedule).consecutive_failures == 1
     end
   end
@@ -442,7 +569,10 @@ defmodule SuperPi.ScheduleTest do
 
       inbox = Doc.snapshot("conversation", conv.id, "pi.inbox")
       assert inbox["queued"] == []
-      assert [%{"kind" => "schedule_paused", "schedule_id" => id, "text" => text}] = inbox["notes"]
+
+      assert [%{"kind" => "schedule_paused", "schedule_id" => id, "text" => text}] =
+               inbox["notes"]
+
       assert id == schedule.id
       assert text =~ "paused"
 
@@ -459,7 +589,9 @@ defmodule SuperPi.ScheduleTest do
       Sched.settle_runs()
       assert reload(schedule).consecutive_failures == 1
 
-      {:ok, cancelled} = TaskEngine.create_task(conv.id, "pi.generation", %{"schedule_id" => schedule.id})
+      {:ok, cancelled} =
+        TaskEngine.create_task(conv.id, "pi.generation", %{"schedule_id" => schedule.id})
+
       {:ok, _} = TaskEngine.start_task(cancelled.id)
       {:ok, _} = TaskEngine.cancel_task(cancelled.id)
       set!(schedule, last_task_id: cancelled.id)
@@ -467,7 +599,9 @@ defmodule SuperPi.ScheduleTest do
       assert reload(schedule).consecutive_failures == 1
       assert is_nil(reload(schedule).last_task_id)
 
-      {:ok, ok_task} = TaskEngine.create_task(conv.id, "pi.generation", %{"schedule_id" => schedule.id})
+      {:ok, ok_task} =
+        TaskEngine.create_task(conv.id, "pi.generation", %{"schedule_id" => schedule.id})
+
       {:ok, _} = TaskEngine.start_task(ok_task.id)
       {:ok, _} = TaskEngine.complete_task(ok_task.id, %{})
       set!(schedule, last_task_id: ok_task.id)
@@ -518,7 +652,14 @@ defmodule SuperPi.ScheduleTest do
       conv = conversation!()
       run = scheduled_task!(conv)
 
-      result = tool("schedule_create", %{"prompt" => "x", "cron" => "0 7 * * *"}, %{id: run.conversation_id}, %{active_task_id: run.id})
+      result =
+        tool(
+          "schedule_create",
+          %{"prompt" => "x", "cron" => "0 7 * * *"},
+          %{id: run.conversation_id},
+          %{active_task_id: run.id}
+        )
+
       assert %{"is_error" => true, "output" => out} = result
       assert out =~ "scheduled run"
       assert Sched.list(run.conversation_id) == []
@@ -533,23 +674,37 @@ defmodule SuperPi.ScheduleTest do
       refute tool("schedule_create", args, conv, %{active_task_id: plain.id})["is_error"]
 
       child = %{id: run.conversation_id}
-      refute tool("schedule_create", args, child, %{active_task_id: run.id, config: [allow_nested: true]})["is_error"]
+
+      refute tool("schedule_create", args, child, %{
+               active_task_id: run.id,
+               config: [allow_nested: true]
+             })["is_error"]
     end
 
     test "a subagent child of a scheduled run is blocked too" do
       conv = conversation!()
       run = scheduled_task!(conv)
-      {:ok, sub} = TaskEngine.create_task(run.conversation_id, "pi.subagent", %{}, owner_task_id: nil)
+
+      {:ok, sub} =
+        TaskEngine.create_task(run.conversation_id, "pi.subagent", %{}, owner_task_id: nil)
+
       {:ok, _} = TaskEngine.start_task(run.id)
-      child_conv = Storage.create_conversation!(owner_kind: "task", owner_task_id: sub.id, agent: %{})
+
+      child_conv =
+        Storage.create_conversation!(owner_kind: "task", owner_task_id: sub.id, agent: %{})
+
       {:ok, child_task} = TaskEngine.create_task(child_conv.id, "pi.generation")
 
       # child task -> its conversation is owned by `sub` -> `sub` is a plain task of the scheduled run's
       # conversation, so the chain ends there unless `sub` descends from the run.
       refute Sched.scheduled_run?(child_task.id)
 
-      {:ok, sub_of_run} = TaskEngine.create_task(run.conversation_id, "pi.subagent", %{}, owner_task_id: run.id)
-      child_conv2 = Storage.create_conversation!(owner_kind: "task", owner_task_id: sub_of_run.id, agent: %{})
+      {:ok, sub_of_run} =
+        TaskEngine.create_task(run.conversation_id, "pi.subagent", %{}, owner_task_id: run.id)
+
+      child_conv2 =
+        Storage.create_conversation!(owner_kind: "task", owner_task_id: sub_of_run.id, agent: %{})
+
       {:ok, child_task2} = TaskEngine.create_task(child_conv2.id, "pi.generation")
       assert Sched.scheduled_run?(child_task2.id)
     end
@@ -564,7 +719,11 @@ defmodule SuperPi.ScheduleTest do
     test "the plugin resolves by id and is listed" do
       assert SuperPi.Plugins.resolve("scheduler") == Scheduler
       assert Scheduler in SuperPi.Plugins.list()
-      assert Scheduler in Enum.map(SuperPi.Harness.Librarian.extensions(), fn {m, _} -> m; m -> m end)
+
+      assert Scheduler in Enum.map(SuperPi.Harness.Librarian.extensions(), fn
+               {m, _} -> m
+               m -> m
+             end)
     end
   end
 end

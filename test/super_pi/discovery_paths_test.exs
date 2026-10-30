@@ -49,8 +49,17 @@ defmodule SuperPi.DiscoveryPathsTest do
     extra = Path.join(tmp, "extra")
     File.mkdir_p!(Path.join([global, "skills", "a"]))
     File.mkdir_p!(Path.join([extra, "skills", "b"]))
-    File.write!(Path.join([global, "skills", "a", "SKILL.md"]), "---\nname: a\ndescription: from global\n---\nbody")
-    File.write!(Path.join([extra, "skills", "b", "SKILL.md"]), "---\nname: b\ndescription: from extra\n---\nbody")
+
+    File.write!(
+      Path.join([global, "skills", "a", "SKILL.md"]),
+      "---\nname: a\ndescription: from global\n---\nbody"
+    )
+
+    File.write!(
+      Path.join([extra, "skills", "b", "SKILL.md"]),
+      "---\nname: b\ndescription: from extra\n---\nbody"
+    )
+
     on_exit(fn -> File.rm_rf!(tmp) end)
 
     Application.put_env(:super_pi, :global_config_dir, global)
@@ -58,7 +67,9 @@ defmodule SuperPi.DiscoveryPathsTest do
     ws = Path.join(tmp, "ws")
     File.mkdir_p!(ws)
 
-    names = Discovery.discover_skills([ws], app_data_dir: Path.join(tmp, "data")) |> Enum.map(& &1.name)
+    names =
+      Discovery.discover_skills([ws], app_data_dir: Path.join(tmp, "data")) |> Enum.map(& &1.name)
+
     assert "a" in names
     assert "b" in names
   end

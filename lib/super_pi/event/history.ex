@@ -18,9 +18,14 @@ defmodule SuperPi.Event.History do
 
     Enum.flat_map(visible, fn entry ->
       case {entry.kind, entry.data} do
-        {"pi.message", %{"role" => role} = data} -> [message(entry.id, role, data)]
-        {"pi.compaction", %{"summary" => summary}} when is_binary(summary) -> [%{"id" => "entry-#{entry.id}", "role" => "assistant", "text" => summary}]
-        _ -> []
+        {"pi.message", %{"role" => role} = data} ->
+          [message(entry.id, role, data)]
+
+        {"pi.compaction", %{"summary" => summary}} when is_binary(summary) ->
+          [%{"id" => "entry-#{entry.id}", "role" => "assistant", "text" => summary}]
+
+        _ ->
+          []
       end
     end)
   end
@@ -32,14 +37,30 @@ defmodule SuperPi.Event.History do
     |> messages()
     |> Enum.map(fn
       %{"role" => "tool"} = m ->
-        %{"id" => m["id"], "role" => "tool", "content" => m["text"], "toolCallId" => m["tool_call_id"]}
+        %{
+          "id" => m["id"],
+          "role" => "tool",
+          "content" => m["text"],
+          "toolCallId" => m["tool_call_id"]
+        }
 
       %{"role" => "assistant", "tool_calls" => [_ | _] = calls} = m ->
         %{
           "id" => m["id"],
           "role" => "assistant",
           "content" => m["text"],
-          "toolCalls" => Enum.map(calls, &%{"id" => &1["id"], "type" => "function", "function" => %{"name" => &1["name"], "arguments" => Jason.encode!(&1["arguments"] || %{})}})
+          "toolCalls" =>
+            Enum.map(
+              calls,
+              &%{
+                "id" => &1["id"],
+                "type" => "function",
+                "function" => %{
+                  "name" => &1["name"],
+                  "arguments" => Jason.encode!(&1["arguments"] || %{})
+                }
+              }
+            )
         }
 
       m ->

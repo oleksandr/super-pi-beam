@@ -57,7 +57,9 @@ defmodule SuperPi.MCP.Transport.Stdio do
     {:ignore, %{state | buf: buf <> chunk}}
   end
 
-  def handle_info(%{port: port} = state, {port, {:exit_status, code}}), do: {:closed, {:server_exited, code}, state}
+  def handle_info(%{port: port} = state, {port, {:exit_status, code}}),
+    do: {:closed, {:server_exited, code}, state}
+
   def handle_info(state, _other), do: {:ignore, state}
 
   @impl true
@@ -78,7 +80,9 @@ defmodule SuperPi.MCP.Transport.Stdio do
   end
 
   defp env_list(env) when is_map(env) do
-    Enum.map(env, fn {k, v} -> {String.to_charlist(to_string(k)), String.to_charlist(to_string(v))} end)
+    Enum.map(env, fn {k, v} ->
+      {String.to_charlist(to_string(k)), String.to_charlist(to_string(v))}
+    end)
   end
 
   defp env_list(_), do: []

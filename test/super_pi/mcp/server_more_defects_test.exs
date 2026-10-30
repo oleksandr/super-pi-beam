@@ -11,7 +11,6 @@ defmodule SuperPi.MCP.ServerMoreDefectsTest do
 
   alias SuperPi.MCP.Server
 
-
   defp call(method, params) do
     req = %{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params}
     {:reply, reply, _state} = Server.handle_mcp_line(Jason.encode!(req), %{})
@@ -28,7 +27,9 @@ defmodule SuperPi.MCP.ServerMoreDefectsTest do
     test "no conversation machine remains registered after the call returns" do
       before = machine_keys()
 
-      reply = call("tools/call", %{"name" => "harness_task", "arguments" => %{"prompt" => "hello"}})
+      reply =
+        call("tools/call", %{"name" => "harness_task", "arguments" => %{"prompt" => "hello"}})
+
       assert reply["result"]["isError"] == false
 
       leaked = MapSet.difference(machine_keys(), before)

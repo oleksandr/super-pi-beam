@@ -8,7 +8,8 @@ defmodule SuperPi.Web.PolicyTest do
   defp resolver(map), do: fn host -> Map.get(map, host, {:error, :nxdomain}) end
   defp public_resolver, do: fn _ -> {:ok, [@public]} end
 
-  defp check(url, opts \\ []), do: Policy.check_url(url, Keyword.put_new(opts, :resolver, public_resolver()))
+  defp check(url, opts \\ []),
+    do: Policy.check_url(url, Keyword.put_new(opts, :resolver, public_resolver()))
 
   defp refused?(result), do: match?({:error, {:refused, _}}, result)
 
@@ -20,7 +21,14 @@ defmodule SuperPi.Web.PolicyTest do
     end
 
     test "refuses other schemes" do
-      for url <- ["ftp://example.com/", "file:///etc/passwd", "gopher://example.com/", "javascript:alert(1)", "example.com/path", "//example.com/"] do
+      for url <- [
+            "ftp://example.com/",
+            "file:///etc/passwd",
+            "gopher://example.com/",
+            "javascript:alert(1)",
+            "example.com/path",
+            "//example.com/"
+          ] do
         assert refused?(check(url)), url
       end
     end
@@ -33,7 +41,8 @@ defmodule SuperPi.Web.PolicyTest do
     end
 
     test "refuses ports other than 80 and 443" do
-      for port <- [22, 25, 8080, 8443, 6379, 5432, 9200], do: assert(refused?(check("http://example.com:#{port}/")), "port #{port}")
+      for port <- [22, 25, 8080, 8443, 6379, 5432, 9200],
+          do: assert(refused?(check("http://example.com:#{port}/")), "port #{port}")
     end
 
     test "refuses a backslash, whitespace and control characters" do
@@ -56,7 +65,16 @@ defmodule SuperPi.Web.PolicyTest do
 
   describe "host names" do
     test "denies local names whatever they resolve to" do
-      for host <- ["localhost", "LOCALHOST", "localhost.", "foo.localhost", "printer.local", "db.internal", "metadata.google.internal", "a.b.metadata.google.internal"] do
+      for host <- [
+            "localhost",
+            "LOCALHOST",
+            "localhost.",
+            "foo.localhost",
+            "printer.local",
+            "db.internal",
+            "metadata.google.internal",
+            "a.b.metadata.google.internal"
+          ] do
         assert {:error, {:refused, msg}} = check("http://#{host}/"), host
         assert msg =~ "not allowed"
       end
@@ -81,26 +99,49 @@ defmodule SuperPi.Web.PolicyTest do
     end
 
     test "refuses a name that resolves to loopback, link-local metadata and private ranges" do
-      for ip <- [{127, 0, 0, 1}, {169, 254, 169, 254}, {192, 168, 1, 1}, {172, 16, 0, 1}, {100, 64, 0, 1}, {0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 1}] do
-        assert refused?(Policy.check_url("http://sneaky.example/", resolver: fn _ -> {:ok, [ip]} end)), inspect(ip)
+      for ip <- [
+            {127, 0, 0, 1},
+            {169, 254, 169, 254},
+            {192, 168, 1, 1},
+            {172, 16, 0, 1},
+            {100, 64, 0, 1},
+            {0, 0, 0, 0},
+            {0, 0, 0, 0, 0, 0, 0, 1}
+          ] do
+        assert refused?(
+                 Policy.check_url("http://sneaky.example/", resolver: fn _ -> {:ok, [ip]} end)
+               ),
+               inspect(ip)
       end
     end
 
     test "reports a failed or empty lookup as a DNS error" do
-      assert {:error, {:dns, :nxdomain}} = Policy.check_url("http://gone.example/", resolver: resolver(%{}))
-      assert {:error, {:dns, :no_addresses}} = Policy.check_url("http://empty.example/", resolver: fn _ -> {:ok, []} end)
+      assert {:error, {:dns, :nxdomain}} =
+               Policy.check_url("http://gone.example/", resolver: resolver(%{}))
+
+      assert {:error, {:dns, :no_addresses}} =
+               Policy.check_url("http://empty.example/", resolver: fn _ -> {:ok, []} end)
     end
 
     test "survives a resolver that raises, exits or answers garbage" do
-      assert {:error, {:dns, _}} = Policy.check_url("http://x.example/", resolver: fn _ -> raise "boom" end)
-      assert {:error, {:dns, _}} = Policy.check_url("http://x.example/", resolver: fn _ -> exit(:down) end)
-      assert {:error, {:dns, _}} = Policy.check_url("http://x.example/", resolver: fn _ -> :nonsense end)
+      assert {:error, {:dns, _}} =
+               Policy.check_url("http://x.example/", resolver: fn _ -> raise "boom" end)
+
+      assert {:error, {:dns, _}} =
+               Policy.check_url("http://x.example/", resolver: fn _ -> exit(:down) end)
+
+      assert {:error, {:dns, _}} =
+               Policy.check_url("http://x.example/", resolver: fn _ -> :nonsense end)
     end
 
     test "checks an IP literal without calling the resolver" do
       boom = fn _ -> flunk("resolver called for a literal") end
       assert refused?(Policy.check_url("http://127.0.0.1/", resolver: boom))
-      assert refused?(Policy.check_url("http://169.254.169.254/latest/meta-data/", resolver: boom))
+
+      assert refused?(
+               Policy.check_url("http://169.254.169.254/latest/meta-data/", resolver: boom)
+             )
+
       assert refused?(Policy.check_url("http://[::1]/", resolver: boom))
       assert refused?(Policy.check_url("http://[fd00::1]/", resolver: boom))
       assert {:ok, %{ips: [@public]}} = Policy.check_url("http://93.184.216.34/", resolver: boom)
@@ -124,16 +165,65 @@ defmodule SuperPi.Web.PolicyTest do
 
   describe "reserved?/1" do
     test "IPv4 ranges" do
-      reserved = [{0, 1, 2, 3}, {10, 1, 1, 1}, {100, 64, 0, 1}, {100, 127, 255, 255}, {127, 0, 0, 1}, {169, 254, 169, 254}, {172, 16, 0, 1}, {172, 31, 255, 255}, {192, 0, 0, 1}, {192, 0, 2, 1}, {192, 168, 0, 1}, {198, 18, 0, 1}, {198, 19, 255, 255}, {198, 51, 100, 1}, {203, 0, 113, 1}, {224, 0, 0, 1}, {239, 255, 255, 255}, {240, 0, 0, 1}, {255, 255, 255, 255}]
-      allowed = [{1, 1, 1, 1}, {8, 8, 8, 8}, {100, 63, 255, 255}, {100, 128, 0, 0}, {172, 15, 255, 255}, {172, 32, 0, 0}, {169, 253, 0, 1}, {169, 255, 0, 1}, {198, 20, 0, 1}, {93, 184, 216, 34}, {223, 255, 255, 255}]
+      reserved = [
+        {0, 1, 2, 3},
+        {10, 1, 1, 1},
+        {100, 64, 0, 1},
+        {100, 127, 255, 255},
+        {127, 0, 0, 1},
+        {169, 254, 169, 254},
+        {172, 16, 0, 1},
+        {172, 31, 255, 255},
+        {192, 0, 0, 1},
+        {192, 0, 2, 1},
+        {192, 168, 0, 1},
+        {198, 18, 0, 1},
+        {198, 19, 255, 255},
+        {198, 51, 100, 1},
+        {203, 0, 113, 1},
+        {224, 0, 0, 1},
+        {239, 255, 255, 255},
+        {240, 0, 0, 1},
+        {255, 255, 255, 255}
+      ]
+
+      allowed = [
+        {1, 1, 1, 1},
+        {8, 8, 8, 8},
+        {100, 63, 255, 255},
+        {100, 128, 0, 0},
+        {172, 15, 255, 255},
+        {172, 32, 0, 0},
+        {169, 253, 0, 1},
+        {169, 255, 0, 1},
+        {198, 20, 0, 1},
+        {93, 184, 216, 34},
+        {223, 255, 255, 255}
+      ]
 
       for ip <- reserved, do: assert(Policy.reserved?(ip), inspect(ip))
       for ip <- allowed, do: refute(Policy.reserved?(ip), inspect(ip))
     end
 
     test "IPv6 ranges" do
-      reserved = [{0, 0, 0, 0, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0, 0, 1}, {0xFC00, 0, 0, 0, 0, 0, 0, 1}, {0xFD12, 0x3456, 0, 0, 0, 0, 0, 1}, {0xFE80, 0, 0, 0, 0, 0, 0, 1}, {0xFEC0, 0, 0, 0, 0, 0, 0, 1}, {0xFF02, 0, 0, 0, 0, 0, 0, 1}, {0x2001, 0xDB8, 0, 0, 0, 0, 0, 1}, {0x2001, 0, 0, 0, 0, 0, 0, 1}, {0x100, 0, 0, 0, 0, 0, 0, 1}]
-      allowed = [{0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111}, {0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888}, {0x2a00, 0x1450, 0, 0, 0, 0, 0, 0x64}]
+      reserved = [
+        {0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 1},
+        {0xFC00, 0, 0, 0, 0, 0, 0, 1},
+        {0xFD12, 0x3456, 0, 0, 0, 0, 0, 1},
+        {0xFE80, 0, 0, 0, 0, 0, 0, 1},
+        {0xFEC0, 0, 0, 0, 0, 0, 0, 1},
+        {0xFF02, 0, 0, 0, 0, 0, 0, 1},
+        {0x2001, 0xDB8, 0, 0, 0, 0, 0, 1},
+        {0x2001, 0, 0, 0, 0, 0, 0, 1},
+        {0x100, 0, 0, 0, 0, 0, 0, 1}
+      ]
+
+      allowed = [
+        {0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111},
+        {0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888},
+        {0x2A00, 0x1450, 0, 0, 0, 0, 0, 0x64}
+      ]
 
       for ip <- reserved, do: assert(Policy.reserved?(ip), inspect(ip))
       for ip <- allowed, do: refute(Policy.reserved?(ip), inspect(ip))
@@ -185,8 +275,15 @@ defmodule SuperPi.Web.PolicyTest do
 
   describe "unsafe_allow_local (test-only)" do
     test "skips the port, name and address checks, and nothing else" do
-      assert {:ok, %{ips: [{127, 0, 0, 1}]}} = Policy.check_url("http://127.0.0.1:4567/", unsafe_allow_local: true)
-      assert {:ok, _} = Policy.check_url("http://localhost:4567/", unsafe_allow_local: true, resolver: fn _ -> {:ok, [{127, 0, 0, 1}]} end)
+      assert {:ok, %{ips: [{127, 0, 0, 1}]}} =
+               Policy.check_url("http://127.0.0.1:4567/", unsafe_allow_local: true)
+
+      assert {:ok, _} =
+               Policy.check_url("http://localhost:4567/",
+                 unsafe_allow_local: true,
+                 resolver: fn _ -> {:ok, [{127, 0, 0, 1}]} end
+               )
+
       assert refused?(Policy.check_url("ftp://127.0.0.1/", unsafe_allow_local: true))
       assert refused?(Policy.check_url("http://u:p@127.0.0.1/", unsafe_allow_local: true))
     end

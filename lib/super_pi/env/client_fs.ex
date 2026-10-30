@@ -26,7 +26,8 @@ defmodule SuperPi.Env.ClientFS do
   `{:ok, content}` when the client served the read, `:skip` when the caller should read the disk,
   `{:error, reason}` when `:always` is set and the client failed.
   """
-  @spec maybe_read(map(), map(), String.t(), keyword()) :: {:ok, String.t()} | :skip | {:error, term()}
+  @spec maybe_read(map(), map(), String.t(), keyword()) ::
+          {:ok, String.t()} | :skip | {:error, term()}
   def maybe_read(ctx, ws, path, opts) do
     conv_id = Map.get(ctx, :conversation_id)
 
@@ -56,7 +57,10 @@ defmodule SuperPi.Env.ClientFS do
 
   # Only a server on this node: a machine on another node has no editor to ask.
   defp server_for(conv_id) do
-    Enum.find(:pg.get_local_members(Broker.scope(), {:acp_fs, conv_id}), &(node(&1) == node() and Process.alive?(&1)))
+    Enum.find(
+      :pg.get_local_members(Broker.scope(), {:acp_fs, conv_id}),
+      &(node(&1) == node() and Process.alive?(&1))
+    )
   end
 
   defp inside_workspace?(conv_id, path) do

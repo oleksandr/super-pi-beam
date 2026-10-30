@@ -6,7 +6,8 @@ defmodule SuperPi.RPCTransportsTest do
   alias SuperPi.RPC.Server
 
   defp request(id, method, params \\ %{}) do
-    Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}) <> "\n"
+    Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}) <>
+      "\n"
   end
 
   defp tmp_socket do
@@ -23,7 +24,9 @@ defmodule SuperPi.RPCTransportsTest do
 
       assert File.stat!(path).mode |> Bitwise.band(0o777) == 0o600
 
-      {:ok, sock} = :gen_tcp.connect({:local, to_charlist(path)}, 0, [:binary, packet: :line, active: false])
+      {:ok, sock} =
+        :gen_tcp.connect({:local, to_charlist(path)}, 0, [:binary, packet: :line, active: false])
+
       :ok = :gen_tcp.send(sock, request(1, "session.open"))
       {:ok, line} = :gen_tcp.recv(sock, 0, 10_000)
 
@@ -45,7 +48,10 @@ defmodule SuperPi.RPCTransportsTest do
       assert File.exists?(path)
 
       {:ok, server} = Server.start_link(socket_path: path)
-      {:ok, sock} = :gen_tcp.connect({:local, to_charlist(path)}, 0, [:binary, packet: :line, active: false])
+
+      {:ok, sock} =
+        :gen_tcp.connect({:local, to_charlist(path)}, 0, [:binary, packet: :line, active: false])
+
       :gen_tcp.close(sock)
 
       GenServer.stop(server)
@@ -58,7 +64,9 @@ defmodule SuperPi.RPCTransportsTest do
 
       path = tmp_socket()
       {:ok, server} = Server.start_link(socket_path: path)
-      {:ok, sock} = :gen_tcp.connect({:local, to_charlist(path)}, 0, [:binary, packet: :line, active: false])
+
+      {:ok, sock} =
+        :gen_tcp.connect({:local, to_charlist(path)}, 0, [:binary, packet: :line, active: false])
 
       :ok = :gen_tcp.send(sock, request(1, "session.open"))
       {:ok, line} = :gen_tcp.recv(sock, 0, 10_000)
@@ -79,14 +87,24 @@ defmodule SuperPi.RPCTransportsTest do
     test "answers each request line on stdout and returns at end of input" do
       input = request(1, "session.open") <> request(2, "unknown.method")
 
-      output = capture_io([input: input], fn -> Server.run_stdio(read_line: fn -> IO.read(:stdio, :line) end) end)
+      output =
+        capture_io([input: input], fn ->
+          Server.run_stdio(read_line: fn -> IO.read(:stdio, :line) end)
+        end)
+
       lines = output |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!/1)
 
-      assert [%{"id" => 1, "result" => %{"conversation_id" => _}}, %{"id" => 2, "error" => %{"code" => -32601}}] = lines
+      assert [
+               %{"id" => 1, "result" => %{"conversation_id" => _}},
+               %{"id" => 2, "error" => %{"code" => -32601}}
+             ] = lines
     end
 
     test "stdout carries only protocol lines" do
-      output = capture_io([input: request(1, "session.open")], fn -> Server.run_stdio(read_line: fn -> IO.read(:stdio, :line) end) end)
+      output =
+        capture_io([input: request(1, "session.open")], fn ->
+          Server.run_stdio(read_line: fn -> IO.read(:stdio, :line) end)
+        end)
 
       for line <- String.split(output, "\n", trim: true) do
         assert {:ok, %{"jsonrpc" => "2.0"}} = Jason.decode(line)
@@ -94,7 +112,11 @@ defmodule SuperPi.RPCTransportsTest do
     end
 
     test "a malformed line gets a parse error and the session continues" do
-      output = capture_io([input: "not json\n" <> request(5, "session.open")], fn -> Server.run_stdio(read_line: fn -> IO.read(:stdio, :line) end) end)
+      output =
+        capture_io([input: "not json\n" <> request(5, "session.open")], fn ->
+          Server.run_stdio(read_line: fn -> IO.read(:stdio, :line) end)
+        end)
+
       [first, second] = output |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!/1)
 
       assert first["error"]["code"] == -32700
@@ -104,7 +126,14 @@ defmodule SuperPi.RPCTransportsTest do
 
   test "a new conversation gets the harness default model, not nil" do
     {:ok, server} = Server.start_link(socket_path: tmp_socket_path = tmp_socket())
-    {:ok, sock} = :gen_tcp.connect({:local, to_charlist(tmp_socket_path)}, 0, [:binary, packet: :line, active: false])
+
+    {:ok, sock} =
+      :gen_tcp.connect({:local, to_charlist(tmp_socket_path)}, 0, [
+        :binary,
+        packet: :line,
+        active: false
+      ])
+
     :ok = :gen_tcp.send(sock, request(1, "session.open"))
     {:ok, line} = :gen_tcp.recv(sock, 0, 10_000)
     assert %{"result" => %{"agent" => %{"model" => model}}} = Jason.decode!(line)

@@ -13,12 +13,19 @@ defmodule SuperPi.Durable.TaskWakeTest do
 
     children =
       for _ <- 1..count do
-        {:ok, child} = TaskEngine.create_task(conv.id, "pi.subagent", %{}, owner_task_id: parent.id)
+        {:ok, child} =
+          TaskEngine.create_task(conv.id, "pi.subagent", %{}, owner_task_id: parent.id)
+
         {:ok, running} = TaskEngine.start_task(child.id)
         running
       end
 
-    {:ok, waiting} = TaskEngine.wait_for_children(parent.id, Enum.map(children, & &1.id), policy, phase: "awaiting_children", state: %{"children" => [%{"task_id" => 1}]})
+    {:ok, waiting} =
+      TaskEngine.wait_for_children(parent.id, Enum.map(children, & &1.id), policy,
+        phase: "awaiting_children",
+        state: %{"children" => [%{"task_id" => 1}]}
+      )
+
     %{conv: conv, parent: waiting, children: children}
   end
 
@@ -73,7 +80,8 @@ defmodule SuperPi.Durable.TaskWakeTest do
   test "cancelling a waiting parent aborts its children and ends it cancelled" do
     %{parent: parent, children: children} = setup_family()
 
-    assert {:ok, %{status: "cancelled"}} = TaskEngine.cancel_task(parent.id, %{"reason" => "cancelled"})
+    assert {:ok, %{status: "cancelled"}} =
+             TaskEngine.cancel_task(parent.id, %{"reason" => "cancelled"})
 
     assert Enum.map(children, &status(&1.id)) == ["aborted", "aborted"]
     assert Enum.all?(children, &Repo.get!(TaskSchema, &1.id).abort_requested)

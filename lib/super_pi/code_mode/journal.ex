@@ -24,7 +24,8 @@ defmodule SuperPi.CodeMode.Journal do
     and returns `{:executed, fresh_result}`.
   """
   def execute_journaled_tool(task_id, call_index, tool_name, args, executor_fun)
-      when is_integer(task_id) and is_integer(call_index) and is_binary(tool_name) and is_map(args) and
+      when is_integer(task_id) and is_integer(call_index) and is_binary(tool_name) and
+             is_map(args) and
              is_function(executor_fun, 2) do
     journal = Doc.snapshot("task", task_id, @journal_doc_kind) || %{"steps" => %{}}
     steps = Map.get(journal, "steps", %{})

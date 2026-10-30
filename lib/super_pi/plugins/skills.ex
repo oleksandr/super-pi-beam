@@ -13,7 +13,9 @@ defmodule SuperPi.Plugins.Skills do
 
   def id, do: "skills"
   def name, do: "Progressive Disclosure Skills Injector"
-  def description, do: "Discovers workspace and global skills, indexing them via progressive disclosure"
+
+  def description,
+    do: "Discovers workspace and global skills, indexing them via progressive disclosure"
 
   alias SuperPi.Discovery
 
@@ -47,7 +49,9 @@ defmodule SuperPi.Plugins.Skills do
           _ -> [%{"id" => "core", "content" => "You are an intelligent AI assistant."}]
         end
 
-      clean_sections = Enum.reject(existing_sections, &(&1["id"] in ["skills_index", "agy_skills_index"]))
+      clean_sections =
+        Enum.reject(existing_sections, &(&1["id"] in ["skills_index", "agy_skills_index"]))
+
       updated_sections = clean_sections ++ [%{"id" => "skills_index", "content" => content}]
 
       {:ok, Map.put(agent_cfg, "systemSections", updated_sections)}

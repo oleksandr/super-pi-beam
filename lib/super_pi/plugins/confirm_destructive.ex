@@ -31,7 +31,9 @@ defmodule SuperPi.Plugins.ConfirmDestructive do
   """
   def id, do: "confirm_destructive"
   def name, do: "Confirm Destructive Operations"
-  def description, do: "Blocks catastrophic and destructive operations unless explicitly confirmed"
+
+  def description,
+    do: "Blocks catastrophic and destructive operations unless explicitly confirmed"
 
   @default_guarded_tools ["bash", "sh", "terminal", "run_command", "exec"]
 
@@ -44,8 +46,8 @@ defmodule SuperPi.Plugins.ConfirmDestructive do
     if tool_name in guarded_tools do
       cmd =
         Map.get(args, "command") || Map.get(args, :command) ||
-        Map.get(args, "cmd") || Map.get(args, :cmd) ||
-        Map.get(args, "script") || Map.get(args, :script) || ""
+          Map.get(args, "cmd") || Map.get(args, :cmd) ||
+          Map.get(args, "script") || Map.get(args, :script) || ""
 
       check_command(cmd, config)
     else
@@ -57,11 +59,13 @@ defmodule SuperPi.Plugins.ConfirmDestructive do
     patterns = effective_patterns(config)
 
     if Enum.any?(patterns, fn
-      %Regex{} = r -> Regex.match?(r, cmd)
-      pat when is_binary(pat) -> String.contains?(cmd, pat)
-    end) do
+         %Regex{} = r -> Regex.match?(r, cmd)
+         pat when is_binary(pat) -> String.contains?(cmd, pat)
+       end) do
       Logger.warning("[ConfirmDestructive] Blocked destructive bash execution: #{cmd}")
-      {:block, "Destructive operation blocked by SuperPi.Plugins.ConfirmDestructive: '#{cmd}' is not permitted."}
+
+      {:block,
+       "Destructive operation blocked by SuperPi.Plugins.ConfirmDestructive: '#{cmd}' is not permitted."}
     else
       :allow
     end
@@ -87,7 +91,9 @@ defmodule SuperPi.Plugins.ConfirmDestructive do
 
   defp get_config(config, key, default) when is_map(config) do
     case Map.fetch(config, key) do
-      {:ok, val} -> val
+      {:ok, val} ->
+        val
+
       :error ->
         case Map.fetch(config, to_string(key)) do
           {:ok, val} -> val
