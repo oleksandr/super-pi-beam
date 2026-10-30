@@ -1,6 +1,8 @@
 # Super-Pi-BEAM
 
-**Super-Pi-BEAM** is a durable, fault-tolerant general-purpose agent harness (with production coding presets) built on **Erlang/OTP 28** and **Elixir 1.20**. It implements an always-durable, crash-resilient agent architecture natively on the BEAM virtual machine.
+**Super-Pi-BEAM** is a durable, fault-tolerant, general-purpose agent framework built on **Erlang/OTP 28** and **Elixir 1.20**. It implements an always-durable, crash-resilient agent architecture natively on the BEAM virtual machine.
+
+Four built-in harnesses show what the engine does. `super-pi-code` changes a repository and can undo the change. `super-pi-assistant` works with a person, reaches the web and third-party services, and has no filesystem. `super-pi-librarian` runs with no person present and remembers across sessions. `super-pi-planner` cannot write. Three optional capability blocks (web access, scheduling, durable memory) can join any harness. Every interface (OpenAI gateway, JSON-RPC, MCP, ACP, AG-UI, terminal) renders one typed event stream.
 
 ---
 
@@ -15,7 +17,7 @@
 2. **Two-Tier State Machines & Persistent Job Queues**:
    - **Active Turn Coordinator (`SuperPi.Conversation.Machine`)**: Erlang `:gen_statem` (`[:handle_event_function, :state_enter]`) managing `:recovering`, `:idle`, `:preparing_request`, `:streaming_llm`, `:executing_tools`, `:sleeping_backoff`, `:compacting`, and `:settling_run` with native `:postpone` queueing and mid-batch `:steer` preemption.
    - **Persisted Task Lifecycle (`SuperPi.Durable.TaskEngine`)**: `Fsmx` state transitions inside atomic `Ecto.Multi` transactions with `all_settled` and `fail_fast` child wait policies, `restart_limit: 5`, and bottom-up subtree abort.
-   - **Background Queues (`Oban`)**: 4 queues (`:generation_retry`, `:compaction`, `:verification`, `:subagents`).
+   - **Background Queues (`Oban`)**: 6 queues (`:generation_retry`, `:compaction`, `:verification`, `:subagents`, `:schedule_tick`, `:schedule_runs`) and one cron entry that ticks the scheduler every minute.
 
 3. **Normative 10-Rule Context Derivation (`SuperPi.Durable.Context`)**:
    - Walks fork ancestry via `libgraph`, slices history at `head_entry_id` (`pi.compaction`, `pi.reset`), applies non-destructive `ContextEdit` (`omit`, `replace`), and appends positional `pi.system` prompt/tool deltas so LLM provider prompt caches remain warm.
@@ -32,6 +34,12 @@
 6. **Day-1 `Owl` TUI & JSON-RPC 2.0 Server (`SuperPi.TUI.Owl`, `SuperPi.RPC.Server`)**:
    - Interactive ANSI terminal UI built on `Owl`.
    - JSON-RPC 2.0 server with `K = 2` ack-clocked backpressure (`session.watch` / `session.ack`) for external clients.
+
+7. **One Typed Event Stream, Many Interfaces (`SuperPi.Event`)**:
+   - The conversation machine publishes typed events (`turn_started`, `text_delta`, `tool_started`, `permission_request`, `turn_completed`, and more). Each interface renders them through a pure state machine (`SuperPi.Event.Renderer`): OpenAI SSE, JSON-RPC, the chat terminal, **ACP** (editors such as Zed and JetBrains), and **AG-UI** (web front ends). See *Interfaces*.
+
+8. **Human Approval Without Blocking the Machine**:
+   - A blocked tool call can ask a person. The question travels as a `permission_request` event, and the answer decides the call. With no client to ask, the call stays blocked, with the same message as before. See *Permissions and Remote Modes*.
 
 ---
 
@@ -61,6 +69,8 @@ bin/super-pi -p "hello" --model gemini-3-flash-preview
 bin/super-pi -c                    # continue the most recent conversation
 bin/super-pi --conversation 12     # resume conversation 12
 bin/super-pi --harness super-pi-planner -p "plan the refactor"   # an unknown harness is an error
+bin/super-pi --harness assistant -p "summarize https://example.com"   # short ids work too
+bin/super-pi acp                   # an Agent Client Protocol agent over stdio, for Zed, JetBrains and others
 echo '{"prompt":"hi"}' | bin/super-pi --input-format stream-json  # one JSON result line per input line
 bin/super-pi gateway 4000          # the HTTP gateway is a separate command
 ```
@@ -96,20 +106,20 @@ In this mode, OpenCode treats Super-Pi-BEAM as an upstream AI provider. When Ope
            "apiKey": "local-key"
          },
          "models": {
-           "super-pi-agent": {
-             "name": "Super-Pi Autonomous Agent",
+           "super-pi-code": {
+             "name": "Super-Pi Code",
              "limit": { "context": 128000, "output": 8192 }
            },
-           "super-pi-workspace": {
-             "name": "Super-Pi Workspace Development Harness",
+           "super-pi-assistant": {
+             "name": "Super-Pi Assistant",
+             "limit": { "context": 128000, "output": 8192 }
+           },
+           "super-pi-librarian": {
+             "name": "Super-Pi Librarian",
              "limit": { "context": 128000, "output": 8192 }
            },
            "super-pi-planner": {
-             "name": "Super-Pi Architecture Planner",
-             "limit": { "context": 128000, "output": 8192 }
-           },
-           "super-pi-fast": {
-             "name": "Super-Pi Fast Responder",
+             "name": "Super-Pi Planner",
              "limit": { "context": 128000, "output": 8192 }
            }
          }
@@ -122,11 +132,11 @@ In this mode, OpenCode treats Super-Pi-BEAM as an upstream AI provider. When Ope
    # List available models
    opencode models super-pi
 
-   # Run prompt through default Super-Pi agent
-   opencode run "What is 15 plus 27?" --model super-pi/super-pi-agent
+   # Run a prompt through the assistant (no filesystem)
+   opencode run "What is 15 plus 27?" --model super-pi/super-pi-assistant
 
-   # Run prompt through Workspace harness (with skills, rules, hooks, permissions)
-   opencode run "Audit the codebase rules" --model super-pi/super-pi-workspace
+   # Run a prompt through the coding harness (rules, skills, hooks, permissions)
+   opencode run "Audit the codebase rules" --model super-pi/super-pi-code
    ```
 4. **Inspect Durable Sessions**:
    ```bash
@@ -169,17 +179,104 @@ bin/super-pi rpc --stdio         # stdin/stdout, for an IDE that starts it as a 
 
 In `--stdio` and `mcp` modes stdout carries protocol lines only; logs go to stderr (`SUPER_PI_LOG_STDERR=1`, set by the launcher). With tokens configured, a client must call `auth.login` first (see *Authentication and Ownership*).
 
-### MCP Client: Using Other MCP Servers as Tools
+### MCP: Client and Server
 
-Super-Pi also connects to MCP servers as a client. Servers come from `mcp_config.json` in the global config dir, the file that `super-pi mcp add|remove|enable|disable|list` edits:
+Super-Pi-BEAM is an MCP client and an MCP server. Both sides speak the protocol versions `2025-06-18`, `2025-03-26` and `2024-11-05`. The server does not support `2026-07-28`.
 
-```bash
-bin/super-pi mcp add files npx -y @modelcontextprotocol/server-filesystem /tmp
+#### Use MCP servers (client)
+
+`super-pi mcp add|remove|enable|disable|list` edits `<global config dir>/mcp_config.json`. Each entry under `"mcpServers"` has one of two shapes.
+
+A local process over stdio:
+
+```json
+{
+  "mcpServers": {
+    "files": { "command": "npx", "args": ["-y", "some-server"], "env": { "TOKEN": "..." } }
+  }
+}
 ```
 
-When a conversation starts, each enabled `command` server is started once (stdio transport), and its tools join the tool list as `mcp__<server>__<tool>`. HTTP transports (`url` entries) are not supported and are skipped with a warning.
+A hosted server over Streamable HTTP:
 
-MCP tools pass the same permission pipeline as built-in tools. Under the default `accept-edits` mode they are blocked, because they are neither read-only nor file edits. A session must opt in with mode `auto` (or `dangerouslySkipPermissions`) before the model can call them.
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" }
+    }
+  }
+}
+```
+
+| Command | Entry written |
+|---|---|
+| `super-pi mcp add files my-mcp-server` | `command` (and `args` for the words after it) |
+| `super-pi mcp add docs https://mcp.example.com/mcp` | `url` |
+
+Rules for `url` entries:
+
+- `serverUrl` is accepted as an alias of `url`.
+- `headers` is a map. `${ENV_VAR}` in a value is replaced from the environment when the server starts. A variable that is not set fails that server with `{:missing_env, [...]}`, and the other servers still start.
+- OAuth is not supported. Put a bearer token in `Authorization`.
+- An entry with both `command` and `url` runs the command.
+- `"disabled": true` skips an entry.
+
+Transport behavior (`SuperPi.MCP.Transport.StreamableHTTP`):
+
+- The server may answer a `POST` with `202`, with JSON, or with `text/event-stream`. All three work.
+- The client sends `Mcp-Session-Id` and `MCP-Protocol-Version` on every request after `initialize`.
+- When the server answers `404` for a session, the client runs the handshake again once and repeats the request.
+- When the first `POST` gets `405` (or `404`), the client falls back to the deprecated HTTP+SSE transport. It refuses an `endpoint` on another origin.
+- When the client stops, it sends `DELETE` to end the session.
+
+Tools join the catalog as `mcp__<server>__<tool>`. Each tool carries an `effects` list, which the permission policy uses:
+
+| Server annotation | Effects | `plan` | `accept-edits` | `auto` |
+|---|---|---|---|---|
+| `readOnlyHint: true` | `net_read` | allowed | allowed | allowed |
+| anything else | `net_write` | blocked | prompt | allowed |
+
+The `network` setting (`deny`, `allowlist`) applies to every MCP tool, stdio tools included.
+
+#### Use Super-Pi as an MCP server
+
+Over stdio, set the host's command to `super-pi mcp` (with no arguments). Over HTTP, the gateway serves the endpoint `POST /mcp`. Gateway authentication, drain and TLS apply to it.
+
+```json
+{
+  "mcpServers": {
+    "super-pi": {
+      "url": "http://127.0.0.1:4000/mcp?harness=super-pi-code",
+      "headers": { "Authorization": "Bearer ${SUPER_PI_GATEWAY_TOKEN}" }
+    }
+  }
+}
+```
+
+| Request | Answer |
+|---|---|
+| `POST` with a request | `200`, JSON (or one SSE event when the client accepts only `text/event-stream`) |
+| `POST` with notifications only | `202` |
+| `initialize` | also returns `Mcp-Session-Id` |
+| `GET` | `405` (the server pushes no messages) |
+| `DELETE` | `200`, ends the session |
+
+- A request without a session id gets `400`. An unknown or expired session gets `404`, and the client starts a new one.
+- A session belongs to the principal that opened it. Sessions live on one node. Limits: `mcp_session_ttl_ms` (1 hour), `mcp_max_sessions` (1000).
+- With no gateway token configured, a request with a foreign `Origin` header gets `403`. Loopback origins pass. Add others with `config :super_pi, :mcp_allowed_origins, [...]`.
+- `?harness=<id>` on the `initialize` request selects the harness of direct tool calls. Without it, the server uses `config :super_pi, :mcp_harness`, then the default harness.
+
+What the server offers:
+
+- **Tools.** `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` and `harness_task`. Each has the annotations `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`. Results carry `structuredContent` when the tool returns structured data.
+- **Harness selection.** `harness_task` takes `prompt` and an optional `harness` (an id from `prompts/list`). It returns `structuredContent` with `harness` and `conversation_id`.
+- **Prompts.** One prompt per harness, plus the alias `plan_architecture`. Each takes a `goal`.
+- **Resources.** `superpi://workspace/context`, `superpi://workspace/tools`, and the conversations that this connection started.
+- **Resource template.** `superpi://conversation/{id}/transcript` returns the transcript as JSON lines. Another principal does not find the conversation.
+
+The server logs the `protocolVersion` that each host requests at debug level. Set the log level to `debug` and connect a host to see which version the host asks for.
 
 ```elixir
 config :super_pi,
@@ -189,34 +286,102 @@ config :super_pi,
   mcp_call_timeout_ms: 60_000
 ```
 
+A client that starts an ACP session can hand over `mcpServers` (stdio and HTTP). `SuperPi.MCP.Manager.add_servers/1` starts them and adds their tools to the catalog.
+
+### The Event Stream (`SuperPi.Event`)
+
+A conversation publishes typed events on the PubSub topic `conversation:<id>` as `{:conversation_event, id, wire_map}`. One struct, with one builder function per type, defines them. Each event has `type`, `conversation_id`, `turn_id` (the id of the turn task), `timestamp_ms` and `v` (schema version, `1`). The payload keys stay at the top level of the wire map, so a consumer that read the earlier untyped maps keeps working.
+
+| Group | Types |
+|---|---|
+| Turn | `turn_started`, `turn_completed` (with `stop_reason`), `turn_error`, `turn_cancelled` |
+| Streaming | `text_delta`, `thinking_delta`, `toolcall_delta`, `message_completed`, `stream_reset` |
+| Tools | `tool_started`, `tool_blocked`, `tool_completed` |
+| Questions | `permission_request`, `ui_request`, `ui_resolved` |
+| State | `state_changed`, `mode_changed`, `usage_updated`, `plan_updated`, `compaction_completed`, `notice` |
+
+The machine publishes the turn events itself, so every consumer sees them, whoever submitted the turn. A *renderer* turns events into the output of one protocol. A renderer is a pure state machine (`init/1`, `render/2`, `flush/1`), not a process. The transport owns the socket and the renderer owns only its projection state, so a renderer needs no socket in a test.
+
+| Renderer | Output |
+|---|---|
+| `SuperPi.Event.Renderer.OpenAI` | `chat.completion.chunk` maps for the Gateway SSE stream |
+| `SuperPi.Event.Renderer.RPC` | the wire map (identity) |
+| `SuperPi.Event.Renderer.TUI` | tagged terminal items (`{:text, ...}`, `{:permission, ...}`) |
+| `SuperPi.Event.Renderer.ACP` | `session/update` payloads and `session/request_permission` params |
+| `SuperPi.Event.Renderer.AGUI` | AG-UI event maps |
+
+### ACP: Use Super-Pi in Zed, JetBrains and Other Editors
+
+`bin/super-pi acp` runs an [Agent Client Protocol](https://agentclientprotocol.com) agent over stdio. The editor starts it as a subprocess. For Zed (`settings.json`):
+
+```json
+{
+  "agent_servers": {
+    "Super-Pi": { "command": "/path/to/super-pi-beam/bin/super-pi", "args": ["acp"] }
+  }
+}
+```
+
+ACP is bidirectional: the agent also sends requests to the editor and waits. `SuperPi.ACP.Server` keeps a table of outstanding requests for that. It does not reuse the JSON-RPC server, which only answers.
+
+| ACP | Super-Pi |
+|---|---|
+| `initialize` | Agent capabilities, `authMethods` (a token when the gateway needs one), the harness capabilities in `_meta.superPi.harnesses` |
+| `session/new` | A conversation with `workspacePaths: [cwd]`. `_meta.harness` selects the harness (default: `super-pi-code`). The `sessionId` is an opaque string (`acp_...`), stored in the session table, so an editor can resume it after a restart |
+| `session/load` | Resumes the conversation and replays its history as `session/update` notifications |
+| `_superpi/session/fork` | Forks the conversation at its latest entry into a new session |
+| `session/prompt` | Runs in a supervised task, so `session/cancel` can arrive during the prompt. `stopReason`: `end_turn`, `cancelled`, or `refusal` for an error |
+| `session/cancel` | Cancels pending questions first, then the turn |
+| `session/set_mode` | `plan`, `accept-edits` or `auto`, up to the remote ceiling and the harness ceiling |
+| `session/request_permission` | The `permission_request` event, with the four ACP option kinds |
+
+Super-Pi does not delegate `terminal/*` to the editor. `SandboxRunner` gives process-group kill, output spill and the sandbox, and an editor terminal gives none of that and bypasses `permissions.deny`. A running command shows as a tool call of kind `execute`. File reads use the editor only for the unsaved buffer: `config :super_pi, :acp, fs_delegation: :unsaved_only | :never | :always` (default `:unsaved_only`). `SuperPi.Env.ClientFS` asks the editor only when the editor advertised `fs/read_text_file`, the machine runs on the same node, and the path is inside the workspace. Writes stay on the server. A minimal client is in `examples/acp_client.exs`.
+
+### AG-UI: Stream a Run to a Web Front End
+
+The Gateway also serves [AG-UI](https://docs.ag-ui.com) over Server-Sent Events. It uses the same authentication, drain and trace plugs as the OpenAI routes.
+
+| Route | Does |
+|---|---|
+| `POST /agui/v1/run` | Body: a `RunAgentInput` (`threadId`, `runId`, `messages`, optional `forwardedProps` with `harness` and `executionMode`). Streams the run. This is the shape that `@ag-ui/client`'s `HttpAgent` expects. |
+| `GET /agui/v1/sessions/:id/events` | Attaches to a live conversation: `STATE_SNAPSHOT`, `MESSAGES_SNAPSHOT`, then live events. |
+| `POST /agui/v1/sessions/:id/input` | `{"type": "prompt" \| "permission" \| "answer" \| "cancel", ...}`. |
+
+Mapping: `text_delta` becomes `TEXT_MESSAGE_START` and `TEXT_MESSAGE_CONTENT`. `thinking_delta` becomes the `REASONING_*` events. `toolcall_delta` becomes `TOOL_CALL_START` and `TOOL_CALL_ARGS`. `tool_started` becomes `TOOL_CALL_END`, because in AG-UI that event means *arguments complete*. `tool_completed` becomes `TOOL_CALL_RESULT`. The turn events become `RUN_STARTED`, `RUN_FINISHED` and `RUN_ERROR`. `compaction_completed` becomes `MESSAGES_SNAPSHOT`. `permission_request` and `ui_request` become `CUSTOM` events.
+
+State goes out as `STATE_SNAPSHOT` (status, mode, model, usage, plan, pending permission) and then `STATE_DELTA` events, JSON Patch computed in the renderer. The durable document layer does not give a patch stream: only `pi.agent` keeps ops, and `pi.live` and `pi.usage` do not. After a disconnect, `GET .../events` sends a fresh snapshot. The snapshot covers whatever the gap lost. There is no ack window as in the JSON-RPC server: SSE is one-way, and a failed write cancels the turn. Deltas within about 16 ms merge into one content event. A client is in `examples/agui_client.exs`.
+
 ## Pluggable Harness Architecture (`SuperPi.Harness`)
 
-Super-Pi-BEAM features a modular, pluggable harness system. Instead of hardcoding persona behaviors into the core engine or coupling them to specific UI clients, all personas implement the `@behaviour SuperPi.Harness` contract:
+A harness is a named persona. It is a plugin set plus defaults for the conversation's `pi.agent` document (model, effort, mode, workspace, tools, system prompt). The core engine knows nothing about personas. Every persona implements the `SuperPi.Harness` behaviour:
 
 ```elixir
 defmodule SuperPi.Harness do
   @callback id() :: String.t()
   @callback name() :: String.t()
   @callback description() :: String.t()
-  @callback extensions(keyword()) :: list(module())
+  @callback extensions(keyword()) :: list(module() | {module(), term()})
   @callback agent_defaults(keyword()) :: map()
+  @callback capabilities() :: map()            # optional
 end
 ```
 
-### Built-in Harnesses & Declarative Showcase
+`capabilities/0` is a machine-readable summary (id, plugins, tool loadout, workspace kind, modes). `GET /v1/models`, `bin/super-pi harnesses`, RPC `workspace.metadata` and ACP `initialize` use it. A harness without it still works: `SuperPi.Harness.capabilities/1` builds a summary from its metadata.
 
-- **`SuperPi.Harness.Default` (`super-pi-agent`)**:
-  Clean, unopinionated autonomous coding agent with standard workspace tools and normative 10-rule context derivation.
-- **`SuperPi.Harness.Autonomous` (`super-pi-auto`)**:
-  Enterprise autonomous showcase declaratively assembled from safety, rollback, and cost-reduction plugins:
-  `[ProtectedPaths, ConfirmDestructive, GitCheckpoint, AutoCommit, JevRouter, Todo, PromptCustomizer]`.
-- **`SuperPi.Harness.Interactive` (`super-pi-interactive`)**:
-  Human-collaborative interactive showcase declaratively assembled from:
-  `[Questionnaire, InlineBash, StructuredOutput, Handoff, Subagent]`.
-- **`SuperPi.Harness.Workspace` (`super-pi-workspace`)**:
-  Workspace development persona declaratively assembled from plugins (`SlashCommands`, `Rules`, `Skills`, `Hooks`, `Permissions`, `ProtectedPaths`, `ConfirmDestructive`, `TranscriptLogger`). It is the default harness for the Gateway, RPC and MCP entry points.
-- **`SuperPi.Harness.Planner` (`super-pi-planner`)**:
-  Read-only architectural planning specialist with write protection.
+### Built-in Harnesses
+
+| Harness | Id | The line that separates it |
+|---|---|---|
+| `SuperPi.Harness.Code` | `super-pi-code` | **Changes a repository, and can undo the change.** `GitCheckpoint` and `AutoCommit` (off by default), rules, skills, hooks, slash commands, model cascading (`JevRouter`). |
+| `SuperPi.Harness.Assistant` | `super-pi-assistant` | **Works with a person and reaches the web.** `Questionnaire`, `StructuredOutput`, `Handoff`, `Subagent`, `Web`, `CustomCompaction`. Workspace kind `none`: no file tools, no shell. Its tools are MCP connectors (hosted over HTTP) and the web. |
+| `SuperPi.Harness.Librarian` | `super-pi-librarian` | **Runs with no person present, and remembers.** `Memory`, `Scheduler`, `Web`. The tool loadout has no `bash`. Workspace roots come from `config :super_pi, :knowledge_paths`. |
+| `SuperPi.Harness.Planner` | `super-pi-planner` | **Cannot write.** Read-only tools, mode `plan` with ceiling `plan`, workspace confinement, protected paths. |
+
+All four carry `Permissions`. `Code`, `Librarian` and `Planner` also carry `ProtectedPaths`. The safety floor is the same everywhere, so it does not separate the harnesses.
+
+`Assistant` has no `InlineBash`. That plugin runs `!{...}` outside the tool pipeline, so a workspace without a shell would still reach one.
+
+**Older ids still work.** `super-pi-workspace` and `super-pi-auto` resolve to `super-pi-code`. `super-pi-agent`, `super-pi-fast` and `super-pi-interactive` resolve to `super-pi-assistant`. `super-pi-fast` no longer sets a low effort: pass `--effort low`. The old modules (`SuperPi.Harness.Workspace` and the others) remain as shims for one release. They delegate to their successor. Discovery lists only the four current harnesses (`bin/super-pi harnesses`, `GET /v1/models`), while resolution accepts the old ids.
 
 ### Listing Harnesses via CLI
 
@@ -226,30 +391,60 @@ bin/super-pi harnesses
 
 Output:
 ```text
-HARNESS ID            NAME                                              DESCRIPTION
--------------------------------------------------------------------------------------------------------
-super-pi-agent        Super-Pi Standard Agent                           Autonomous coding agent with 10-rule context derivation and 4-layer safe sandbox
-super-pi-fast         Super-Pi Fast Responder                           High-throughput fast response harness powered by gemini-3-flash-preview for rapid turnarounds
-super-pi-auto         Super-Pi Autonomous Enterprise Harness            Autonomous harness composed of security shields, git rollbacks, dynamic model cascading, and task ledge
-super-pi-interactive  Super-Pi Human-Collaborative Interactive Harness  Interactive harness composed of clarification questionnaires, inline shell evaluation, terminating outp
-super-pi-workspace    Workspace Development Harness                     Workspace development persona with hierarchical rules, progressive skills, lifecycle hooks, permissions
-super-pi-planner      Super-Pi Architecture Planner                     Read-only architectural analysis, planning, and verification harness
+HARNESS ID          NAME                DESCRIPTION
+-----------------------------------------------------------------------
+super-pi-code       Super-Pi Code       Repository coding agent: reversible edits, rules, skills, hooks, model cascading
+super-pi-assistant  Super-Pi Assistant  Assistant for knowledge work: questions, web access, MCP connectors and delegation, no filesystem
+super-pi-librarian  Super-Pi Librarian  Durable knowledge curation with scheduled capture, recall and web ingest
+super-pi-planner    Super-Pi Planner    Read-only architectural analysis, planning, and verification
 ```
 
-### General-Purpose Engine vs Coding Default
+`--agent` is a deprecated alias of `--harness`: `--agent self` selects `super-pi-code` and `--agent research` selects `super-pi-planner`. `--mode` never raises a harness above its ceiling (`maxExecutionMode`), so `--harness planner --mode auto` stays in `plan`.
 
-While Super-Pi-BEAM ships with software engineering defaults (`super-pi-agent`), the underlying OTP runtime is **strictly general-purpose**:
-- **Universal Kernel**: State machines (`:gen_statem`), transactional persistence (`SQLite`/`Postgres`), crash-immune execution boundaries (`SuperPi.Env`), and streaming protocols run independently of domain logic.
-- **Domain Decoupling**: An agent's domain is defined solely by its prompt guidelines and tool bindings inside a `SuperPi.Harness` module.
-- **Non-Coding Persona Examples**:
-  - **Document & Email Triage**: Ingests Himalaya CLI and Paperless-ngx REST tools for autonomous inbox zero and receipt archiving.
-  - **Financial Intelligence**: Binds Actual Budget or banking APIs for transaction reconciliation, tag audits, and cash-flow reporting.
-  - **Research & Synthesis**: Binds web search, HTTP scrapers, and PDF extractors with write/edit tools disabled.
-  - **Support & Policy Guidance**: Binds FAQ and knowledge-base search with PII sanitization and sentiment escalation hooks.
+### Declaring a Harness
+
+`use SuperPi.Harness` defines the behaviour from a short declaration:
+
+```elixir
+defmodule MyApp.Harness.Triage do
+  alias SuperPi.Plugins
+
+  use SuperPi.Harness,
+    id: "my-triage",
+    name: "Triage",
+    description: "Sorts incoming tickets",
+    effort: "low",
+    mode: "accept-edits",
+    max_mode: "accept-edits",
+    workspace: %{"kind" => "none"},
+    tools: {:only, ["todo"]},
+    prompt: "You triage tickets.",
+    plugins: [Plugins.Todo, Plugins.Permissions]
+end
+```
+
+| Option | Meaning |
+|---|---|
+| `:id`, `:name`, `:description` | Required. |
+| `:plugins` | Plugin specs (`Module` or `{Module, opts}`). The order matters for `before_compact`: the first plugin that does not answer `:default` ends the chain. |
+| `:effort`, `:mode`, `:model` | Defaults for `pi.agent`. |
+| `:max_mode` | The highest `executionMode` the harness allows. `Permissions` enforces it. |
+| `:workspace` | `:local` (default), `:knowledge_paths`, or a `"workspace"` map such as `%{"kind" => "none"}`. |
+| `:tools` | `:all`, `{:only, names}` or `{:except, names}`. |
+| `:prompt` | The core system prompt. |
+
+Each setting resolves in one order: the caller's options, then the harness declaration, then the application environment, then a fallback. The model comes from `config :super_pi, :default_model` (fallback `gemini-3-flash-preview`). The workspace roots come from `config :super_pi, :workspace_paths`, then the working directory. Register the module with `config :super_pi, extra_harnesses: [MyApp.Harness.Triage]`.
+
+### A General-Purpose Engine
+
+The runtime does not depend on software engineering:
+- **Universal kernel.** State machines (`:gen_statem`), transactional persistence (SQLite or PostgreSQL), crash-immune execution (`SuperPi.Env`) and the streaming protocols run without domain logic.
+- **Domain through harnesses.** A harness sets the domain with its prompt, plugins and tool loadout.
+- **Examples in the box.** `super-pi-assistant` (knowledge work over MCP connectors and the web) and `super-pi-librarian` (a knowledge base that grows and answers unattended) need no repository.
 
 ### Declarative Plugins Ecosystem (`SuperPi.Plugins`)
 
-Super-Pi-BEAM includes a library of **19 modular plugins** migrated from the Pi ecosystem and native BEAM patterns. Plugins implement the 12-hook `SuperPi.Extension` behaviour and can be assembled declaratively into any harness (even in separate external repositories):
+Super-Pi-BEAM includes a library of **22 modular plugins** migrated from the Pi ecosystem and native BEAM patterns. Plugins implement the 12-hook `SuperPi.Extension` behaviour and can be assembled declaratively into any harness (even in separate external repositories):
 
 | Plugin | Module | Impact / Feature |
 | :--- | :--- | :--- |
@@ -257,7 +452,7 @@ Super-Pi-BEAM includes a library of **19 modular plugins** migrated from the Pi 
 | **`Handoff`** | `SuperPi.Plugins.Handoff` | **Context transfer**: stores a child conversation seeded with the summary and goal that the model supplies. It does not run the child. |
 | **`InlineBash`** | `SuperPi.Plugins.InlineBash` | **Saves 1 round-trip turn**: pre-evaluates `!{command}` expressions in user prompts directly on input. |
 | **`StructuredOutput`** | `SuperPi.Plugins.StructuredOutput` | **Zero-waste completion**: provides terminating `structured_output` tool (`control: %{"terminate" => true}`). |
-| **`Subagent`** | `SuperPi.Plugins.Subagent` | **`delegate_subagent` tool**: runs a child conversation with its own model loop and returns its final answer. Several `tasks` run concurrently. Roles `scout`, `planner`, `reviewer`, `researcher` are read-only (plan mode); a `worker` inherits the parent's mode and settings and never gains permission. A child cannot delegate further (`subagent_max_depth`, default 1), cannot ask the user, and ends at `subagent_timeout_ms` (default 120 s). The parent waits in the tool call, and `session.cancel` does not yet stop running children. |
+| **`Subagent`** | `SuperPi.Plugins.Subagent` | **`delegate_subagent` tool**: starts child conversations and returns at once. Each child runs as an Oban job (`SubagentWorker`, queue `:subagents`) on any node. The parent parks in `:awaiting_children` and still answers `cancel`, `get_state` and `compact`. When the children end, their summaries arrive as separate messages and the turn goes on. Roles `scout`, `planner`, `reviewer`, `researcher` are read-only (plan mode). A `worker` inherits the parent's mode and settings and never gains permission. A child cannot delegate further (`subagent_max_depth`, default 1), cannot ask the user, and ends at `subagent_timeout_ms` (default 120 s). `session.cancel` aborts the whole subtree. |
 | **`Questionnaire`** | `SuperPi.Plugins.Questionnaire` | **`ask_question` tool**: asks the user multiple-choice questions through a connected client (`bin/super-pi chat` asks on the terminal; an RPC client watches with `"interactive": true` and answers with `ui.respond`). With no client able to answer (the HTTP gateway, headless runs) the call fails at once. The conversation waits while a question is open; the wait is not stored across a crash. |
 | **`CustomCompaction`** | `SuperPi.Plugins.CustomCompaction` | **Tiered off-model summarization**: offloads compaction to fast models, preserving key decisions and tool cut-points. |
 | **`Todo`** | `SuperPi.Plugins.Todo` | **Stateful task ledger**: manages task checklists stored in durable session documents (`pi.live`), surviving branch forks. |
@@ -268,10 +463,157 @@ Super-Pi-BEAM includes a library of **19 modular plugins** migrated from the Pi 
 | **`AutoCommit`** | `SuperPi.Plugins.AutoCommit` | **Turn finalization**: automatically stages and commits modified files when an agent run finishes. |
 | **`Rules`** | `SuperPi.Plugins.Rules` | **Repository rules**: injects `AGENTS.md`, `GEMINI.md` and `.agents/rules/*.md` into the system prompt within a token budget. |
 | **`Skills`** | `SuperPi.Plugins.Skills` | **Progressive skills**: discovers `SKILL.md` skills across workspace, global and built-in locations and indexes them. |
-| **`Hooks`** | `SuperPi.Plugins.Hooks` | **Lifecycle hooks**: runs `hooks.json` commands on `SessionStart`, `PreToolUse`, `PostToolUse` and `Stop`. |
-| **`Permissions`** | `SuperPi.Plugins.Permissions` | **Policy engine**: execution modes, command allow and deny lists, workspace confinement (on by default). |
+| **`Hooks`** | `SuperPi.Plugins.Hooks` | **Lifecycle hooks**: runs `hooks.json` commands on `SessionStart`, `PreToolUse`, `PostToolUse` and `Stop`. A `PreToolUse` hook that answers `"decision": "ask"` asks a person when a client can answer, and blocks the call otherwise. |
+| **`Permissions`** | `SuperPi.Plugins.Permissions` | **Policy engine**: execution modes, a ceiling per harness, tool effects, a network policy, command allow and deny lists, workspace confinement (on by default), and questions to a person (see *Permissions and Remote Modes*). |
 | **`SlashCommands`** | `SuperPi.Plugins.SlashCommands` | **Slash commands**: `/plan`, `/goal`, `/boost`, `/model`, `/mode` expansion on input. |
+| **`Memory`** | `SuperPi.Plugins.Memory` | **Durable notes**: tools `memory_write`, `memory_search`, `memory_read` and `memory_link` over a `memories` table that outlives a conversation. A budgeted index of titles and topics goes into the system prompt (`memory_index`), and the text changes only when a note changes, so it keeps the prompt cache. Search is lexical: FTS5 on SQLite, a generated `tsvector` with GIN on PostgreSQL, `LIKE` as fallback, and `details.backend` names the one that answered. Ranking blends text rank, a 30-day recency half-life and a pinned bonus, and a superseded note ranks below its superseder. A write returns similar notes so the store does not fill with duplicates. On compaction a background job asks the fast model for durable facts and stores them with low confidence (`before_compact` always answers `:default`, so list `Memory` before `CustomCompaction`). Notes are scoped to the conversation's owner (`scope: :global` shares them), are not forked or rewound, and a read-only subagent cannot write them (`state_write` is blocked in plan mode). |
+| **`Scheduler`** | `SuperPi.Plugins.Scheduler` | **Unattended runs**: `schedule_create`, `schedule_list`, `schedule_cancel`, and webhook triggers. Exactly-once on SQLite and PostgreSQL. See *Scheduler*. |
+| **`Web`** | `SuperPi.Plugins.Web` | **Web access**: `web_fetch` always, `web_search` when a search provider is configured. A request-forgery policy checks every URL and every redirect. The size cap counts decoded bytes. See *Web access*. |
 | **`TranscriptLogger`** | `SuperPi.Plugins.TranscriptLogger` | **Transcripts**: writes JSONL transcripts under the app data directory and manages plugin metadata. |
+
+### Capability Blocks
+
+Three plugins add a capability that any harness can compose. Each is optional. They add their tools to a conversation through `before_agent_start` and serve the calls in `wrap_tool`, so a harness that does not load a plugin never offers its tools. Each tool states its effects, so `Permissions` and the workspace treat it correctly (see *Permissions and Remote Modes*).
+
+| Block | `super-pi-code` | `super-pi-assistant` | `super-pi-librarian` | `super-pi-planner` |
+|---|---|---|---|---|
+| `Web` | off | on | on | off |
+| `Scheduler` | off | off | on | off |
+| `Memory` | off | optional | on | off |
+
+`Scheduler` belongs to the librarian only. Unattended execution is what makes that harness different. To add `Memory` to the assistant, list `{Plugins.Memory, []}` before `Plugins.CustomCompaction` in a harness of your own.
+
+#### Web access
+
+`SuperPi.Plugins.Web` gives an agent `web_fetch`, and `web_search` when a search provider is configured. The Assistant harness loads it with `{Plugins.Web, tools: [:fetch, :search]}`, the Librarian bare.
+
+| Tool | Arguments | Effect |
+|---|---|---|
+| `web_fetch` | `url`, `format` (`markdown`, `text`, `raw`), `max_chars`, `offset`, `artifact` | `net_read` |
+| `web_search` | `query`, `max_results` | `net_read` |
+
+There is no `headers` argument. A long page is cut at `max_chars` (default 20,000, most 100,000) with a note that names the `offset` to continue from. `artifact` saves the full text under a name instead of returning it. A text over 200,000 characters is saved automatically. A PDF or other binary file is refused unless `artifact` is set.
+
+`web_fetch` returns the page in `output`, metadata in `structured_output` (`final_url`, `status`, `content_type`, `bytes`, `chars`, `truncated`, `title`, up to 30 `links`, `artifact`) and the redirect chain, resolved address and duration in `details`. A 4xx or 5xx status, a refused URL or content type, and a timeout set `is_error`.
+
+**Request-forgery policy.** A URL is refused when it has credentials, a scheme other than `http` or `https`, or a port other than 80 and 443. The host must not be `localhost`, `*.local`, `*.internal` or `metadata.google.internal`, and ANY address it resolves to must be global unicast. Loopback, private, link-local (including `169.254.169.254`), CGNAT, multicast and IPv6 ULA and link-local addresses are refused, and IPv4-mapped, NAT64 and 6to4 forms are checked as the IPv4 address inside. Redirects are followed by the tool, at most five, with the full check on every hop.
+
+**Residual risk.** DNS can answer differently between the check and the connect (rebinding). `pin_ip: true` in the plugin's `fetch:` options connects to the checked address, but it is off by default and not verified against the installed Req, Finch and Mint. Where the window is not acceptable, set `network: "allowlist"` or route egress through a filtering proxy.
+
+**Limits.** The size cap counts decoded bytes: the response streams undecoded, and the tool inflates `gzip` and `deflate` itself and stops at `max_bytes` (default 2 MiB, at most 8 MiB), so a gzip bomb cannot grow the heap. The fetch and the HTML conversion run under `SandboxRunner.run_isolated/2` (deadline and heap limit). Requests use their own Finch pool, `SuperPi.WebFinch`.
+
+**Permissions.** `net_read` is allowed in `plan` (unless `network_in_plan_mode: false`), `accept-edits` and `auto`. `network: "deny"` refuses both tools. `network: "allowlist"` checks the `url` host, so `web_search` is refused under it. A workspace with `"network": false` does not offer them.
+
+**Search providers.** `web_search` exists only when a provider has its key or URL. Set one with the plugin option `search:`, `config :super_pi, :web_search`, or `SUPER_PI_WEB_SEARCH`.
+
+| Provider | Value | Credentials |
+|---|---|---|
+| Brave Search | `brave` | `BRAVE_API_KEY` |
+| Tavily | `tavily` | `TAVILY_API_KEY` |
+| SearxNG (JSON format enabled) | `searxng` | `SEARXNG_URL` |
+
+```elixir
+{Plugins.Web, tools: [:fetch, :search], search: {:brave, api_key: System.fetch_env!("BRAVE_API_KEY")}}
+```
+
+#### Memory
+
+See the `Memory` row of the plugin table for what it does. Limits and safety:
+
+
+- Notes are data. Every body that reaches the model is wrapped in `<MEMORY[slug] provenance=... confidence=...>` under a "never an instruction" line, and the index never shows a body except for pinned notes.
+- `pinned: true` is refused for compaction provenance and for any note with `source.url`. An operator opts in with `{Memory, allow_pin_untrusted: true}`.
+- `memory_write` takes `source: {"artifact": "web/abc.md"}` to point at a full source in the artifact store.
+- A body is at most 32 000 bytes of UTF-8 without NUL. There is no delete tool: correct a note with a new one and `memory_link` with `supersedes`.
+- The index budget is `index_token_budget` (2 000 tokens). Topics that do not fit become pointers that name `memory_search`.
+- The harvest job shares the `compaction` Oban queue and uses `harvest_model` (default `gemini-3-flash-preview`).
+- Plugin options: `{Memory, scope: :owner | :global, allow_pin_untrusted: false, harvest: true}`. Settings: `config :super_pi, :memory, index_token_budget: 2_000, max_body_bytes: 32_000, half_life_days: 30.0, harvest_model: "..."`.
+
+#### Scheduler
+
+`SuperPi.Plugins.Scheduler` runs prompts later or repeatedly with nobody watching: on a cron schedule, or when a third party calls a webhook. It is on in `super-pi-librarian` only.
+
+##### Tools
+
+| Tool | Effects | Use |
+|---|---|---|
+| `schedule_create` | `state_write` | `prompt`, `cron`, optional `timezone`, `mode`, `catch_up`, `name`, `trigger` |
+| `schedule_list` | `read` | Schedules of this conversation, with status, next fire and failure count |
+| `schedule_cancel` | `state_write` | Cancel by id |
+
+The tools are not in the global tool catalog. The plugin adds them to a conversation's tool list, so a harness without it never offers them.
+
+`cron` is five fields (`minute hour day-of-month month day-of-week`) or `@hourly`, `@daily`, `@weekly`. Granularity is one minute. Fires must be at least 5 minutes apart (`min_interval_minutes`), and a conversation has at most 10 schedules (`max_per_conversation`).
+
+##### Run modes
+
+| `mode` | Each run happens in |
+|---|---|
+| `fork` (default) | A fork of the conversation at its latest entry. The parent transcript stays clean. |
+| `append` | The conversation itself. Use it for work that accumulates. |
+| `fresh` | A new conversation built from the agent settings stored at creation. Fewest tokens. |
+
+A run is a background task with `restart_limit: 2`. If its node dies, the run resumes on another node. With `catch_up: false` (default) a resumed run is cancelled instead, so a 07:00 briefing is never delivered at 11:00. With `catch_up: true`, a schedule that missed fires while the system was down runs once, however late.
+
+Three failed runs in a row pause the schedule and add a note to the `notes` list of the conversation's `pi.inbox` document.
+
+##### Time zones
+
+`timezone` is an IANA name (`Europe/London`). Zone data ships inside the `tzdata` package. Its auto-update is off (`config :tzdata, :autoupdate, :disabled`), so a container needs no network access and no writable data directory. Update the data by updating the package.
+
+Daylight saving time:
+
+- A fixed-hour expression (`30 2 * * *`) fires once per local day. In the spring-forward gap it fires at the first minute after the gap. On fall-back it fires on the first occurrence only.
+- An every-hour expression (`*/30 * * * *`) follows the real clock: no duplicate, no gap.
+
+##### Webhook triggers
+
+Off by default. Enable per harness: `{SuperPi.Plugins.Scheduler, allow_webhooks: true}`. Then `schedule_create` accepts `trigger: "webhook"` and returns a path with a secret token. The token is shown once and only its hash is stored.
+
+```bash
+curl -X POST http://localhost:4000/v1/triggers/$TOKEN \
+  -H 'Idempotency-Key: build-1234' \
+  -d '{"event":"push","repo":"super-pi-beam"}'
+# 202 {"status":"accepted","message":"Queued."}
+```
+
+- The token is not the gateway bearer token. It wakes exactly one schedule.
+- The reply is `202` as soon as the run is queued. The sender never waits for a model turn. `401`: unknown, paused or cancelled trigger. `413`: body over `config :super_pi, :trigger_max_bytes` (default 32768). `400`: body is not UTF-8 text, or the key is invalid. `503`: the node is draining; retry.
+- The body goes into the schedule's prompt, fenced and marked as data. Put `{{payload}}` in the prompt to choose the place. The body comes from outside: treat it as untrusted input to an unattended agent.
+- A repeated `Idempotency-Key` does nothing. The key is remembered while Oban keeps the job (24 hours with the default pruner). Without the header every delivery is a run.
+
+##### Delivery guarantees
+
+One static `Oban.Plugins.Cron` entry runs a tick every minute. Schedules are database rows, so adding one needs no deploy. Each fire happens once, through three layers: the Cron leader inserts one tick per minute for the whole cluster; the tick inserts one run job per due schedule, unique on the scheduled minute; the run claims the fire with one conditional update on `last_fire_at`. An Oban retry or a rescue after a crash cannot run a fire twice.
+
+On SQLite (single node) and PostgreSQL (cluster) the behavior is the same. A SQLite deployment cannot run more than one node. Pickup is polled, about one second, which does not matter at minute granularity.
+
+##### Limits
+
+- Forks do not copy schedules. Schedules belong to a conversation id, so forking a conversation ten times does not create ten daily briefings.
+- A scheduled run cannot create schedules (it would multiply without anyone to stop it). `allow_nested: true` lifts the guard.
+- A schedule is never held open as a sleeping task. Between fires it is only a row.
+- A failed or abandoned run does not retry on its own. The schedule fires again at the next scheduled minute.
+
+
+#### Non-blocking delegation
+
+`delegate_subagent` does not wait. The call creates one child conversation and one `pi.subagent` task per child, queues one job per child, puts the parent task in `waiting` and returns an acknowledgement. The tool result carries the `control` directive `{"await": ...}`, which parks the parent's machine.
+
+```
+parent turn:  delegate_subagent -> ack ........ parked (:awaiting_children) ........ summaries -> next request
+children:                          job job job  (any node, :subagents queue limit)
+```
+
+- **Wait policy.** `wait_policy: "all"` (default) wakes the parent when every child has ended. `"fail_fast"` wakes it when the first child fails. The other children are then stopped.
+- **Summaries.** Each child's final text (up to 8000 bytes) is stored as one user message: `Subagent <role> (conversation <id>) finished: ...`. It is not a second tool result, because providers refuse two results for one tool call.
+- **One delegation at a time.** A second call while children run is refused. Put all tasks in one call (`tasks`).
+- **Cancel.** `session.cancel` ends the turn, aborts the children's tasks bottom-up and cancels their machines. A queued job that finds its task aborted does nothing.
+- **Node loss.** The parked parent stays `waiting` in the database. A new machine on another node parks again. A child's machine is restarted by Horde, resumes its turn and settles its own task. The job has `max_attempts: 1`: a lost job is not retried.
+- **Timeout.** A child that exceeds `timeout_ms` is failed and stopped. The time counts from the start of its job, not from the delegation.
+- **Events.** `subagent_started` and `subagent_finished` go to the parent conversation.
+
+The parent machine wakes at once because `TaskEngine` sends `{:task_woken, task_id}` to the conversation's machine after the transaction commits. A poll every 5 s (`config :super_pi, :await_poll_ms`) covers a lost message.
 
 ### Model Providers (`SuperPi.AI.Provider`)
 
@@ -299,7 +641,26 @@ config :super_pi, :providers, [MyApp.MyProvider, SuperPi.AI.Providers.Gemini]
 
 ### Permissions and Remote Modes
 
-The `Permissions` plugin enforces three execution modes: `plan` (read-only), `accept-edits` (file edits, shell commands only from the allow list) and `auto`. Workspace confinement is on by default (`allowNonWorkspaceAccess: false`). Policy is data: `config :super_pi, :permissions`, `<app data dir>/settings.json`, and the session's `settingsOverride`. `permissions.deny` blocks matching shell commands in every mode.
+The `Permissions` plugin enforces three execution modes: `plan` (read-only), `accept-edits` (file edits, shell commands only from the allow list) and `auto`. Workspace confinement is on by default (`allowNonWorkspaceAccess: false`). Policy is data: `config :super_pi, :permissions`, `<app data dir>/settings.json`, and the session's `settingsOverride`. `permissions.deny` blocks matching shell commands in every mode. A harness can set a ceiling (`maxExecutionMode`). A mode above the ceiling is lowered to it, so no flag or request lifts `super-pi-planner` out of `plan`.
+
+**Tool effects.** A tool states what a call does in an `"effects"` list on its spec: `read`, `fs_write`, `exec`, `net_read`, `net_write`, `state_write`. The decision depends only on the effects, the mode and the policy, and it never loosens as the mode rises.
+
+| Effects of the tool | `plan` | `accept-edits` | `auto` |
+|---|---|---|---|
+| only `read` | allow | allow | allow |
+| `net_read` (with `read`) | allow (unless `network_in_plan_mode: false`) | allow | allow |
+| `state_write` (with `read`, `net_read`) | block | allow | allow |
+| `fs_write`, `exec`, `net_write`, or no effects stated | block | block, except `write`, `edit` and allowed commands | allow |
+
+So the artifact tools, `todo`, `delegate_subagent`, `ask_question` and the memory, web and schedule tools work in the default `accept-edits` mode that every Gateway, RPC and MCP caller gets. A tool that states no effects gets the old behaviour.
+
+**Network policy.** Network egress is a second axis, separate from the mode: `network: "allow" | "allowlist" | "deny"` (default `"allow"`). `deny` refuses every tool with a network effect. `allowlist` allows a call whose `url` argument has a host in `networkAllowHosts` (an entry matches the host and its subdomains) and refuses a call without a URL. A workspace can also remove the capability: see *Workspaces and Artifacts*.
+
+**Asking a person.** Two blocks can be lifted by a person: a shell command that is not in `permissions.allow`, and a tool that `accept-edits` does not allow by default (every MCP tool among them). When a client can answer, the call goes ahead to the tool task and the task asks. The client sees `tool_started`, then a `permission_request` event with four options (`allow_once`, `allow_always`, `reject_once`, `reject_always`, the ACP option kinds). The machine keeps answering `cancel`, `steer`, `get_state` and `compact` while the question is open. `allow_always` and `reject_always` change the session's `settingsOverride` (`permissions.allow`, `allowTools`, `deny`, `denyTools`). They never write `settings.json`, and a remote caller cannot send `settingsOverride`.
+
+These blocks are never askable: a `permissions.deny` match, a mode block (`plan` blocks every non-read tool), a workspace boundary, and the network policy.
+
+**It fails closed.** With no client that can answer (the HTTP Gateway, headless `-p` runs, MCP tool calls, an RPC conversation nobody watches), a timeout, a cancel, or an answer that is not one of the four options, the call is blocked with the same message as before. `config :super_pi, :permissions, interactive_prompts: false` turns prompting off. `config :super_pi, permission_prompt_timeout_ms: 120_000` sets the wait. A `hooks.json` `PreToolUse` hook that answers `"decision": "ask"` uses the same path.
 
 Gateway, RPC and MCP callers get a limited mode:
 
@@ -336,9 +697,9 @@ File and command tools act on a **workspace**. The workspace is configuration, s
 | `local` (default) | The node's disk, as before. The permission policy confines paths. | No | file, command |
 | `shared` | A directory on storage that every node mounts (NFS, CephFS, a read-write-many volume). `{"kind": "shared", "root": "/mnt/shared/ws"}`. Paths are confined to `root`; writes take a PostgreSQL advisory lock, so two nodes cannot change one file at once. | Yes | file, command, artifacts |
 | `scratch` | A temporary directory on the node that runs the task, removed when the task ends (`"lifetime": "conversation"` keeps it until the sweep, `scratch_ttl_hours`, default 24). `"base"` or `config :super_pi, scratch_dir` sets the parent. Paths are confined. | No | file, command, artifacts |
-| `none` | No filesystem and no commands (API-style agents). | n/a | artifacts |
+| `none` | No filesystem and no commands (API-style agents). | n/a | artifacts, MCP and web tools |
 
-A tool that the workspace cannot serve is not offered to the model, and is refused if called. A `shared` workspace without a `root` is an error, not a fall back to the local disk. A task that restarted (a crash or a failover) gets a new, empty scratch directory, and its first tool result says so.
+A tool that the workspace cannot serve is not offered to the model, and is refused if called. Each kind has the capabilities `fs`, `exec` and `net`, and `none` has only `net`. A tool states effects (see *Permissions and Remote Modes*) and the effects decide which capability it needs: `fs_write` needs `fs`, `exec` needs `exec`, `net_read` and `net_write` need `net`. The file and shell tools are matched by name. A tool that states no effects needs all three capabilities, so an unknown tool is not offered in a workspace that lacks one. Add `"network": false` to the workspace map (for example `{"kind": "local", "network": false}`) to remove `net`. The agent can then read a repository and cannot make outgoing calls. `Permissions` `network: deny` is a different control: the workspace decides whether the model sees a network tool, and the policy decides whether one call is allowed. A `shared` workspace without a `root` is an error, not a fall back to the local disk. A task that restarted (a crash or a failover) gets a new, empty scratch directory, and its first tool result says so.
 
 **Artifacts** are the explicit storage API. A scratch directory disappears with its task or node. An artifact does not: it is stored by name, per conversation, in the database (PostgreSQL, or SQLite on a single node).
 
@@ -461,8 +822,11 @@ bin/super-pi gateway 4000            # loopback only; add --verbose for token-le
 | Endpoint | Behavior |
 |---|---|
 | `GET /` and `GET /health` | Status. Always open. |
-| `GET /v1/models` | Harness ids (virtual models) plus models of every configured provider. |
+| `GET /v1/models` | The four harness ids (virtual models, each with its `capabilities`) plus models of every configured provider. Older harness ids are accepted but not listed. |
 | `POST /v1/chat/completions` | Chat completion, `stream: false` (JSON) or `stream: true` (SSE `chat.completion.chunk` events, ending with `data: [DONE]`). |
+| `POST /agui/v1/run`, `GET /agui/v1/sessions/:id/events`, `POST /agui/v1/sessions/:id/input` | AG-UI over SSE. See *AG-UI*. |
+| `POST /mcp` (and `DELETE`) | MCP over Streamable HTTP. See *MCP*. |
+| `POST /v1/triggers/:token` | Webhook trigger of one schedule. The trigger token authenticates, not the gateway token. See *Scheduler*. |
 
 **Request**
 
@@ -471,7 +835,7 @@ curl http://127.0.0.1:4000/v1/chat/completions \
   -H 'Authorization: Bearer <key>' \            # only when tokens are configured
   -H 'x-session-id: my-chat' \                  # keeps one conversation across requests
   -H 'x-super-pi-mode: plan' \                  # optional, can only tighten the permission mode
-  -d '{"model": "super-pi-workspace", "stream": true,
+  -d '{"model": "super-pi-code", "stream": true,
        "messages": [{"role": "user", "content": "List the files in lib/"}]}'
 ```
 
@@ -507,27 +871,25 @@ Plugins accept declarative configuration via `{PluginModule, opts}` or `{:alias,
 
 ```elixir
 defmodule MyCompanyHarness do
-  @behaviour SuperPi.Harness
   alias SuperPi.Plugins
 
-  @declarative_plugins [
-    # Guard against accidental secret leaks and credential reads
-    {Plugins.ProtectedPaths, [tools: ["write", "edit", "read"]]},
-    # Intercept destructive terminal operations
-    {Plugins.ConfirmDestructive, [tools: ["bash"]]},
-    # Dynamic model cascading: Pro reasoning for planning -> Flash for coding
-    {Plugins.JevRouter, [planning_model: "gemini-3.1-pro-preview", implementation_model: "gemini-3-flash-preview"]},
-    # Fast inline bash evaluations bounded by a 10s timeout
-    {Plugins.InlineBash, [timeout_ms: 10_000, max_output_bytes: 8_192]},
-    # Automatic turn finalization commit
-    {Plugins.AutoCommit, [commit_prefix: "[my-agent]", enabled: true]}
-  ]
-
-  @impl true
-  def extensions(opts \\ []) do
-    extra = Keyword.get(opts, :extra_plugins, [])
-    Plugins.resolve_all(@declarative_plugins ++ extra)
-  end
+  use SuperPi.Harness,
+    id: "my-company",
+    name: "My Company Harness",
+    description: "Coding agent with the company safety rules",
+    plugins: [
+      Plugins.Permissions,
+      # Guard against accidental secret leaks and credential reads
+      {Plugins.ProtectedPaths, [tools: ["write", "edit", "read"]]},
+      # Intercept destructive terminal operations
+      {Plugins.ConfirmDestructive, [tools: ["bash"]]},
+      # Dynamic model cascading: Pro reasoning for planning -> Flash for coding
+      {Plugins.JevRouter, [planning_model: "gemini-3.1-pro-preview", implementation_model: "gemini-3-flash-preview"]},
+      # Fast inline bash evaluations bounded by a 10s timeout
+      {Plugins.InlineBash, [timeout_ms: 10_000, max_output_bytes: 8_192]},
+      # Automatic turn finalization commit
+      {Plugins.AutoCommit, [commit_prefix: "[my-agent]", enabled: true]}
+    ]
 end
 ```
 
@@ -543,10 +905,10 @@ To maintain clean separation of concerns, Super-Pi-BEAM enforces a 3-tier config
 
 ### Adding a Custom Harness
 
-To add a new domain persona (e.g., security auditor, documentation bot, DevOps engineer):
-1. Create `lib/super_pi/harness/my_persona.ex` implementing `@behaviour SuperPi.Harness`.
-2. Register its identifier in `SuperPi.Harness.resolve/1` (or pass it via CLI/config).
-3. The new persona is immediately accessible in OpenCode, the HTTP Gateway, the JSON-RPC server, and the CLI with zero core engine changes.
+To add a new domain persona (for example a security auditor, a documentation bot or a DevOps engineer):
+1. Create a module with `use SuperPi.Harness` (see *Declaring a Harness*) in your application.
+2. Register it: `config :super_pi, extra_harnesses: [MyApp.Harness.Auditor]`.
+3. The persona is immediately available in OpenCode, the HTTP Gateway, the JSON-RPC server, ACP, AG-UI and the CLI (`--harness <id>`), with no change to the core engine.
 
 > [!NOTE]
 > Client user interfaces (such as web UIs, IDE plugins, or previous Go Bubble Tea experiments) connect decoupled over HTTP Gateway, MCP, or JSON-RPC 2.0. The repository remains pure BEAM.
@@ -577,6 +939,20 @@ Starts `SuperPi.RPC.Server` on a local TCP port and drives a full session (`sess
 
 ```bash
 mise exec -- mix run examples/rpc_showcase_client.exs
+```
+
+### 4. ACP Client
+Starts `bin/super-pi acp` as a subprocess, creates a session, sends one prompt, prints the streamed text and answers permission requests on the terminal. It does what an editor does:
+
+```bash
+mise exec -- mix run examples/acp_client.exs "list the files in this directory"
+```
+
+### 5. AG-UI Client
+Needs a running gateway (`bin/super-pi gateway 4000`). Posts a run, prints text, tool calls and state changes from the SSE stream, and answers a permission request through the input route:
+
+```bash
+mise exec -- mix run examples/agui_client.exs "what is 15 plus 27?"
 ```
 
 ---
@@ -655,27 +1031,47 @@ lib/
 │   │   └── task_engine.ex         # Fsmx task scheduler, wait policies, & subtree abort
 │   ├── env/
 │   │   ├── behaviour.ex           # Execution environment contract
+│   │   ├── client_fs.ex           # Reads the unsaved editor buffer through an ACP client
 │   │   ├── file_lock.ex           # Per-path Registry-keyed advisory FileLock
 │   │   ├── local.ex               # Local filesystem & gitignore-aware scanner
 │   │   └── sandbox_runner.ex      # Unlinked Task supervisor with :max_heap_size & 4 MiB spill
 │   ├── discovery.ex               # Config, data and discovery paths (app env, env vars, OS defaults)
 │   ├── extension.ex               # Unified 12-hook extension behaviour & pipeline
+│   ├── acp/
+│   │   ├── server.ex              # Agent Client Protocol agent over stdio (bidirectional JSON-RPC)
+│   │   └── session.ex             # ACP session: opaque id, modes, replay, fork, cancel order
+│   ├── event.ex                   # SuperPi.Event: the typed turn event, one builder per type
+│   ├── event/
+│   │   ├── history.ex             # Visible messages in a neutral shape (AG-UI snapshot, ACP replay)
+│   │   ├── renderer.ex            # Renderer behaviour (pure state machines)
+│   │   └── renderer/              # openai, rpc, tui, acp, agui
 │   ├── gateway/
+│   │   ├── agui.ex                # AG-UI over SSE (run, attach, input)
 │   │   ├── router.ex              # OpenAI-compatible HTTP Gateway with SSE streaming
 │   │   └── server.ex              # Bandit listener; refuses a non-loopback bind without a token
-│   ├── harness/                   # Pluggable harness personas (Default, Fast, Autonomous, Interactive, Workspace, Planner)
-│   │   ├── autonomous.ex          # Enterprise autonomous harness with Jev cascading & auto-commit
-│   │   ├── default.ex             # Standard autonomous coding agent harness
-│   │   ├── interactive.ex         # Human-in-the-loop interactive harness with questionnaires & handoffs
-│   │   ├── fast.ex                # Low-latency harness
-│   │   ├── planner.ex             # Read-only architectural planning harness
-│   │   └── workspace.ex           # Declarative workspace harness (rules, skills, hooks, permissions, slash commands)
-│   ├── harness.ex                 # SuperPi.Harness behaviour contract & resolver
+│   ├── harness/                   # Harness personas declared with `use SuperPi.Harness`
+│   │   ├── assistant.ex           # Knowledge work: questions, web, MCP connectors, no filesystem
+│   │   ├── code.ex                # Repository coding agent: rules, skills, hooks, checkpoints, cascading
+│   │   ├── defaults.ex            # One resolution ladder for model, workspace, tools and prompt
+│   │   ├── legacy.ex              # Delegating shims for the harness modules of earlier releases
+│   │   ├── librarian.ex           # Unattended knowledge keeper: memory, scheduler, web
+│   │   └── planner.ex             # Read-only planning harness
+│   ├── harness.ex                 # SuperPi.Harness behaviour, `use` macro, resolver, aliases
 │   ├── mcp/
-│   │   ├── client.ex              # MCP client for one stdio server
+│   │   ├── client.ex              # MCP client for one server (any transport)
+│   │   ├── http_plug.ex           # MCP server over Streamable HTTP, forwarded from the gateway router
 │   │   ├── manager.ex             # Starts configured MCP servers, exposes mcp__<server>__<tool>
-│   │   └── server.ex              # Model Context Protocol stdio server
-│   ├── plugins/                   # 19 reusable plugins (JevRouter, Handoff, Permissions, Rules, Skills, etc.)
+│   │   ├── server.ex              # Model Context Protocol server (stdio and the shared handler)
+│   │   ├── sessions.ex            # Sessions of the HTTP server
+│   │   ├── transport.ex           # Transport behaviour
+│   │   └── transport/             # stdio and Streamable HTTP (with the HTTP+SSE fallback)
+│   ├── memory.ex                  # Durable notes: write, read, link, duplicate warning
+│   ├── memory/                    # Search (FTS5, tsvector, LIKE) and the budgeted index
+│   ├── schedule.ex                # Schedules: create, tick, claim, run, failure accounting
+│   ├── schedule/cron.ex           # Cron `next_after/3` with time zones (tzdata)
+│   ├── triggers.ex                # Webhook triggers (POST /v1/triggers/:token)
+│   ├── web/                       # Request-forgery policy, fetch, extraction, search adapters
+│   ├── plugins/                   # 22 reusable plugins (JevRouter, Handoff, Permissions, Memory, Scheduler, Web, etc.)
 │   ├── plugins.ex                 # SuperPi.Plugins registry, aliases, & option resolver
 │   ├── repo.ex                    # Runtime-switchable SQLite3 / Postgrex Ecto repo facade
 │   ├── repo/
@@ -687,10 +1083,16 @@ lib/
 │   ├── tui/
 │   │   └── owl.ex                 # Interactive Owl terminal UI
 │   ├── ui/
-│   │   └── broker.ex              # Routes ask_question requests to a client and answers back
+│   │   ├── broker.ex              # Routes questions (ask_question, permission requests) to a client and back
+│   │   ├── pending.ex             # Hands a decision from before_tool to wrap_tool
+│   │   └── permission_prompt.ex   # Asks a person about a blocked tool call (fails closed)
 │   └── workers/
-│       └── oban_workers.ex        # Oban workers (generation_retry, compaction, verification, subagents)
+│       ├── memory_harvest_worker.ex  # Extracts durable facts at compaction
+│       ├── oban_workers.ex        # Oban workers (generation_retry, compaction, verification, subagents)
+│       └── schedule_workers.ex    # Cron tick and scheduled run workers
 examples/
+├── acp_client.exs                 # Minimal ACP client: starts `bin/super-pi acp`, prompts, answers permissions
+├── agui_client.exs                # Minimal AG-UI client for the gateway
 ├── gemini_live_demo.exs           # Live Gemini 3 Flash tool-calling demo
 ├── interactive_tui.exs            # Interactive Owl TUI loop
 └── rpc_showcase_client.exs        # External JSON-RPC 2.0 client showcase
