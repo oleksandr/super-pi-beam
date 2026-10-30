@@ -108,7 +108,6 @@ defmodule SuperPi.Conversation.Machine do
     llm_responder = Keyword.get(opts, :llm_responder, &default_llm_responder/2)
     tool_executor = Keyword.get(opts, :tool_executor, &default_tool_executor/3)
     Logger.metadata(conversation_id: conv_id)
-    start_mcp_clients(conv_id)
 
     data = %__MODULE__{
       conversation_id: conv_id,
@@ -162,6 +161,9 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   def handle_event(:internal, :reconcile, :recovering, data) do
+    # MCP servers start here, not in `init/1`: `init` runs inside the supervisor's start call, and
+    # a slow server would block every other machine start. The first request still waits for it.
+    start_mcp_clients(data.conversation_id)
     _reconciled = TaskEngine.reconcile_on_open!(data.conversation_id)
     {:next_state, :idle, data}
   end

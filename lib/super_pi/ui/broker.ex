@@ -14,8 +14,41 @@ defmodule SuperPi.UI.Broker do
   task engine and the model asks again. Nothing is answered by default.
   """
 
+  use GenServer
+
   @pending :super_pi_ui_pending
   @responders :super_pi_ui_responders
+
+  # --- Janitor: forget responders that exit ---
+
+  @doc false
+  def start_link(_opts \\ []), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
+
+  @impl true
+  def init(state), do: {:ok, state}
+
+  @impl true
+  def handle_cast({:monitor, pid}, monitors) do
+    if Map.has_key?(monitors, pid) do
+      {:noreply, monitors}
+    else
+      {:noreply, Map.put(monitors, pid, Process.monitor(pid))}
+    end
+  end
+
+  @impl true
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, monitors) do
+    create_tables()
+    gone = for {conv, ^pid} <- :ets.tab2list(@responders), do: conv
+    :ets.match_delete(@responders, {:_, pid})
+
+    # A question that nobody can answer any more would wait for its whole timeout.
+    for conv <- Enum.uniq(gone), not responder?(conv), do: cancel_pending(conv)
+
+    {:noreply, Map.delete(monitors, pid)}
+  end
+
+  def handle_info(_other, monitors), do: {:noreply, monitors}
 
   @doc false
   def create_tables do
@@ -34,6 +67,7 @@ defmodule SuperPi.UI.Broker do
   def register_responder(conversation_id) do
     create_tables()
     :ets.insert(@responders, {conversation_id, self()})
+    if Process.whereis(__MODULE__), do: GenServer.cast(__MODULE__, {:monitor, self()})
     :ok
   end
 

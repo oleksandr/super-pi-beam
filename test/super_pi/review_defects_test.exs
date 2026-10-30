@@ -199,4 +199,166 @@ defmodule SuperPi.ReviewDefectsTest do
       assert div(micros, 1000) < 2_500
     end
   end
+
+  describe "RPC robustness (medium)" do
+    defp connect do
+      path = Path.join("/tmp", "rd_#{System.unique_integer([:positive])}.sock")
+      {:ok, server} = RPC.start_link(socket_path: path)
+      {:ok, sock} = :gen_tcp.connect({:local, to_charlist(path)}, 0, [:binary, packet: :line, active: false])
+
+      on_exit(fn ->
+        :gen_tcp.close(sock)
+        if Process.alive?(server), do: GenServer.stop(server)
+        File.rm(path)
+      end)
+
+      sock
+    end
+
+    defp call(sock, id, method, params) do
+      :ok = :gen_tcp.send(sock, Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params}) <> "\n")
+      recv_reply(sock, id)
+    end
+
+    defp recv_reply(sock, id) do
+      {:ok, line} = :gen_tcp.recv(sock, 0, 10_000)
+
+      case Jason.decode!(line) do
+        %{"id" => ^id} = reply -> reply
+        _notification -> recv_reply(sock, id)
+      end
+    end
+
+    test "forking at an entry of another conversation is an error reply, and the connection survives" do
+      sock = connect()
+      %{"result" => %{"conversation_id" => a}} = call(sock, 1, "session.open", %{})
+      %{"result" => %{"conversation_id" => b}} = call(sock, 2, "session.open", %{})
+      entry = Storage.append_entry!(b, "pi.message", %{"role" => "user", "content" => "x"})
+
+      assert %{"error" => %{"code" => -32602}} = call(sock, 3, "session.fork", %{"conversation_id" => a, "at_entry_id" => entry.id})
+      assert %{"error" => %{"code" => -32602}} = call(sock, 4, "session.fork", %{"conversation_id" => a, "at_entry_id" => 999_999})
+      assert %{"result" => _} = call(sock, 5, "session.open", %{})
+    end
+
+    test "opening a conversation that does not exist is an error reply" do
+      sock = connect()
+      assert %{"error" => %{"code" => -32004}} = call(sock, 1, "session.open", %{"conversation_id" => 888_888})
+      assert %{"result" => _} = call(sock, 2, "session.open", %{})
+    end
+
+    test "a turn on a watched conversation emits at most K=2 session.event frames before an ack" do
+      sock = connect()
+      %{"result" => %{"conversation_id" => conv}} = call(sock, 1, "session.open", %{})
+      call(sock, 2, "session.watch", %{"conversation_id" => conv})
+
+      for i <- 1..3, do: call(sock, 10 + i, "session.submit", %{"conversation_id" => conv, "text" => "hi #{i}"})
+
+      frames =
+        Stream.repeatedly(fn -> :gen_tcp.recv(sock, 0, 500) end)
+        |> Enum.take_while(&match?({:ok, _}, &1))
+        |> Enum.map(fn {:ok, l} -> Jason.decode!(l) end)
+
+      events = Enum.filter(frames, &(&1["method"] == "session.event"))
+      assert length(events) <= 2, "#{length(events)} session.event frames without an ack"
+    end
+  end
+
+  describe "UI broker (medium)" do
+    test "a question is cancelled when its last responder exits" do
+      conv = Storage.create_conversation!()
+      Phoenix.PubSub.subscribe(SuperPi.PubSub, "conversation:#{conv.id}")
+
+      responder =
+        spawn(fn ->
+          SuperPi.UI.Broker.register_responder(conv.id)
+          Process.sleep(:infinity)
+        end)
+
+      Process.sleep(50)
+      task = Task.async(fn -> SuperPi.UI.Broker.ask(conv.id, %{"kind" => "questionnaire", "questions" => []}, 30_000) end)
+      assert_receive {:conversation_event, _, %{"type" => "ui_request"}}, 5_000
+
+      {micros, result} =
+        :timer.tc(fn ->
+          Process.exit(responder, :kill)
+          Task.await(task, 5_000)
+        end)
+
+      assert result == {:error, :cancelled}
+      assert div(micros, 1000) < 2_000
+      refute SuperPi.UI.Broker.responder?(conv.id)
+    end
+  end
+
+  describe "gateway sessions (medium)" do
+    @opts SuperPi.Gateway.Router.init([])
+
+    defp chat_session(sid) do
+      body = %{"model" => "super-pi-workspace", "messages" => [%{"role" => "user", "content" => "hi"}]}
+
+      Plug.Test.conn(:post, "/v1/chat/completions", Jason.encode!(body))
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Plug.Conn.put_req_header("x-session-id", sid)
+      |> SuperPi.Gateway.Router.call(@opts)
+    end
+
+    test "the session map is bounded and creates no lock process per session" do
+      put_env(:gateway_session_limit, 3)
+      before = length(DynamicSupervisor.which_children(SuperPi.FileLockSupervisor))
+      :ets.delete_all_objects(:super_pi_gateway_sessions)
+      :ets.delete_all_objects(:super_pi_gateway_session_order)
+
+      for i <- 1..6, do: assert(chat_session("bounded-#{i}-#{System.unique_integer([:positive])}").status == 200)
+
+      assert :ets.info(:super_pi_gateway_sessions, :size) == 3
+      assert length(DynamicSupervisor.which_children(SuperPi.FileLockSupervisor)) == before
+    end
+
+    test "a session id keeps its conversation until evicted" do
+      sid = "keep-#{System.unique_integer([:positive])}"
+      chat_session(sid)
+      [{_, first}] = :ets.lookup(:super_pi_gateway_sessions, {SuperPi.Auth.anonymous(), sid})
+      chat_session(sid)
+      assert [{_, ^first}] = :ets.lookup(:super_pi_gateway_sessions, {SuperPi.Auth.anonymous(), sid})
+    end
+  end
+
+  describe "MCP startup (medium)" do
+    test "a slow MCP server does not delay the machine start" do
+      dir = Path.join(System.tmp_dir!(), "rd_slow_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf(dir) end)
+
+      File.write!(
+        Path.join(dir, "mcp_config.json"),
+        Jason.encode!(%{"mcpServers" => %{"stuck" => %{"command" => "elixir", "args" => [@script], "env" => %{"FAKE_MCP_MODE" => "hang"}}}})
+      )
+
+      put_env(:mcp_clients, true)
+      put_env(:mcp_startup_timeout_ms, 3_000)
+      on_exit(&Manager.stop_all/0)
+
+      conv = Storage.create_conversation!(agent: %{"globalConfigDir" => dir})
+
+      {micros, {:ok, pid}} =
+        :timer.tc(fn ->
+          spec = %{id: {:rd, conv.id}, start: {SuperPi.Conversation.Machine, :start_link, [[conversation_id: conv.id, extensions: []]]}, restart: :temporary}
+          DynamicSupervisor.start_child(SuperPi.MachineSupervisor, spec)
+        end)
+
+      assert div(micros, 1000) < 1_000, "starting the machine took #{div(micros, 1000)} ms"
+      on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :kill) end)
+    end
+  end
+
+  describe "create_task owner check (medium)" do
+    test "a completed owner does not accept a child" do
+      conv = Storage.create_conversation!()
+      {:ok, owner} = TaskEngine.create_task(conv.id, "o")
+      {:ok, _} = TaskEngine.start_task(owner.id)
+      {:ok, _} = TaskEngine.complete_task(owner.id, %{})
+
+      assert {:error, :invalid_owner_state} = TaskEngine.create_task(conv.id, "c", %{}, owner_task_id: owner.id)
+    end
+  end
 end

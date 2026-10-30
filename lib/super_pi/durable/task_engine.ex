@@ -30,7 +30,9 @@ defmodule SuperPi.Durable.TaskEngine do
     background = Keyword.get(opts, :background, false)
     phase = Keyword.get(opts, :phase, "init")
 
-    Repo.transaction(fn ->
+    # Seq first, then the owner row under lock: the same order as every other transaction, and
+    # a parallel completion of the owner cannot slip in between the check and the insert.
+    tx(fn seq ->
       case Repo.get(SuperPi.Durable.Schemas.Conversation, conversation_id) do
         nil ->
           Repo.active_repo().rollback(:conversation_not_found)
@@ -40,7 +42,7 @@ defmodule SuperPi.Durable.TaskEngine do
       end
 
       if owner_task_id do
-        case Repo.get(TaskSchema, owner_task_id) do
+        case lock_task(owner_task_id) do
           nil ->
             Repo.active_repo().rollback(:invalid_owner)
 
@@ -50,8 +52,6 @@ defmodule SuperPi.Durable.TaskEngine do
             end
         end
       end
-
-      seq = Storage.next_seq!()
 
       %TaskSchema{}
       |> TaskSchema.changeset(%{

@@ -253,16 +253,25 @@ defmodule SuperPi.RPC.Server do
         rearm(sock)
         client_loop(sock, next_state, rem_buf)
 
-      {:async_rpc_reply, reply, notifs} ->
+      {:async_rpc_reply, reply, notifs, task_pid} ->
         if reply do
           send_line(sock, Jason.encode!(reply) <> "\n")
         end
 
-        Enum.each(notifs, fn notif ->
-          send_line(sock, Jason.encode!(notif) <> "\n")
-        end)
+        # Deferred events go through the live backpressure window.
+        next_state =
+          Enum.reduce(notifs, Map.update(client_state, :submit_tasks, [], &List.delete(&1, task_pid)), fn
+            {:deferred_event, event}, acc ->
+              {acc2, out} = enqueue_watch_event(acc, event)
+              Enum.each(out, &send_line(sock, Jason.encode!(&1) <> "\n"))
+              acc2
 
-        client_loop(sock, client_state, buf)
+            notif, acc ->
+              send_line(sock, Jason.encode!(notif) <> "\n")
+              acc
+          end)
+
+        client_loop(sock, next_state, buf)
 
       {:conversation_event, conv_id, event_payload} ->
         if MapSet.member?(client_state.watched_conversations, conv_id) do
@@ -291,6 +300,38 @@ defmodule SuperPi.RPC.Server do
           Process.exit(pid, :kill)
         end)
         close_transport(sock)
+
+      # Anything else on the conversation topic (for example job notices). Drop it, or it
+      # stays in the mailbox for the life of the connection.
+      _other ->
+        client_loop(sock, client_state, buf)
+    end
+  end
+
+  # An exception in a handler must not kill the connection (or the stdio process). The client
+  # gets a JSON-RPC internal error, and the client state is unchanged.
+  defp safe_handle_rpc_payload(line, client_state) do
+    handle_rpc_payload(line, client_state)
+  rescue
+    e ->
+      require Logger
+      Logger.error("[RPC] handler raised: " <> Exception.message(e))
+      {internal_error_reply(line), client_state, []}
+  catch
+    :throw, {:rpc_error, code, message} ->
+      id = with {:ok, %{"id" => id}} <- Jason.decode(line), do: id, else: (_ -> nil)
+      {if(id, do: jsonrpc_error(id, code, message)), client_state, []}
+
+    kind, reason ->
+      require Logger
+      Logger.error("[RPC] handler #{kind}: #{inspect(reason)}")
+      {internal_error_reply(line), client_state, []}
+  end
+
+  defp internal_error_reply(line) do
+    case Jason.decode(line) do
+      {:ok, %{"id" => id}} -> jsonrpc_error(id, -32603, "Internal error")
+      _ -> nil
     end
   end
 
@@ -313,17 +354,19 @@ defmodule SuperPi.RPC.Server do
         {:ok, %{"method" => "session.submit"} = _req} ->
           parent = self()
 
+          snapshot = Map.put(client_state, :defer_events, true)
+
           {:ok, task_pid} =
             Task.Supervisor.start_child(SuperPi.ToolTaskSupervisor, fn ->
-              {reply, _st, notifs} = handle_rpc_payload(line, client_state)
-              send(parent, {:async_rpc_reply, reply, notifs})
+              {reply, _st, notifs} = safe_handle_rpc_payload(line, snapshot)
+              send(parent, {:async_rpc_reply, reply, notifs, self()})
             end)
 
           updated_state = Map.update(client_state, :submit_tasks, [task_pid], &[task_pid | &1])
           process_lines(sock, rest, updated_state)
 
         _ ->
-          {reply, next_state, notifications} = handle_rpc_payload(line, client_state)
+          {reply, next_state, notifications} = safe_handle_rpc_payload(line, client_state)
 
           if reply do
             send_line(sock, Jason.encode!(reply) <> "\n")
@@ -643,16 +686,25 @@ defmodule SuperPi.RPC.Server do
     else
       case safe_machine_submit(pid, text, mode: mode, timeout: 120_000) do
         {:ok, res} ->
+          event = %{
+            "type" => "turn_completed",
+            "conversation_id" => conv_id,
+            "result" => res,
+            "seq" => Storage.current_seq()
+          }
+
           {next_client, notifs} =
-            if MapSet.member?(client_state.watched_conversations, conv_id) do
-              enqueue_watch_event(client_state, %{
-                "type" => "turn_completed",
-                "conversation_id" => conv_id,
-                "result" => res,
-                "seq" => Storage.current_seq()
-              })
-            else
-              {client_state, []}
+            cond do
+              not MapSet.member?(client_state.watched_conversations, conv_id) ->
+                {client_state, []}
+
+              # Running in a task on a snapshot of the client state: the connection process
+              # owns the backpressure window, so it enqueues the event itself.
+              Map.get(client_state, :defer_events) ->
+                {client_state, [{:deferred_event, event}]}
+
+              true ->
+                enqueue_watch_event(client_state, event)
             end
 
           {jsonrpc_result(id, %{"status" => "ok", "result" => res, "seq" => Storage.current_seq()}), next_client,
@@ -667,18 +719,30 @@ defmodule SuperPi.RPC.Server do
   defp dispatch_method("session.fork", params, id, client_state) do
     parent_id = Map.fetch!(params, "conversation_id")
     at_entry_id = Map.fetch!(params, "at_entry_id")
-    fork_conv = Storage.fork_conversation!(parent_id, at_entry_id)
-    Auth.claim!(fork_conv.id, principal(client_state) || Auth.anonymous())
+    forked =
+      try do
+        Storage.fork_conversation!(parent_id, at_entry_id)
+      rescue
+        Ecto.NoResultsError -> {:error, :entry_not_found}
+      end
 
-    reply =
-      jsonrpc_result(id, %{
-        "conversation_id" => fork_conv.id,
-        "parent_conversation_id" => parent_id,
-        "parent_entry_id" => at_entry_id,
-        "seq" => Storage.current_seq()
-      })
+    case forked do
+      {:error, reason} ->
+        {jsonrpc_error(id, -32602, "Cannot fork: #{inspect(reason)}"), client_state, []}
 
-    {reply, client_state, []}
+      fork_conv ->
+        Auth.claim!(fork_conv.id, principal(client_state) || Auth.anonymous())
+
+        reply =
+          jsonrpc_result(id, %{
+            "conversation_id" => fork_conv.id,
+            "parent_conversation_id" => parent_id,
+            "parent_entry_id" => at_entry_id,
+            "seq" => Storage.current_seq()
+          })
+
+        {reply, client_state, []}
+    end
   end
 
   defp dispatch_method("session.compact", params, id, client_state) do
@@ -877,7 +941,7 @@ defmodule SuperPi.RPC.Server do
             end
           end
 
-          Repo.get!(Conversation, conv_id)
+          Repo.get(Conversation, conv_id) || throw({:rpc_error, -32004, "Conversation not found: #{conv_id}"})
       end
 
     extensions = SuperPi.Harness.remote_extensions(harness)

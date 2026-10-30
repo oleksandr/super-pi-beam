@@ -26,6 +26,7 @@ defmodule SuperPi.Application do
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.FileLockSupervisor},
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MachineSupervisor},
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MCPClientSupervisor},
+      SuperPi.UI.Broker,
       {Task.Supervisor, name: SuperPi.ToolTaskSupervisor},
       {TelemetryMetricsPrometheus.Core, name: SuperPi.Telemetry.reporter_name(), metrics: SuperPi.Telemetry.metrics()},
       SuperPi.Durable.DeferredFlusher,
