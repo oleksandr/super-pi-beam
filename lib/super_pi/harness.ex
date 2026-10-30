@@ -3,11 +3,11 @@ defmodule SuperPi.Harness do
   Pluggable Agent Harness Specification and Registry (`REQ-HARNESS-01`).
 
   Enables running Super-Pi-BEAM under distinct agent personalities and customization packs
-  (Default Super-Pi, Antigravity AGY, Architecture Planner, and future custom extensions)
+  (Default Super-Pi, Workspace, Architecture Planner, and future custom extensions)
   uniformly across OpenCode, the OpenAI HTTP Gateway, and MCP without polluting the core engine.
   """
 
-  @doc "Unique string identifier for the harness (e.g., 'super-pi-agent', 'super-pi-agy')"
+  @doc "Unique string identifier for the harness (e.g., 'super-pi-agent', 'super-pi-workspace')"
   @callback id() :: String.t()
 
   @doc "Human-readable name"
@@ -30,9 +30,6 @@ defmodule SuperPi.Harness do
     "super-pi-fast" => SuperPi.Harness.Fast,
     "workspace" => SuperPi.Harness.Workspace,
     "super-pi-workspace" => SuperPi.Harness.Workspace,
-    "agy" => SuperPi.Harness.AGY,
-    "antigravity" => SuperPi.Harness.AGY,
-    "super-pi-agy" => SuperPi.Harness.AGY,
     "planner" => SuperPi.Harness.Planner,
     "super-pi-planner" => SuperPi.Harness.Planner,
     "auto" => SuperPi.Harness.Autonomous,
@@ -47,7 +44,6 @@ defmodule SuperPi.Harness do
     SuperPi.Harness.Autonomous,
     SuperPi.Harness.Interactive,
     SuperPi.Harness.Workspace,
-    SuperPi.Harness.AGY,
     SuperPi.Harness.Planner
   ]
 
@@ -125,6 +121,41 @@ defmodule SuperPi.Harness do
   end
 
   def resolve(_), do: SuperPi.Harness.Default
+
+  @doc """
+  Default harness for entry points that receive no harness name (Gateway, RPC, MCP).
+
+  Configure it with `config :super_pi, default_harness: "<harness id>"`. The default is
+  `super-pi-workspace`, which carries the permission and safety plugins.
+  """
+  @spec default() :: module()
+  def default do
+    id = Application.get_env(:super_pi, :default_harness, "super-pi-workspace")
+
+    case fetch(id) do
+      {:ok, mod} -> mod
+      {:error, _} -> SuperPi.Harness.Workspace
+    end
+  end
+
+  @doc """
+  Strict form of `resolve/1`. An unknown name is an error, not a silent `Default`.
+
+  A deployment that wants a fallback can set `config :super_pi, fallback_harness: "<id>"`.
+  """
+  @spec fetch(String.t() | module()) :: {:ok, module()} | {:error, {:unknown_harness, term()}}
+  def fetch(name) do
+    cond do
+      harness?(name) ->
+        {:ok, resolve(name)}
+
+      fallback = Application.get_env(:super_pi, :fallback_harness) ->
+        if harness?(fallback), do: {:ok, resolve(fallback)}, else: {:error, {:unknown_harness, name}}
+
+      true ->
+        {:error, {:unknown_harness, name}}
+    end
+  end
 
   defp match_module_string?(str) do
     case resolve_module_string(str) do

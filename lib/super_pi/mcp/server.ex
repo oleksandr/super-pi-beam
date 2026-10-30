@@ -404,9 +404,10 @@ defmodule SuperPi.MCP.Server do
   end
 
   defp execute_harness_task(prompt) do
-    harness = SuperPi.Harness.resolve("super-pi-agent")
+    harness = SuperPi.Harness.default()
     extensions = harness.extensions([])
-    conv = Storage.create_conversation!(agent: harness.agent_defaults())
+    agent = SuperPi.Plugins.Permissions.apply_remote_mode(harness.agent_defaults(), nil)
+    conv = Storage.create_conversation!(agent: agent)
     {:ok, machine_pid} = SuperPi.Conversation.Machine.start_link(conversation_id: conv.id, extensions: extensions)
 
     try do

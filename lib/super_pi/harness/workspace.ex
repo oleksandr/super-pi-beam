@@ -7,7 +7,9 @@ defmodule SuperPi.Harness.Workspace do
   - `Rules`: Hierarchical repository and global agent rules injection with token budgeting.
   - `Skills`: 5-tier progressive disclosure skills discovery and indexing.
   - `Hooks`: Lifecycle hooks (`SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`) from `hooks.json`.
-  - `Permissions`: Workspace boundary confinement, command allowlists, and execution modes (`auto`, `plan`, `accept-edits`).
+  - `Permissions`: Workspace boundary confinement (on by default), command allow and deny lists, and execution modes (`auto`, `plan`, `accept-edits`).
+  - `ProtectedPaths`: Blocks access to secrets and VCS internals (`.env`, `.git/`, keys).
+  - `ConfirmDestructive`: Blocks destructive shell commands (`rm -rf`, `git reset --hard`, `DROP`).
   - `TranscriptLogger`: Dual-write JSONL transcript logging (`transcript.jsonl` and `transcript_full.jsonl`).
   """
 
@@ -20,6 +22,8 @@ defmodule SuperPi.Harness.Workspace do
     Plugins.Skills,
     Plugins.Hooks,
     Plugins.Permissions,
+    Plugins.ProtectedPaths,
+    Plugins.ConfirmDestructive,
     Plugins.TranscriptLogger
   ]
 

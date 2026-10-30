@@ -106,7 +106,8 @@ defmodule SuperPi.Gateway.Router do
       if title_request?(messages) do
         handle_title_generation(conn, messages, model, stream?)
       else
-        harness = Harness.resolve(model)
+        harness = if Harness.harness?(model), do: Harness.resolve(model), else: Harness.default()
+        requested_mode = requested_mode(conn, params)
 
         Logger.debug("[Gateway] 📥 Received POST /v1/chat/completions | model: #{model} (harness: #{harness.id()}) | stream: #{stream?} | messages: #{length(messages)}")
 
@@ -124,7 +125,9 @@ defmodule SuperPi.Gateway.Router do
             Keyword.put(agent_opts, :model, model)
           end
 
-        agent_cfg = harness.agent_defaults(agent_opts)
+        agent_cfg =
+          harness.agent_defaults(agent_opts)
+          |> SuperPi.Plugins.Permissions.apply_remote_mode(requested_mode)
 
         current_agent = SuperPi.Durable.Doc.snapshot("conversation", conv_id, "pi.agent") || %{}
         current_model = Map.get(current_agent, "model")
@@ -137,6 +140,11 @@ defmodule SuperPi.Gateway.Router do
           if current_model != Map.get(agent_cfg, "model") or Harness.harness?(model) do
             updated_agent = Map.merge(current_agent, agent_cfg)
             Storage.configure_agent!(conv_id, updated_agent)
+          end
+
+          # A request that names a mode changes it for this session, within the ceiling.
+          if requested_mode do
+            Storage.configure_agent!(conv_id, %{"executionMode" => Map.fetch!(agent_cfg, "executionMode")})
           end
         end
 
@@ -186,6 +194,14 @@ defmodule SuperPi.Gateway.Router do
   end
 
   # --- Internal Helpers ---
+
+  # Mode that the caller asks for: `x-super-pi-mode` header or `execution_mode` body field.
+  defp requested_mode(conn, params) do
+    case Plug.Conn.get_req_header(conn, "x-super-pi-mode") do
+      [mode | _] -> mode
+      [] -> Map.get(params, "execution_mode")
+    end
+  end
 
   defp validate_chat_params(params) when is_map(params) do
     model = Map.get(params, "model")

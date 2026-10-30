@@ -24,6 +24,7 @@ defmodule SuperPi.RPC.Server do
   alias SuperPi.Conversation.Machine
   alias SuperPi.Durable.{Context, Doc, Storage}
   alias SuperPi.Durable.Schemas.Conversation
+  alias SuperPi.Plugins.Permissions
   alias SuperPi.Repo
 
   @max_in_flight_batches 2
@@ -472,40 +473,10 @@ defmodule SuperPi.RPC.Server do
   # --- Method Dispatch ---
 
   defp dispatch_method("session.open", params, id, client_state) do
-    harness_key = Map.get(params, "harness") || Map.get(params, "preset", "default")
-    harness = SuperPi.Harness.resolve(harness_key)
-
-    conv =
-      case Map.get(params, "conversation_id") do
-        nil ->
-          base_agent = Map.get(params, "agent", %{})
-          defaults = harness.agent_defaults(model: Map.get(base_agent, "model"))
-          agent_cfg = Map.merge(defaults, base_agent)
-          Storage.create_conversation!(agent: agent_cfg)
-
-        conv_id ->
-          if Map.has_key?(params, "agent") do
-            user_agent = Map.get(params, "agent")
-
-            if is_map(user_agent) and map_size(user_agent) > 0 do
-              Storage.configure_agent!(conv_id, user_agent)
-            end
-          end
-
-          Repo.get!(Conversation, conv_id)
-      end
-
-    extensions = harness.extensions([])
-    ensure_machine_started!(conv.id, extensions)
-
-    reply =
-      jsonrpc_result(id, %{
-        "conversation_id" => conv.id,
-        "seq" => Storage.current_seq(),
-        "agent" => Doc.snapshot("conversation", conv.id, "pi.agent")
-      })
-
-    {reply, client_state, []}
+    case fetch_harness(params) do
+      {:ok, harness} -> open_session(harness, params, id, client_state)
+      {:error, reason} -> {jsonrpc_error(id, -32602, "Unknown harness: #{inspect(reason)}"), client_state, []}
+    end
   end
 
   defp dispatch_method("session.submit", params, id, client_state) do
@@ -689,7 +660,7 @@ defmodule SuperPi.RPC.Server do
 
   defp dispatch_method("session.configure", params, id, client_state) do
     conv_id = Map.fetch!(params, "conversation_id")
-    patch = Map.get(params, "agent", %{})
+    patch = params |> Map.get("agent", %{}) |> sanitize_agent_param()
     Storage.configure_agent!(conv_id, patch)
     updated = Doc.snapshot("conversation", conv_id, "pi.agent")
 
@@ -697,7 +668,7 @@ defmodule SuperPi.RPC.Server do
      client_state, []}
   end
 
-  defp dispatch_method(method, _params, id, client_state) when method in ["workspace.metadata", "agy.metadata", "metadata"] do
+  defp dispatch_method(method, _params, id, client_state) when method in ["workspace.metadata", "metadata"] do
     reply =
       jsonrpc_result(id, %{
         "models" => SuperPi.CLI.models_catalog(),
@@ -754,10 +725,68 @@ defmodule SuperPi.RPC.Server do
     end
   end
 
-  defp resolve_extensions(params) do
-    key = Map.get(params, "harness") || Map.get(params, "preset") || Map.get(params, "model")
-    SuperPi.Harness.resolve(key).extensions([])
+  defp open_session(harness, params, id, client_state) do
+    conv =
+      case Map.get(params, "conversation_id") do
+        nil ->
+          base_agent = Permissions.sanitize_remote_agent(Map.get(params, "agent", %{}))
+
+          defaults =
+            harness.agent_defaults(model: Map.get(base_agent, "model"))
+            |> Permissions.apply_remote_mode(Map.get(base_agent, "executionMode"))
+
+          agent_cfg = Map.merge(defaults, base_agent)
+          Storage.create_conversation!(agent: agent_cfg)
+
+        conv_id ->
+          if Map.has_key?(params, "agent") do
+            user_agent = params |> Map.get("agent") |> sanitize_agent_param()
+
+            if is_map(user_agent) and map_size(user_agent) > 0 do
+              Storage.configure_agent!(conv_id, user_agent)
+            end
+          end
+
+          Repo.get!(Conversation, conv_id)
+      end
+
+    extensions = harness.extensions([])
+    ensure_machine_started!(conv.id, extensions)
+
+    reply =
+      jsonrpc_result(id, %{
+        "conversation_id" => conv.id,
+        "seq" => Storage.current_seq(),
+        "agent" => Doc.snapshot("conversation", conv.id, "pi.agent")
+      })
+
+    {reply, client_state, []}
   end
+
+  defp resolve_extensions(params) do
+    case fetch_harness(params) do
+      {:ok, harness} -> harness.extensions([])
+      {:error, _} -> SuperPi.Harness.default().extensions([])
+    end
+  end
+
+  # An explicit harness name must exist. With no name, the configured default harness applies.
+  defp fetch_harness(params) do
+    case Map.get(params, "harness") || Map.get(params, "preset") do
+      nil ->
+        model = Map.get(params, "model")
+
+        if is_binary(model) and SuperPi.Harness.harness?(model),
+          do: {:ok, SuperPi.Harness.resolve(model)},
+          else: {:ok, SuperPi.Harness.default()}
+
+      key ->
+        SuperPi.Harness.fetch(key)
+    end
+  end
+
+  defp sanitize_agent_param(agent) when is_map(agent), do: Permissions.sanitize_remote_agent(agent)
+  defp sanitize_agent_param(other), do: other
 
   defp jsonrpc_result(id, result) do
     %{"jsonrpc" => "2.0", "id" => id, "result" => result}
