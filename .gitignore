@@ -43,3 +43,6 @@ super_pi-*.tar
 
 
 
+
+# Dialyzer PLTs
+/priv/plts/*

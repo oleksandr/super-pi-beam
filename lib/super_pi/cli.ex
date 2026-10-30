@@ -599,7 +599,7 @@ defmodule SuperPi.CLI do
     if multi?,
       do: picks,
       else:
-        if(length(options) > 0 and match?({_, ""}, Integer.parse(text)),
+        if(options != [] and match?({_, ""}, Integer.parse(text)),
           do: hd(picks),
           else: text
         )

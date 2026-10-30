@@ -447,7 +447,7 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
 
   defp on_chunk({:data, data}, acc) do
     if acc.size + byte_size(data) <= @max_body,
-      do: %{acc | body: [acc.body | data], size: acc.size + byte_size(data)},
+      do: %{acc | body: [acc.body, data], size: acc.size + byte_size(data)},
       else: acc
   end
 

@@ -10,6 +10,7 @@ defmodule SuperPi.MixProject do
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
+      dialyzer: dialyzer(),
       releases: [
         super_pi: [
           include_executables_for: [:unix],
@@ -70,7 +71,11 @@ defmodule SuperPi.MixProject do
       {:opentelemetry_exporter, "~> 1.8"},
 
       # Testing & Property-Based Verification
-      {:stream_data, "~> 1.1", only: [:dev, :test]}
+      {:stream_data, "~> 1.1", only: [:dev, :test]},
+
+      # Linting
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.2", only: [:dev], runtime: false}
     ]
   end
 
@@ -79,7 +84,26 @@ defmodule SuperPi.MixProject do
       setup: ["deps.get", "ecto.setup"],
       "ecto.setup": ["ecto.create", "ecto.migrate"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"]
+      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      lint: [
+        "compile --warnings-as-errors",
+        "format --check-formatted",
+        "credo --only warning",
+        "cmd mkdir -p priv/plts",
+        "dialyzer"
+      ],
+      "lint:quick": [
+        "compile --warnings-as-errors",
+        "format --check-formatted",
+        "credo --only warning"
+      ]
+    ]
+  end
+
+  defp dialyzer do
+    [
+      plt_core_path: "priv/plts",
+      plt_file: {:no_warn, "priv/plts/dialyzer.plt"}
     ]
   end
 end

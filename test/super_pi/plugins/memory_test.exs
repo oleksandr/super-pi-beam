@@ -277,7 +277,7 @@ defmodule SuperPi.Plugins.MemoryTest do
       assert job.args["conversation_id"] == conv.id
       assert is_integer(job.args["head_entry_id"])
       assert job.args["scope_kind"] == "owner" and job.args["scope_id"] == "alice"
-      assert length(job.args["entry_ids"]) >= 1
+      assert job.args["entry_ids"] != []
       refute job.args["head_entry_id"] in job.args["entry_ids"]
     end
 

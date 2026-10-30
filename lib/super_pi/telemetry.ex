@@ -42,7 +42,11 @@ defmodule SuperPi.Telemetry do
 
   @doc "Makes `ctx` current in this process. Pair it with `current_ctx/0`."
   def attach(nil), do: :ok
-  def attach(ctx), do: Ctx.attach(ctx) && :ok
+
+  def attach(ctx) do
+    Ctx.attach(ctx)
+    :ok
+  end
 
   # --- Spans that cross callbacks (the turn and the HTTP request) ---
 
