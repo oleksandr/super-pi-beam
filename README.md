@@ -1,6 +1,6 @@
 # Super-Pi-BEAM
 
-**Super-Pi-BEAM** is a durable, fault-tolerant general-purpose agent harness (with production coding presets) built on **Erlang/OTP 28** and **Elixir 1.20**. It reimplements the **Pi** and **Pi Durable** (`Chord v2`) architecture natively on the BEAM virtual machine.
+**Super-Pi-BEAM** is a durable, fault-tolerant general-purpose agent harness (with production coding presets) built on **Erlang/OTP 28** and **Elixir 1.20**. It implements an always-durable, crash-resilient agent architecture natively on the BEAM virtual machine.
 
 ---
 
@@ -80,8 +80,8 @@ In this mode, OpenCode treats Super-Pi-BEAM as an upstream AI provider. When Ope
              "name": "Super-Pi Autonomous Agent",
              "limit": { "context": 128000, "output": 8192 }
            },
-           "super-pi-agy": {
-             "name": "Super-Pi Antigravity Harness",
+           "super-pi-workspace": {
+             "name": "Super-Pi Workspace Development Harness",
              "limit": { "context": 128000, "output": 8192 }
            },
            "super-pi-planner": {
@@ -105,10 +105,10 @@ In this mode, OpenCode treats Super-Pi-BEAM as an upstream AI provider. When Ope
    # Run prompt through default Super-Pi agent
    opencode run "What is 15 plus 27?" --model super-pi/super-pi-agent
 
-   # Run prompt through Antigravity harness (with skills, rules, and hooks)
-   opencode run "Audit the codebase rules" --model super-pi/super-pi-agy
+   # Run prompt through Workspace harness (with skills, rules, hooks, permissions)
+   opencode run "Audit the codebase rules" --model super-pi/super-pi-workspace
    ```
-4. **Inspect Durable Chord v2 Sessions**:
+4. **Inspect Durable Sessions**:
    ```bash
    bin/super-pi session list
    bin/super-pi session show <ID>
@@ -161,26 +161,27 @@ end
 - **`SuperPi.Harness.Interactive` (`super-pi-interactive`)**:
   Human-collaborative interactive showcase declaratively assembled from:
   `[Questionnaire, InlineBash, StructuredOutput, Handoff, Subagent]`.
-- **`SuperPi.Harness.AGY` (`super-pi-agy`)**:
-  Antigravity workflow persona with 5-tier discovery (`Rules`, `Skills`, `HooksJson`, `Permissions`, `SlashCommands`).
+- **`SuperPi.Harness.Workspace` (`super-pi-workspace`)**:
+  Workspace development persona declaratively assembled from plugins (`Rules`, `Skills`, `Hooks`, `Permissions`, `SlashCommands`, `TranscriptLogger`).
 - **`SuperPi.Harness.Planner` (`super-pi-planner`)**:
   Read-only architectural planning specialist with write protection.
 
 ### Listing Harnesses via CLI
 
 ```bash
-bin/super-pi harness list
+bin/super-pi harnesses
 ```
 
 Output:
 ```text
-HARNESS ID            NAME                                                  DESCRIPTION
---------------------------------------------------------------------------------------------------------------------------------------------------
-super-pi-agent        Super-Pi Standard Agent                               Autonomous coding agent with 10-rule context derivation and safe sandbox
-super-pi-auto         Super-Pi Autonomous Enterprise Harness                Composed of security shields, git rollbacks, Jev cascading, and task ledger
-super-pi-interactive  Super-Pi Human-Collaborative Interactive Harness      Composed of clarification questionnaires, inline shell, terminating outputs, and handoff
-super-pi-agy          Antigravity (AGY) Harness                             Antigravity persona with 5-tier skill discovery, rules, and hooks.json
-super-pi-planner      Super-Pi Architecture Planner                         Read-only architectural analysis, planning, and verification harness
+HARNESS ID            NAME                            DESCRIPTION
+--------------------------------------------------------------------------------
+super-pi-agent        Super-Pi Standard Agent         Autonomous coding agent with 10-rule context derivation and safe sandbox
+super-pi-fast         Super-Pi Fast Responder         High-throughput fast response harness powered by gemini-3-flash-preview for rapid turnarounds
+super-pi-auto         Super-Pi Autonomous Enterprise HarnessAutonomous harness composed of security shields, git rollbacks, dynamic model cascading, and task ledger
+super-pi-interactive  Super-Pi Human-Collaborative Interactive HarnessInteractive harness composed of clarification questionnaires, inline shell evaluation, terminating outputs, and context distillation
+super-pi-workspace    Workspace Development Harness   Workspace development persona with hierarchical rules, progressive skills, lifecycle hooks, permissions, and transcript logging
+super-pi-planner      Super-Pi Architecture Planner   Read-only architectural analysis, planning, and verification harness
 ```
 
 ### General-Purpose Engine vs Coding Default
