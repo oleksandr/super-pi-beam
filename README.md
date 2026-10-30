@@ -7,7 +7,7 @@
 ## Key Capabilities
 
 1. **Unified Always-Durable Engine (`SuperPi.Durable`)**:
-   - Runs on **SQLite WAL mode** (`ecto_sqlite3`) by default for single-node CLI/TUI/RPC usage and switches to **PostgreSQL** (`postgrex`) at runtime (`SUPER_PI_STORAGE_BACKEND=postgres`, single node). Multi-node clustering is not implemented.
+   - Runs on **SQLite WAL mode** (`ecto_sqlite3`) by default for single-node CLI/TUI/RPC usage and switches to **PostgreSQL** (`postgrex`) at runtime (`SUPER_PI_STORAGE_BACKEND=postgres`). A distributed BEAM cluster (several nodes, one shared PostgreSQL) is supported; see *Multi-Node Cluster*.
    - Persists 6 core tables (`conversations`, `entries`, `tasks`, `submissions`, `documents`, `document_revisions`) with a monotonic commit sequence (`seq`).
    - Maintains 5 built-in scoped conversation documents (`pi.agent`, `pi.provider`, `pi.live`, `pi.inbox`, `pi.usage`) with `Jsonpatch` operational deltas and `asOf` fork reconstruction.
    - Batches high-frequency streaming updates via `SuperPi.Durable.DeferredFlusher` (`100ms` `:ets` staging and `1000ms` lazy database flush).
@@ -445,7 +445,7 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 | A model that is not a harness or provider model | `404 model_not_found`. There is no silent fallback. |
 | Rate limits, quotas, per-key budgets | None. |
 | TLS | None. Put a reverse proxy in front for a non-loopback bind. |
-| Multi-node serving | Not implemented. Session ids live in the memory of one node. |
+| Multi-node serving | Supported with PostgreSQL (see *Multi-Node Cluster*). A load balancer may send a request to any node. |
 | Token counts for streamed turns | Reported from the provider when it gives them. Not estimated. |
 
 ### Paths
@@ -580,7 +580,7 @@ lib/
 │   │   └── virtual_model.ex       # Virtual model router & UUIDv7 session affinity
 │   ├── auth.ex                    # Bearer tokens and conversation ownership
 │   ├── cli.ex                     # Unified CLI (run, chat, flags, subcommands)
-│   ├── cluster.ex                 # Runtime topology report (multi-node not implemented)
+│   ├── cluster.ex                 # Cluster configuration and status (libcluster topologies)
 │   ├── code_mode/
 │   │   └── journal.ex             # Deterministic Codemode crash-and-replay journal
 │   ├── compaction.ex              # 4-mode context compaction & tool-pair cut-point finder

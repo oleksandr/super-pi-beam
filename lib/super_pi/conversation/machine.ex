@@ -217,11 +217,20 @@ defmodule SuperPi.Conversation.Machine do
   def handle_event(:internal, :reconcile, :recovering, data) do
     # MCP servers start here, not in `init/1`: `init` runs inside the supervisor's start call, and
     # a slow server would block every other machine start. The first request still waits for it.
-    start_mcp_clients(data.conversation_id)
-    _reconciled = TaskEngine.reconcile_on_open!(data.conversation_id)
-    # Scratch directories left by tasks that ended while no machine ran (a crash, a failover).
-    SuperPi.Env.Workspace.sweep()
-    resume_or_idle(data)
+    try do
+      start_mcp_clients(data.conversation_id)
+      _reconciled = TaskEngine.reconcile_on_open!(data.conversation_id)
+      # Scratch directories left by tasks that ended while no machine ran (a crash, a failover).
+      SuperPi.Env.Workspace.sweep()
+      resume_or_idle(data)
+    rescue
+      e ->
+        # The database is unreachable, say. Stop with a `:shutdown` reason: a supervisor does not
+        # restart a transient child for it, so a failing conversation cannot drain the restart budget
+        # that every conversation shares. The next request starts the machine again.
+        Logger.error("[Machine] recovery failed for conversation #{data.conversation_id}: #{Exception.message(e)}")
+        {:stop, {:shutdown, {:recovery_failed, Exception.message(e)}}}
+    end
   end
 
   # --- State: :idle ---

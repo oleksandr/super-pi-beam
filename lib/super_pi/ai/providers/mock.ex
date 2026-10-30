@@ -21,6 +21,12 @@ defmodule SuperPi.AI.Providers.Mock do
 
   @impl true
   def generate(payload, opts) do
+    # `mock_llm_delay_ms` makes a turn last long enough for a test to interrupt it.
+    case Application.get_env(:super_pi, :mock_llm_delay_ms, 0) do
+      ms when is_integer(ms) and ms > 0 -> Process.sleep(ms)
+      _ -> :ok
+    end
+
     on_delta = Keyword.get(opts, :on_delta, fn _ -> :ok end)
 
     user_text =

@@ -17,10 +17,6 @@ defmodule SuperPi.DataCase do
     :ok
   end
 
-  @doc """
-  Conversation ids restart at 1 in every sandboxed test, so a machine that outlives its
-  test (started from a Task or an unlinked caller) collides with the next test's machine.
-  """
   defp await_no_machines(0), do: :ok
 
   defp await_no_machines(tries) do
@@ -32,6 +28,10 @@ defmodule SuperPi.DataCase do
     end
   end
 
+  @doc """
+  Conversation ids restart at 1 in every sandboxed test, so a machine that outlives its
+  test (started from a Task or an unlinked caller) collides with the next test's machine.
+  """
   def stop_leaked_machines do
     # Terminate through the supervisors. Killing a supervised machine would make Horde restart it
     # (restart: :transient) after the test, when its sandbox connection is gone.

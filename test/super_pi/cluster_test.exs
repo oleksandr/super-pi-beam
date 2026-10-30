@@ -1,0 +1,262 @@
+defmodule SuperPi.ClusterTest do
+  @moduledoc """
+  A real cluster: three Erlang nodes (started with `:peer`) run the whole application against one
+  PostgreSQL. The test node is only a controller.
+
+      createdb super_pi_test
+      SUPER_PI_STORAGE_BACKEND=postgres DATABASE_URL=ecto://user@host/super_pi_test \\
+        mix test --only cluster test/super_pi/cluster_test.exs
+
+  The data is committed for real and removed at the end.
+  """
+  use ExUnit.Case, async: false
+
+  alias SuperPi.ClusterSupport, as: Support
+
+  @moduletag :cluster
+  @moduletag timeout: 180_000
+
+  if Application.compile_env(:super_pi, :storage_backend, :sqlite) != :postgres do
+    @moduletag skip: "needs SUPER_PI_STORAGE_BACKEND=postgres"
+  end
+
+  setup_all do
+    Support.ensure_distributed()
+    Support.become_controller()
+    peers = Support.start_peers(3, mock_llm: true)
+    on_exit(fn -> Support.stop_peers(peers) end)
+    wait_until(fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 3)) end, 30_000, "Horde members to join")
+    # Owned by the setup_all process, which lives for the whole module, so on_exit can read it.
+    created = :ets.new(:cluster_created, [:public, :bag])
+    %{peers: peers, created: created}
+  end
+
+  setup %{peers: [a | _], created: created} do
+    on_exit(fn ->
+      ids = created |> :ets.tab2list() |> Enum.map(&elem(&1, 1))
+      :ets.delete_all_objects(created)
+      if ids != [], do: :erpc.call(a.node, Support, :cleanup, [ids])
+    end)
+
+    :ok
+  end
+
+  defp call(%{node: node}, mod, fun, args), do: :erpc.call(node, mod, fun, args, 60_000)
+  defp registry_members(node), do: :erpc.call(node, SuperPi.Cluster, :status, [])[:registry_members] || []
+
+  defp conversation(peer, created, agent \\ %{"model" => "m"}) do
+    id = call(peer, Support, :create_conversation, [agent])
+    :ets.insert(created, {:conv, id})
+    id
+  end
+
+  defp owner_of(peer, id), do: call(peer, SuperPi.Conversation.Locator, :whereis, [id])
+
+  defp ensure(peer, id), do: call(peer, SuperPi.Conversation.Locator, :ensure_started, [id, [extensions: []]])
+
+  defp wait_until(fun, timeout, what) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+
+    Stream.repeatedly(fn ->
+      cond do
+        fun.() -> :ok
+        System.monotonic_time(:millisecond) > deadline -> flunk("timed out waiting for #{what}")
+        true -> Process.sleep(100) && nil
+      end
+    end)
+    |> Enum.find(&(&1 == :ok))
+  end
+
+  test "the nodes see each other, and Horde has all three as members", %{peers: peers} do
+    for peer <- peers do
+      status = call(peer, SuperPi.Cluster, :status, [])
+      assert length(status.connected_nodes) == 2
+      assert Enum.sort(status.registry_members) == Enum.sort(Enum.map(peers, & &1.node))
+      assert status.db_adapter == SuperPi.Repo.Postgres
+    end
+  end
+
+  test "a conversation has one machine in the cluster, whichever node asks", %{peers: [a, b, c], created: created} do
+    id = conversation(a, created)
+
+    {:ok, pid_a} = ensure(a, id)
+    {:ok, pid_b} = ensure(b, id)
+    {:ok, pid_c} = ensure(c, id)
+
+    assert pid_a == pid_b and pid_b == pid_c
+    wait_until(fn -> owner_of(c, id) == pid_a end, 10_000, "the registry to replicate")
+  end
+
+  test "concurrent starts from every node end in one machine", %{peers: peers, created: created} do
+    id = conversation(hd(peers), created)
+
+    pids =
+      peers
+      |> Task.async_stream(fn peer -> ensure(peer, id) end, timeout: 60_000)
+      |> Enum.map(fn {:ok, {:ok, pid}} -> pid end)
+      |> Enum.uniq()
+
+    assert length(pids) == 1
+  end
+
+  test "a turn submitted from another node runs on the owner and is stored", %{peers: [a, b | _], created: created} do
+    id = conversation(a, created)
+    {:ok, pid} = ensure(a, id)
+    other = Enum.find([a, b], &(&1.node != node(pid)))
+
+    # `other` calls the machine through its pid, across nodes.
+    assert {:ok, msg} = call(other, SuperPi.Conversation.Machine, :submit, [pid, "hello cluster", [timeout: 30_000]])
+    assert inspect(msg) =~ "Echo: hello cluster"
+
+    assert Enum.any?(call(a, Support, :messages, [id]), &(inspect(&1) =~ "Echo: hello cluster"))
+  end
+
+  test "a document written on one node is seen on another within a second", %{peers: [a, b | _], created: created} do
+    id = conversation(a, created, %{"model" => "before"})
+
+    # Warm b's cache.
+    assert call(b, SuperPi.Durable.Doc, :snapshot, ["conversation", id, "pi.agent"])["model"] == "before"
+
+    call(a, SuperPi.Durable.Storage, :configure_agent!, [id, %{model: "after"}])
+
+    # The TTL is 5 s on a cluster, so only the invalidation message can make this fast.
+    wait_until(fn -> call(b, SuperPi.Durable.Doc, :snapshot, ["conversation", id, "pi.agent"])["model"] == "after" end, 1_000, "b to see the new value")
+  end
+
+  test "concurrent usage updates from two nodes add up", %{peers: [a, b | _], created: created} do
+    id = conversation(a, created)
+
+    for peer <- [a, b], _ <- 1..10 do
+      Task.async(fn -> call(peer, Support, :add_usage, [id]) end)
+    end
+    |> Enum.each(&Task.await(&1, 60_000))
+
+    assert call(a, Support, :doc, [id, "pi.usage"])["inputTokens"] == 20
+  end
+
+  test "a question asked on one node is answered from another", %{peers: [a, b, c], created: created} do
+    id = conversation(a, created)
+
+    call(b, Support, :start_responder, [id, self()])
+    assert_receive {:responder_ready, _}, 10_000
+    wait_until(fn -> call(a, SuperPi.UI.Broker, :responder?, [id]) end, 10_000, "the responder group to replicate")
+
+    call(a, Support, :start_asker, [id, self()])
+    assert_receive {:ui_request, responder_node, %{"request_id" => request_id}}, 10_000
+    assert responder_node == b.node
+
+    # A third node answers.
+    assert :ok = call(c, SuperPi.UI.Broker, :respond, [request_id, "yes"])
+    assert_receive {:answer, {:ok, "yes"}}, 10_000
+  end
+
+  test "a question with no responder anywhere fails at once", %{peers: [a | _], created: created} do
+    id = conversation(a, created)
+    call(a, Support, :start_asker, [id, self()])
+    assert_receive {:answer, {:error, :no_interactive_client}}, 5_000
+  end
+
+  test "recovery leaves a task that another live node runs", %{peers: [a, b, c], created: created} do
+    id = conversation(a, created)
+
+    # Find where the machine for this conversation lands, then use another live node as the task owner.
+    {:ok, probe} = ensure(a, id)
+    host = Enum.find([a, b, c], &(&1.node == node(probe)))
+    call(a, Support, :stop_machine, [id])
+    wait_until(fn -> owner_of(a, id) == nil end, 10_000, "the probe machine to stop")
+
+    other = Enum.find([a, b, c], &(&1.node != host.node))
+    task = call(a, Support, :create_running_task, [id, other.node])
+
+    # The machine starts on `host` again. The task belongs to live node `other`: it is not reset or resumed.
+    {:ok, pid} = ensure(a, id)
+    assert node(pid) == host.node
+    Process.sleep(700)
+
+    after_start = call(a, Support, :get_task, [task.id])
+    assert after_start.status == "running"
+    assert after_start.attempt == 0
+  end
+
+  test "recovery resets and resumes a task that this node ran before", %{peers: [a, b, c], created: created} do
+    id = conversation(a, created)
+    {:ok, probe} = ensure(a, id)
+    host = Enum.find([a, b, c], &(&1.node == node(probe)))
+    call(a, Support, :stop_machine, [id])
+    wait_until(fn -> owner_of(a, id) == nil end, 10_000, "the probe machine to stop")
+
+    # A turn that this node had started: user message stored, task running, no machine (it crashed).
+    call(host, SuperPi.Durable.Storage, :append_entry!, [id, "pi.message", %{"role" => "user", "content" => [%{"type" => "text", "text" => "pick this up"}]}])
+    task = call(a, Support, :create_running_task, [id, host.node])
+
+    {:ok, _} = ensure(a, id)
+    wait_until(fn -> call(a, Support, :get_task, [task.id]).status == "completed" end, 20_000, "the resumed turn to complete")
+    assert call(a, Support, :get_task, [task.id]).attempt == 1
+  end
+
+  describe "node failure" do
+    test "the conversation resumes on a surviving node and the turn completes", %{created: created} do
+      # This test kills a node, so it uses its own peers (slow replies make the turn interruptible).
+      peers = Support.start_peers(3, mock_llm: true, mock_llm_delay_ms: 4_000)
+      on_exit(fn -> Support.stop_peers(peers) end)
+      wait_until(fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 3)) end, 30_000, "Horde members to join")
+
+      [a | _] = peers
+      id = conversation(a, created)
+
+      call(a, Support, :submit_async, [id, "survive this", self()])
+      pid = wait_for_owner(a, id)
+      victim = Enum.find(peers, &(&1.node == node(pid)))
+      survivors = peers -- [victim]
+
+      # Wait until the turn is really running, then kill the node hard.
+      wait_until(fn -> running_task?(hd(survivors), id) end, 20_000, "the turn to start")
+      :erpc.cast(victim.node, :erlang, :halt, [1])
+
+      # A machine for the conversation appears on a survivor, and the task completes.
+      wait_until(
+        fn ->
+          case owner_of(hd(survivors), id) do
+            new when is_pid(new) -> node(new) != victim.node
+            _ -> false
+          end
+        end,
+        60_000,
+        "the machine to restart on a surviving node"
+      )
+
+      wait_until(fn -> task_status(hd(survivors), id) == "completed" end, 60_000, "the resumed turn to complete")
+
+      assert Enum.any?(call(hd(survivors), Support, :messages, [id]), &(inspect(&1) =~ "Echo: survive this"))
+    end
+
+    test "a draining node refuses new turns, finishes the running one, and hands over", %{created: created} do
+      peers = Support.start_peers(2, mock_llm: true, mock_llm_delay_ms: 1_500)
+      on_exit(fn -> Support.stop_peers(peers) end)
+      wait_until(fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 2)) end, 30_000, "Horde members to join")
+
+      [a | _] = peers
+      id = conversation(a, created)
+      call(a, Support, :submit_async, [id, "finish me", self()])
+      pid = wait_for_owner(a, id)
+      owner = Enum.find(peers, &(&1.node == node(pid)))
+      wait_until(fn -> running_task?(owner, id) end, 20_000, "the turn to start")
+
+      started = System.monotonic_time(:millisecond)
+      assert :drained = call(owner, SuperPi.Drain, :drain, [20_000])
+      assert System.monotonic_time(:millisecond) - started >= 500, "drain returned before the turn finished"
+
+      assert_receive {:turn, {:ok, _}}, 5_000
+      refute call(owner, SuperPi.Drain, :accepting?, [])
+      assert call(owner, SuperPi.Cluster, :status, [])[:accepting?] == false
+    end
+  end
+
+  defp wait_for_owner(peer, id) do
+    wait_until(fn -> is_pid(owner_of(peer, id)) end, 20_000, "a machine for the conversation")
+    owner_of(peer, id)
+  end
+
+  defp running_task?(peer, id), do: task_status(peer, id) == "running"
+  defp task_status(peer, id), do: call(peer, Support, :generation_status, [id])
+end

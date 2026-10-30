@@ -72,3 +72,30 @@ jobs:
           SUPER_PI_TLS_TEST_URL: ecto://postgres:postgres@127.0.0.1:5432/sp_tls
           SUPER_PI_TLS_TEST_CA: ${{ github.workspace }}/tls/ca.pem
           SUPER_PI_TLS_TEST_WRONG_CA: ${{ github.workspace }}/tls/other-ca.pem
+
+  test-cluster:
+    # Three Erlang nodes against one PostgreSQL: one machine per conversation, failover after a node is
+    # killed, cache invalidation, cross-node questions, drain.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: super_pi_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SUPER_PI_STORAGE_BACKEND: postgres
+      DATABASE_URL: ecto://postgres:postgres@localhost:5432/super_pi_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - run: mise exec -- mix deps.get
+      - run: mise exec -- epmd -daemon
+      - run: mise exec -- elixir --erl "-hidden" --name sp_ctl@127.0.0.1 --cookie super_pi_cluster_test -S mix test --only cluster test/super_pi/cluster_test.exs

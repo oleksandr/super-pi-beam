@@ -34,7 +34,12 @@ defmodule SuperPi.UI.Broker do
   end
 
   @doc "True when at least one live process, on any node, can answer for the conversation."
-  def responder?(conversation_id), do: :pg.get_members(@scope, {:ui_responder, conversation_id}) != []
+  def responder?(conversation_id) do
+    # `:pg` drops a process that exited a moment after it ends, so skip dead local ones.
+    @scope
+    |> :pg.get_members({:ui_responder, conversation_id})
+    |> Enum.any?(fn pid -> node(pid) != node() or Process.alive?(pid) end)
+  end
 
   @doc """
   Asks `request` (a map such as `%{"kind" => "questionnaire", "questions" => [...]}`) and waits.
