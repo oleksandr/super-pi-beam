@@ -2,7 +2,6 @@ defmodule SuperPi.ACPTest do
   use SuperPi.DataCase, async: false
 
   alias SuperPi.ACP.Server
-  alias SuperPi.Conversation.Machine
   alias SuperPi.Durable.Storage
   alias SuperPi.Event
   alias SuperPi.Event.Renderer
@@ -365,6 +364,7 @@ defmodule SuperPi.ACPTest do
       # A second client process, as after an editor restart.
       test_pid = self()
       {:ok, server2} = Server.start_link(send: fn line -> send(test_pid, {:acp_out, Jason.decode!(line)}) end)
+      on_exit(fn -> if Process.alive?(server2), do: GenServer.stop(server2) end)
       rpc(server2, 1, "initialize", %{"protocolVersion" => 1})
       await_response(1)
       rpc(server2, 2, "session/load", %{"sessionId" => sid, "cwd" => File.cwd!(), "mcpServers" => []})
