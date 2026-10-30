@@ -169,13 +169,20 @@ defmodule SuperPi.ClusterSupport do
     running
   end
 
-  @doc "Stops the conversation's machine for good (no restart)."
+  @doc """
+  Stops the conversation's machine for good (no restart). The supervisor call has to run on the
+  node that hosts the machine: `Horde.DynamicSupervisor.terminate_child/2` from another node
+  returns `:ok` and leaves a remote machine running.
+  """
   def stop_machine(conversation_id) do
     case SuperPi.Conversation.Locator.whereis(conversation_id) do
-      pid when is_pid(pid) -> Horde.DynamicSupervisor.terminate_child(SuperPi.MachineSupervisor, pid)
+      pid when is_pid(pid) -> :erpc.call(node(pid), __MODULE__, :terminate_local, [pid])
       nil -> :ok
     end
   end
+
+  @doc false
+  def terminate_local(pid), do: Horde.DynamicSupervisor.terminate_child(SuperPi.MachineSupervisor, pid)
 
   @doc "The task as stored."
   def get_task(task_id), do: SuperPi.Repo.get(SuperPi.Durable.Schemas.Task, task_id)

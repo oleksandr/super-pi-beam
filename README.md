@@ -388,6 +388,37 @@ bin/super_pi eval "SuperPi.Release.rollback(20261030000001)"   # back to a versi
 
 TLS is tested against a real server: `mix test --only postgres test/super_pi/postgres_tls_test.exs` (see the file for the variables), and in the `test-postgres-tls` CI job.
 
+### Multi-Node Cluster
+
+A cluster is several BEAM nodes, joined with `libcluster`, that share one PostgreSQL. SQLite is single-node: the application refuses to start with a cluster strategy and `SUPER_PI_STORAGE_BACKEND` other than `postgres`.
+
+| Variable | Meaning |
+|---|---|
+| `SUPER_PI_CLUSTER_STRATEGY` | `none` (default), `epmd`, `dnspoll`, `kubernetes_dns` or `gossip`. |
+| `SUPER_PI_CLUSTER_HOSTS` | `epmd`: comma-separated node names, for example `super_pi@10.0.0.1,super_pi@10.0.0.2`. |
+| `SUPER_PI_CLUSTER_DNS_QUERY`, `SUPER_PI_CLUSTER_NODE_BASENAME` | `dnspoll`: the DNS name that lists all nodes, and the node name prefix (default `super_pi`). |
+| `SUPER_PI_CLUSTER_K8S_SERVICE` | `kubernetes_dns`: the headless Service name. |
+| `SUPER_PI_CLUSTER_GOSSIP_SECRET`, `SUPER_PI_CLUSTER_GOSSIP_PORT` | `gossip`: shared secret and UDP port (default 45892). |
+| `SUPER_PI_CLUSTER_POLL_MS` | Polling interval for `dnspoll` and `kubernetes_dns` (default 5000). |
+| `RELEASE_NODE`, `RELEASE_COOKIE` | Node name and cookie of a release. Every node needs the same cookie. |
+
+What the cluster guarantees:
+
+- **One machine per conversation.** The machine is registered in `Horde.Registry`, so a request on any node reaches it. `GET /cluster` and `SuperPi.Cluster.status/0` show members and machines per node.
+- **Failover.** When the node of a machine stops, `Horde.DynamicSupervisor` starts the machine on another node. It starts in `:recovering`, finds the task that was running and resumes it. A task row records its owner node, so a second node does not reset a turn that is still running.
+- **Coherent documents.** After a commit, every node discards cached copies with an older seq.
+- **Questions across nodes.** A client on any node can answer a question that a machine on another node asks.
+- **Drain.** On SIGTERM a node stops taking turns and finishes the running ones (see *Rolling deploys* in `deploy/README.md`).
+
+Known limits:
+
+- Horde is eventually consistent. During a netsplit two machines can briefly exist for one conversation. The task lease prevents both from running one task.
+- Horde sometimes does not restart a machine after a hard node kill. It was seen when the first node of the Horde cluster died: the survivors dropped the machine and started nothing. The next request for the conversation starts it, and recovery resumes the turn. Until then the turn waits.
+- A resumed turn can repeat a tool call that ran before the node died.
+- `scratch` and `local` workspaces do not survive the loss of a node. Use a `shared` workspace or artifacts (see *Workspaces and Artifacts*).
+
+The multi-node tests start three Erlang nodes against a test PostgreSQL (`make test-cluster`; see the `Makefile` for the variables).
+
 ### Deployment
 
 Super-Pi builds as an Elixir release (`mix release super_pi`) and as a Docker image (`docker build -t super-pi .`). Examples for the three common targets are in [`deploy/`](deploy/README.md):
