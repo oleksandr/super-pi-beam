@@ -911,96 +911,50 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   defp default_llm_responder(payload, ctx) do
-    model = to_string(Map.get(payload, :model, "claude-sonnet-4-5"))
+    model = to_string(Map.get(payload, :model, ""))
     conv_id = Map.get(ctx, :conversation_id)
 
-    effective_model =
-      cond do
-        String.starts_with?(model, "gemini-") ->
-          model
+    case SuperPi.AI.Providers.resolve(model) do
+      {:ok, provider, effective_model} ->
+        provider.generate(Map.put(payload, :model, effective_model), on_delta: &publish_delta(conv_id, &1))
 
-        String.starts_with?(model, "google/") ->
-          String.replace_prefix(model, "google/", "")
+      {:error, reason} ->
+        {:error, SuperPi.AI.Providers.format_error(reason)}
+    end
+  end
 
-        SuperPi.AI.GeminiClient.configured?() and
-            (SuperPi.Harness.harness?(model) or String.starts_with?(model, "super-pi-") or model == "default") ->
-          case model do
-            m when m in ["super-pi-planner", "planner"] -> "gemini-3.1-pro-preview"
-            m when m in ["super-pi-fast", "fast"] -> "gemini-3-flash-preview"
-            _ -> "gemini-3-flash-preview"
-          end
+  defp publish_delta(conv_id, event) do
+    case event do
+      {:text_delta, %{index: idx, delta: delta}} ->
+        publish_stream_event(conv_id, %{"type" => "text_delta", "index" => idx, "delta" => delta})
 
-        true ->
-          model
-      end
+      {:text_delta, idx, delta} ->
+        publish_stream_event(conv_id, %{"type" => "text_delta", "index" => idx, "delta" => delta})
 
-    if String.starts_with?(effective_model, "gemini-") and SuperPi.AI.GeminiClient.configured?() do
-      payload = Map.put(payload, :model, effective_model)
+      {:thinking_delta, %{index: idx, delta: delta}} ->
+        publish_stream_event(conv_id, %{"type" => "thinking_delta", "index" => idx, "delta" => delta})
 
-      SuperPi.AI.GeminiClient.generate(payload,
-        on_delta: fn
-          {:text_delta, %{index: idx, delta: delta}} ->
-            publish_stream_event(conv_id, %{"type" => "text_delta", "index" => idx, "delta" => delta})
+      {:thinking_delta, idx, delta} ->
+        publish_stream_event(conv_id, %{"type" => "thinking_delta", "index" => idx, "delta" => delta})
 
-          {:text_delta, idx, delta} ->
-            publish_stream_event(conv_id, %{"type" => "text_delta", "index" => idx, "delta" => delta})
+      {:toolcall_delta, %{index: idx, raw_json_delta: delta, partial_args: partial_args}} ->
+        publish_stream_event(conv_id, %{
+          "type" => "toolcall_delta",
+          "index" => idx,
+          "delta" => delta,
+          "partial_args" => partial_args
+        })
 
-          {:thinking_delta, %{index: idx, delta: delta}} ->
-            publish_stream_event(conv_id, %{"type" => "thinking_delta", "index" => idx, "delta" => delta})
+      {:toolcall_delta, idx, delta, partial_args} ->
+        publish_stream_event(conv_id, %{
+          "type" => "toolcall_delta",
+          "index" => idx,
+          "delta" => delta,
+          "partial_args" => partial_args
+        })
 
-          {:thinking_delta, idx, delta} ->
-            publish_stream_event(conv_id, %{"type" => "thinking_delta", "index" => idx, "delta" => delta})
-
-          {:toolcall_delta, %{index: idx, raw_json_delta: delta, partial_args: partial_args}} ->
-            publish_stream_event(conv_id, %{
-              "type" => "toolcall_delta",
-              "index" => idx,
-              "delta" => delta,
-              "partial_args" => partial_args
-            })
-
-          {:toolcall_delta, idx, delta, partial_args} ->
-            publish_stream_event(conv_id, %{
-              "type" => "toolcall_delta",
-              "index" => idx,
-              "delta" => delta,
-              "partial_args" => partial_args
-            })
-
-          _ ->
-            :ok
-        end
-      )
-    else
-      if not SuperPi.AI.GeminiClient.configured?() and String.starts_with?(effective_model, "gemini-") and
-           Application.get_env(:super_pi, :mock_llm, true) == false do
-        {:error, "Missing API key for Gemini model #{effective_model}"}
-      else
-        last_user =
-          payload.messages
-          |> Enum.reverse()
-          |> Enum.find(fn m -> m["role"] == "user" end)
-
-        user_text =
-          case last_user do
-            %{"content" => [%{"text" => t} | _]} -> t
-            %{"content" => t} when is_binary(t) -> t
-            _ -> ""
-          end
-
-        reply_text = "Echo: #{user_text}"
-
-        if conv_id do
-          publish_stream_event(conv_id, %{"type" => "text_delta", "index" => 0, "delta" => reply_text})
-        end
-
-        {:ok,
-         %{
-           "role" => "assistant",
-           "content" => [%{"type" => "text", "text" => reply_text}],
-           "usage" => %{"input_tokens" => 10, "output_tokens" => 5}
-         }}
-      end
+      _ ->
+        :ok
     end
   end
 

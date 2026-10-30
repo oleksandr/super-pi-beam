@@ -149,5 +149,14 @@ defmodule SuperPi.Gateway.GatewayDefectsTest do
       refute conn.status == 200 and conn.resp_body =~ "Echo:",
              "the offline mock answered with a 200 and fabricated usage"
     end
+
+    test "a model that no provider serves returns an error, not an echo" do
+      body = %{"model" => "claude-sonnet-5-5", "messages" => [%{"role" => "user", "content" => "hello"}]}
+
+      conn = post(body, [{"x-session-id", "noprov-#{System.unique_integer([:positive])}"}])
+
+      refute conn.status == 200 and conn.resp_body =~ "Echo:"
+      assert conn.status >= 400 or conn.resp_body =~ "No provider"
+    end
   end
 end

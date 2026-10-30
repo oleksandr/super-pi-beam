@@ -18,19 +18,6 @@ defmodule SuperPi.CLI do
   alias SuperPi.TUI.Owl, as: OwlTUI
   alias SuperPi.Tools
 
-  @models [
-    {"gemini-3-flash-preview", "Gemini 3 Flash Preview (Live)"},
-    {"gemini-4-argon-medium", "Gemini 4 Argon (Medium)"},
-    {"gemini-4-argon-high", "Gemini 4 Argon (High)"},
-    {"gemini-4-argon-low", "Gemini 4 Argon (Low)"},
-    {"gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"},
-    {"gemini-3.8-flash-medium", "Gemini 3.8 Flash (Medium)"},
-    {"gemini-3.8-flash-low", "Gemini 3.8 Flash (Low)"},
-    {"claude-opus-5-5-high", "Claude Opus 5.5 (High)"},
-    {"claude-sonnet-5-5-medium", "Claude Sonnet 5.5 (Medium)"},
-    {"gpt-oss-120b-medium", "GPT-OSS 120B (Medium)"}
-  ]
-
   @agents [
     {"self", "Full-capability coding agent with read/write/bash/MCP tools"},
     {"research", "Read-only codebase and documentation research agent"},
@@ -79,7 +66,7 @@ defmodule SuperPi.CLI do
   end
 
   def models_catalog do
-    Enum.map(@models, fn {id, label} -> %{"id" => id, "label" => label} end)
+    SuperPi.AI.Providers.catalog()
   end
 
   def agents_catalog do
@@ -182,18 +169,25 @@ defmodule SuperPi.CLI do
 
       {:subcommand, "models", _rest, _flags} ->
         out =
-          @models
-          |> Enum.map(fn {id, label} -> String.pad_trailing(id, 26) <> label end)
+          SuperPi.AI.Providers.catalog()
+          |> Enum.map(fn m ->
+            note = if m["available"], do: "", else: "  [#{m["provider"]}: not configured]"
+            String.pad_trailing(m["id"], 26) <> m["label"] <> note
+          end)
           |> Enum.join("\n")
 
         {0, out}
 
       {:subcommand, sub, _rest, _flags} when sub in ["harness", "harnesses"] ->
-        header = String.pad_trailing("HARNESS ID", 22) <> String.pad_trailing("NAME", 32) <> "DESCRIPTION"
-        sep = String.duplicate("-", 80)
+        harnesses = Harness.list()
+        id_w = harnesses |> Enum.map(&String.length(&1.id())) |> Enum.max(fn -> 0 end) |> max(10) |> Kernel.+(2)
+        name_w = harnesses |> Enum.map(&String.length(&1.name())) |> Enum.max(fn -> 0 end) |> max(4) |> Kernel.+(2)
+        header = String.pad_trailing("HARNESS ID", id_w) <> String.pad_trailing("NAME", name_w) <> "DESCRIPTION"
+        sep = String.duplicate("-", String.length(header) + 20)
+
         rows =
-          Enum.map(Harness.list(), fn mod ->
-            String.pad_trailing(mod.id(), 22) <> String.pad_trailing(mod.name(), 32) <> mod.description()
+          Enum.map(harnesses, fn mod ->
+            String.pad_trailing(mod.id(), id_w) <> String.pad_trailing(mod.name(), name_w) <> mod.description()
           end)
 
         {0, Enum.join([header, sep | rows], "\n")}
