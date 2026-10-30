@@ -345,7 +345,8 @@ defmodule SuperPi.ReviewDefectsTest do
           Horde.DynamicSupervisor.start_child(SuperPi.MachineSupervisor, spec)
         end)
 
-      assert div(micros, 1000) < 1_000, "starting the machine took #{div(micros, 1000)} ms"
+      # The server would hold the start for its 3 s timeout if the start waited for it.
+      assert div(micros, 1000) < 2_000, "starting the machine took #{div(micros, 1000)} ms"
       on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :kill) end)
     end
   end

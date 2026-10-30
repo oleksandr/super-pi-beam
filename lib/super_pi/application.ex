@@ -12,7 +12,10 @@ defmodule SuperPi.Application do
 
     gateway_children =
       if Application.get_env(:super_pi, :start_gateway, false) do
-        [{SuperPi.Gateway.Server, port: Application.get_env(:super_pi, :gateway_port, 4000)}]
+        [
+          {SuperPi.Gateway.Server,
+           port: Application.get_env(:super_pi, :gateway_port, 4000), ip: Application.get_env(:super_pi, :gateway_ip, {127, 0, 0, 1})}
+        ]
       else
         []
       end

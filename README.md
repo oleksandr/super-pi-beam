@@ -380,6 +380,16 @@ bin/super_pi eval "SuperPi.Release.rollback(20261030000001)"   # back to a versi
 
 TLS is tested against a real server: `mix test --only postgres test/super_pi/postgres_tls_test.exs` (see the file for the variables), and in the `test-postgres-tls` CI job.
 
+### Deployment
+
+Super-Pi builds as an Elixir release (`mix release super_pi`) and as a Docker image (`docker build -t super-pi .`). Examples for the three common targets are in [`deploy/`](deploy/README.md):
+
+- **Docker / compose:** `deploy/docker-compose.yml` starts PostgreSQL, a one-shot migration and two clustered nodes (`docker compose up`).
+- **VMs and Proxmox:** `deploy/vm/` has a systemd unit and an environment file (static `epmd` host list, or `dnspoll`).
+- **Kubernetes:** `deploy/kubernetes/super-pi.yaml` has a Deployment, a headless Service for discovery (`kubernetes_dns`), a migration Job, readiness on `/ready` and a PodDisruptionBudget.
+
+A release does not migrate at boot. Run `bin/super_pi eval "SuperPi.Release.migrate()"` first. The gateway starts from `SUPER_PI_GATEWAY=true` (with `SUPER_PI_GATEWAY_BIND`, `SUPER_PI_GATEWAY_PORT`, `SUPER_PI_GATEWAY_TOKEN`). `GET /ready`, `GET /health` and `GET /cluster` support probes and operations.
+
 ### Authentication and Ownership
 
 The Gateway and the RPC server are open on loopback by default. To require a key, set tokens in config or the environment:

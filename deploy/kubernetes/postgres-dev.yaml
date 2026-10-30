@@ -1,0 +1,31 @@
+# A throwaway PostgreSQL for trying the manifests on a local cluster (k3s, kind, Rancher Desktop).
+# Not for production: no TLS, no backups, no volume. Use a managed PostgreSQL there.
+#   kubectl -n super-pi create secret generic super-pi \
+#     --from-literal=DATABASE_URL='ecto://super_pi:super_pi@postgres-dev:5432/super_pi' ...
+# and set SUPER_PI_DB_SSL=disable on the Deployment and the Job.
+apiVersion: v1
+kind: Service
+metadata: { name: postgres-dev, namespace: super-pi }
+spec:
+  selector: { app: postgres-dev }
+  ports: [{ port: 5432 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: postgres-dev, namespace: super-pi }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: postgres-dev } }
+  template:
+    metadata: { labels: { app: postgres-dev } }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:18
+          env:
+            - { name: POSTGRES_USER, value: super_pi }
+            - { name: POSTGRES_PASSWORD, value: super_pi }
+            - { name: POSTGRES_DB, value: super_pi }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "super_pi"] }
+            periodSeconds: 2

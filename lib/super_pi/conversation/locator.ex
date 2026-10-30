@@ -23,6 +23,8 @@ defmodule SuperPi.Conversation.Locator do
   nodes reconnect. Task rows carry the owner node, so the survivor does not reset a live task.
   """
 
+  require Logger
+
   alias SuperPi.Conversation.Machine
 
   @registry SuperPi.ConversationRegistry
@@ -88,6 +90,7 @@ defmodule SuperPi.Conversation.Locator do
         start(conversation_id, machine_opts, opts, retries - 1)
 
       other ->
+        Logger.warning("[Locator] could not start the machine of conversation #{inspect(conversation_id)}: #{inspect(other)}")
         other
     end
   end

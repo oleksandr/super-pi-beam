@@ -1,0 +1,30 @@
+# systemd unit for one Super-Pi node on a VM (Proxmox or any Linux host).
+#
+# Install:   sudo cp super-pi.service /etc/systemd/system/ && sudo cp super-pi.env.example /etc/super-pi.env
+#            (edit /etc/super-pi.env, then)  sudo systemctl enable --now super-pi
+# Migrate:   sudo -u superpi env $(cat /etc/super-pi.env | xargs) /opt/super_pi/bin/super_pi eval "SuperPi.Release.migrate()"
+[Unit]
+Description=Super-Pi-BEAM node
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=superpi
+Group=superpi
+WorkingDirectory=/opt/super_pi
+EnvironmentFile=/etc/super-pi.env
+ExecStart=/opt/super_pi/bin/super_pi start
+ExecStop=/opt/super_pi/bin/super_pi stop
+# SIGTERM starts a drain (up to drain_timeout_ms, 30 s). Give it time before systemd kills the node.
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

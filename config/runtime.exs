@@ -12,6 +12,26 @@ if endpoint = System.get_env("OTEL_EXPORTER_OTLP_ENDPOINT") do
   config :opentelemetry_exporter, otlp_protocol: :http_protobuf, otlp_endpoint: endpoint
 end
 
+# --- Gateway ---------------------------------------------------------------------------------
+#
+# `bin/super-pi gateway` starts the gateway itself. A release has no such command, so the
+# application starts it when SUPER_PI_GATEWAY=true.
+#   SUPER_PI_GATEWAY_PORT   TCP port (default 4000)
+#   SUPER_PI_GATEWAY_BIND   address to listen on (default 127.0.0.1). Anything but loopback
+#                           needs a token (SUPER_PI_GATEWAY_TOKEN); the gateway refuses to start without one.
+if System.get_env("SUPER_PI_GATEWAY") in ["1", "true"] do
+  bind =
+    case :inet.parse_address(String.to_charlist(System.get_env("SUPER_PI_GATEWAY_BIND") || "127.0.0.1")) do
+      {:ok, ip} -> ip
+      {:error, _} -> raise "SUPER_PI_GATEWAY_BIND must be an IP address, got: #{inspect(System.get_env("SUPER_PI_GATEWAY_BIND"))}"
+    end
+
+  config :super_pi,
+    start_gateway: true,
+    gateway_port: String.to_integer(System.get_env("SUPER_PI_GATEWAY_PORT") || "4000"),
+    gateway_ip: bind
+end
+
 # --- Storage ---------------------------------------------------------------------------------
 #
 # SUPER_PI_STORAGE_BACKEND=postgres uses a separate PostgreSQL instance (single node or managed).

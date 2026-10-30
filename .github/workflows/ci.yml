@@ -99,3 +99,15 @@ jobs:
       - run: mise exec -- mix deps.get
       - run: mise exec -- epmd -daemon
       - run: mise exec -- elixir --erl "-hidden" --name sp_ctl@127.0.0.1 --cookie super_pi_cluster_test -S mix test --only cluster test/super_pi/cluster_test.exs
+
+  build-image:
+    # The release image builds, and the release starts and answers /health.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t super-pi .
+      - name: Start the image and probe it
+        run: |
+          docker run -d --name sp -p 4000:4000 -e SUPER_PI_SQLITE_PATH=/tmp/sp.db -e SUPER_PI_AUTO_MIGRATE=true super-pi
+          for i in $(seq 1 30); do curl -fsS localhost:4000/health && exit 0; sleep 1; done
+          docker logs sp; exit 1

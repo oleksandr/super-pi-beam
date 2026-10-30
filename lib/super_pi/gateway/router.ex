@@ -80,6 +80,25 @@ defmodule SuperPi.Gateway.Router do
     |> send_resp(200, SuperPi.Telemetry.scrape())
   end
 
+  # Cluster members and where the conversation machines run. Behind the same authentication as the API.
+  get "/cluster" do
+    status = SuperPi.Cluster.status()
+    names = fn nodes -> Enum.map(nodes, &Atom.to_string/1) end
+
+    send_json(conn, 200, %{
+      "self" => Atom.to_string(status.self),
+      "strategy" => Atom.to_string(status.strategy),
+      "connected_nodes" => names.(status.connected_nodes),
+      "registry_members" => names.(status.registry_members),
+      "supervisor_members" => names.(status.supervisor_members),
+      "machines_per_node" => Map.new(status.machines_per_node, fn {n, c} -> {Atom.to_string(n), c} end),
+      "machine_count" => status.machine_count,
+      "machine_supervision" => Atom.to_string(status.machine_supervision),
+      "accepting" => status.accepting?,
+      "db_adapter" => inspect(status.db_adapter)
+    })
+  end
+
   # Readiness: 503 while the node drains (SIGTERM), so a load balancer stops sending it traffic.
   get "/ready" do
     if SuperPi.Drain.accepting?(),

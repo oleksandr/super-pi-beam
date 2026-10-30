@@ -1,0 +1,136 @@
+# Super-Pi on Kubernetes: a Deployment of cluster nodes behind a Service, a headless Service for
+# node discovery, a migration Job, and a PodDisruptionBudget.
+#
+#   kubectl apply -f super-pi.yaml          # after you create the Secret below
+#   kubectl -n super-pi rollout status deploy/super-pi
+#
+# Create the secret first (do not commit real values):
+#   kubectl -n super-pi create secret generic super-pi \
+#     --from-literal=DATABASE_URL='ecto://super_pi:...@postgres.example:5432/super_pi' \
+#     --from-literal=SUPER_PI_GATEWAY_TOKEN="$(openssl rand -hex 24)" \
+#     --from-literal=RELEASE_COOKIE="$(openssl rand -hex 24)" \
+#     --from-literal=GEMINI_API_KEY='...'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: super-pi
+---
+# Discovery: kubernetes_dns reads the A records of this headless Service (publishNotReadyAddresses so
+# a starting pod can join before it is ready).
+apiVersion: v1
+kind: Service
+metadata:
+  name: super-pi-headless
+  namespace: super-pi
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: super-pi
+  ports:
+    - { name: epmd, port: 4369 }
+---
+# Clients: the gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: super-pi
+  namespace: super-pi
+spec:
+  selector:
+    app: super-pi
+  ports:
+    - { name: http, port: 80, targetPort: 4000 }
+---
+# Run before each rollout (Helm hook, Argo PreSync, or `kubectl apply` of this Job first).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: super-pi-migrate
+  namespace: super-pi
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: super-pi:latest
+          imagePullPolicy: IfNotPresent
+          command: ["bin/super_pi", "eval", "SuperPi.Release.migrate()"]
+          env:
+            - { name: SUPER_PI_STORAGE_BACKEND, value: postgres }
+            - { name: SUPER_PI_DB_SSL, value: require }
+          envFrom:
+            - secretRef: { name: super-pi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: super-pi
+  namespace: super-pi
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: super-pi }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: super-pi }
+    spec:
+      # A drain waits for running turns (drain_timeout_ms, 30 s). Allow more than that.
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: super-pi
+          image: super-pi:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 4000 }
+            - { name: epmd, containerPort: 4369 }
+            - { name: dist, containerPort: 9100 }
+          env:
+            - { name: SUPER_PI_STORAGE_BACKEND, value: postgres }
+            - { name: SUPER_PI_DB_SSL, value: require }
+            - { name: SUPER_PI_GATEWAY, value: "true" }
+            - { name: SUPER_PI_GATEWAY_BIND, value: 0.0.0.0 }
+            - { name: SUPER_PI_CLUSTER_STRATEGY, value: kubernetes_dns }
+            - { name: SUPER_PI_CLUSTER_K8S_SERVICE, value: super-pi-headless }
+            - { name: SUPER_PI_CLUSTER_NODE_BASENAME, value: super_pi }
+            # The node name uses the pod IP (rel/env.sh.eex does this for kubernetes_dns).
+            # Auto-migration stays off: the Job above runs the migrations.
+          envFrom:
+            - secretRef: { name: super-pi }
+          # Ready only while the node accepts work: a draining node returns 503 and leaves the Service.
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 3
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 3
+            failureThreshold: 20
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { memory: 1Gi }
+          # Workspaces: use a shared (ReadWriteMany) volume for kind "shared", or an emptyDir for "scratch".
+          # volumeMounts:
+          #   - { name: workspaces, mountPath: /mnt/super-pi/workspaces }
+      # volumes:
+      #   - name: workspaces
+      #     persistentVolumeClaim: { claimName: super-pi-workspaces }   # ReadWriteMany
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: super-pi
+  namespace: super-pi
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: super-pi }

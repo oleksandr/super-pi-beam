@@ -247,4 +247,43 @@ defmodule SuperPi.ClusterConfigTest do
       assert {:ok, _} = Task.await(task, 5_000)
     end
   end
+
+  describe "GET /cluster" do
+    test "reports this node, and needs a key when tokens are configured" do
+      body = conn(:get, "/cluster") |> Router.call(Router.init([])) |> Map.fetch!(:resp_body) |> Jason.decode!()
+      assert body["self"] == Atom.to_string(node())
+      assert body["strategy"] == "none"
+      assert body["accepting"] == true
+      assert is_map(body["machines_per_node"])
+      assert is_binary(body["db_adapter"])
+
+      Application.put_env(:super_pi, :gateway_tokens, ops: "tok")
+      on_exit(fn -> Application.delete_env(:super_pi, :gateway_tokens) end)
+
+      assert conn(:get, "/cluster") |> Router.call(Router.init([])) |> Map.fetch!(:status) == 401
+      ok = conn(:get, "/cluster") |> put_req_header("authorization", "Bearer tok") |> Router.call(Router.init([]))
+      assert ok.status == 200
+    end
+  end
+
+  describe "release settings (runtime.exs)" do
+    test "the gateway starts from SUPER_PI_GATEWAY with a bind address and port" do
+      System.put_env("SUPER_PI_GATEWAY", "true")
+      System.put_env("SUPER_PI_GATEWAY_BIND", "0.0.0.0")
+      System.put_env("SUPER_PI_GATEWAY_PORT", "4123")
+      on_exit(fn -> Enum.each(~w(SUPER_PI_GATEWAY SUPER_PI_GATEWAY_BIND SUPER_PI_GATEWAY_PORT), &System.delete_env/1) end)
+
+      cfg = Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)[:super_pi]
+      assert cfg[:start_gateway] == true
+      assert cfg[:gateway_port] == 4123
+      assert cfg[:gateway_ip] == {0, 0, 0, 0}
+
+      System.put_env("SUPER_PI_GATEWAY_BIND", "not-an-ip")
+      assert_raise RuntimeError, ~r/must be an IP address/, fn -> Config.Reader.read!("config/runtime.exs", env: :prod, target: :host) end
+    end
+
+    test "the gateway stays off by default" do
+      refute Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)[:super_pi][:start_gateway]
+    end
+  end
 end

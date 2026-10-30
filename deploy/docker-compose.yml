@@ -1,0 +1,63 @@
+# Two Super-Pi nodes in one cluster, one PostgreSQL, a one-shot migration.
+#
+#   docker build -t super-pi .. && docker compose up        # from this directory
+#   curl -H 'Authorization: Bearer change-me' localhost:4000/cluster
+#
+# Scale the cluster: `docker compose up --scale super-pi=3`. Nodes find each other through the
+# service name (dnspoll). Change the token and the cookie before you use this for anything real.
+name: super-pi
+
+x-super-pi-env: &super-pi-env
+  SUPER_PI_STORAGE_BACKEND: postgres
+  DATABASE_URL: ecto://super_pi:super_pi@postgres:5432/super_pi
+  SUPER_PI_GATEWAY: "true"
+  SUPER_PI_GATEWAY_BIND: 0.0.0.0
+  SUPER_PI_GATEWAY_TOKEN: change-me
+  SUPER_PI_CLUSTER_STRATEGY: dnspoll
+  SUPER_PI_CLUSTER_DNS_QUERY: super-pi
+  SUPER_PI_CLUSTER_POLL_MS: "2000"
+  RELEASE_COOKIE: change-me-too
+  # A model key, when you have one:
+  # GEMINI_API_KEY: ""
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: super_pi
+      POSTGRES_PASSWORD: super_pi
+      POSTGRES_DB: super_pi
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U super_pi"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Runs once, before the nodes. Migrations are not run at boot in a release.
+  migrate:
+    image: super-pi
+    build: ..
+    command: ["bin/super_pi", "eval", "SuperPi.Release.migrate()"]
+    environment: *super-pi-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  super-pi:
+    image: super-pi
+    environment: *super-pi-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      replicas: 2
+    ports:
+      # With several replicas, publish a range so each gets a host port.
+      - "4000-4009:4000"
+    stop_grace_period: 40s   # a little more than drain_timeout_ms (30 s)
+
+volumes:
+  pgdata:
