@@ -34,4 +34,9 @@ config :super_pi, Oban,
     {Oban.Plugins.Lifeline, rescue_after: :timer.minutes(30)}
   ]
 
+# Every log line from a conversation process carries its conversation and task id.
+config :logger, :default_formatter,
+  format: "$time $metadata[$level] $message\n",
+  metadata: [:conversation_id, :task_id]
+
 import_config "#{config_env()}.exs"

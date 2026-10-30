@@ -105,6 +105,7 @@ defmodule SuperPi.Conversation.Machine do
     extensions = Keyword.get(opts, :extensions, [])
     llm_responder = Keyword.get(opts, :llm_responder, &default_llm_responder/2)
     tool_executor = Keyword.get(opts, :tool_executor, &default_tool_executor/3)
+    Logger.metadata(conversation_id: conv_id)
     start_mcp_clients(conv_id)
 
     data = %__MODULE__{
@@ -167,6 +168,7 @@ defmodule SuperPi.Conversation.Machine do
 
   def handle_event(:enter, _old_state, :idle, %__MODULE__{} = data) do
     publish_live_state(data.conversation_id, "idle")
+    Logger.metadata(task_id: nil)
     {:keep_state, %__MODULE__{data | active_task_id: nil, steer_preempted: false, pending_tool_calls: [], completed_tool_results: []}}
   end
 
@@ -246,6 +248,7 @@ defmodule SuperPi.Conversation.Machine do
           TaskEngine.create_task(data.conversation_id, "pi.generation", %{"prompt" => transformed_text})
 
         {:ok, running_task} = TaskEngine.start_task(gen_task.id)
+        Logger.metadata(task_id: running_task.id)
 
         next_data = %__MODULE__{
           data
@@ -383,11 +386,13 @@ defmodule SuperPi.Conversation.Machine do
   def handle_event(:internal, {:invoke_llm, payload}, :streaming_llm, %__MODULE__{} = data) do
     ctx = hook_ctx(data)
     responder = data.llm_responder
+    log_metadata = Logger.metadata()
 
     task =
       case Process.whereis(SuperPi.ToolTaskSupervisor) do
         nil ->
           Task.async(fn ->
+            Logger.metadata(log_metadata)
             try do
               responder.(payload, ctx)
             rescue
@@ -399,6 +404,7 @@ defmodule SuperPi.Conversation.Machine do
 
         _pid ->
           Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
+            Logger.metadata(log_metadata)
             try do
               responder.(payload, ctx)
             rescue
@@ -654,8 +660,13 @@ defmodule SuperPi.Conversation.Machine do
             "overwritten_keys" => overwritten_keys
           })
 
+          log_metadata = Logger.metadata()
+
           core_fn = fn exec_args ->
-            case SandboxRunner.run_isolated(fn -> data.tool_executor.(tool_name, exec_args, ctx) end) do
+            case SandboxRunner.run_isolated(fn ->
+                   Logger.metadata(log_metadata)
+                   data.tool_executor.(tool_name, exec_args, ctx)
+                 end) do
               {:ok, %{} = res} ->
                 Map.merge(
                   %{
