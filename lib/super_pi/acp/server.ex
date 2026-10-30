@@ -45,7 +45,6 @@ defmodule SuperPi.ACP.Server do
 
   use GenServer
 
-  require Logger
 
   alias SuperPi.ACP.Session
   alias SuperPi.Auth
@@ -482,14 +481,11 @@ defmodule SuperPi.ACP.Server do
   defp or_not_found({:ok, session}, _id), do: {:ok, session}
   defp or_not_found(:error, id), do: {:error, :not_found, "Session not found: #{id}"}
 
-  # MCP servers that the client hands over. The manager starts them for every conversation of this
-  # process; a server it cannot start is logged and skipped.
+  # MCP servers that the client hands over. The manager starts them and adds their tools to the
+  # catalog. A server that cannot start is logged by the manager and skipped.
   defp apply_mcp_servers(servers) when is_list(servers) and servers != [] do
-    if function_exported?(SuperPi.MCP.Manager, :add_servers, 1) do
-      apply(SuperPi.MCP.Manager, :add_servers, [servers])
-    else
-      Logger.warning("[ACP] #{length(servers)} mcpServers ignored: the MCP manager cannot take servers at run time")
-    end
+    if Application.get_env(:super_pi, :mcp_clients, true), do: SuperPi.MCP.Manager.add_servers(servers)
+    :ok
   end
 
   defp apply_mcp_servers(_), do: :ok

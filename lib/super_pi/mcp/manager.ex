@@ -86,6 +86,40 @@ defmodule SuperPi.MCP.Manager do
     end)
   end
 
+  @doc """
+  Starts MCP servers that a client hands over at run time, in the ACP `mcpServers` shape:
+
+  - stdio: `%{"name", "command", "args", "env" => [%{"name", "value"}]}`
+  - HTTP: `%{"type" => "http" | "sse", "name", "url", "headers" => [%{"name", "value"}]}`
+
+  The servers join the same tool catalog as the configured ones. A server that is already running
+  is left alone, and one that fails to start is logged and skipped. Returns the same list as
+  `ensure_started/1`.
+  """
+  @spec add_servers([map()]) :: [map()]
+  def add_servers(servers) when is_list(servers) do
+    ensure_routes!()
+    timeout = Application.get_env(:super_pi, :mcp_startup_timeout_ms, 10_000)
+
+    for %{"name" => name} = server <- servers, is_binary(name), name != "" do
+      start_server(name, acp_spec(server), timeout)
+    end
+  end
+
+  # ACP lists env and headers as `[{name, value}]`. The configuration file uses a map.
+  defp acp_spec(server) do
+    server
+    |> Map.take(["command", "args", "url"])
+    |> put_pairs("env", server["env"])
+    |> put_pairs("headers", server["headers"])
+  end
+
+  defp put_pairs(spec, key, pairs) when is_list(pairs) and pairs != [] do
+    Map.put(spec, key, Map.new(pairs, fn %{"name" => n, "value" => v} -> {n, v} end))
+  end
+
+  defp put_pairs(spec, _key, _pairs), do: spec
+
   @doc "Names of the tools that MCP servers provide (`mcp__<server>__<tool>`)."
   def tool_names do
     ensure_routes!()

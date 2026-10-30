@@ -3,7 +3,7 @@ defmodule SuperPi.AI.Providers.Gemini do
   Google Gemini provider. Wraps `SuperPi.AI.GeminiClient`.
 
   Serves `gemini-*` and `google/*` models. When a key is configured, it also maps harness
-  names (`super-pi-planner`, `super-pi-fast`, `default`, and so on) to a Gemini model.
+  names (`super-pi-code`, `super-pi-planner`, `default`, and so on) to a Gemini model.
   """
 
   @behaviour SuperPi.AI.Provider

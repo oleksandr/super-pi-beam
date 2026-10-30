@@ -300,4 +300,23 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
       true -> Process.sleep(50) && eventually(fun, tries - 1)
     end
   end
+
+  describe "servers handed over at run time (ACP mcpServers)" do
+    test "an HTTP server with header pairs is started and its tools join the catalog" do
+      fake = server()
+
+      assert [%{server: "acp-http", status: status, tools: tools}] =
+               Manager.add_servers([%{"type" => "http", "name" => "acp-http", "url" => fake.url, "headers" => [%{"name" => "x-test", "value" => "1"}]}])
+
+      assert status in [:started, :running]
+      assert tools > 0
+      assert "mcp__acp-http__echo" in Manager.tool_names()
+      assert Fake.requests(fake) |> Enum.any?(&(header(&1, "x-test") == "1"))
+    end
+
+    test "an entry with no name or no way to start is skipped, a bad one does not raise" do
+      assert [] = Manager.add_servers([%{"command" => "x"}, %{"name" => ""}])
+      assert [%{status: {:error, :no_command_or_url}}] = Manager.add_servers([%{"name" => "nothing"}])
+    end
+  end
 end
