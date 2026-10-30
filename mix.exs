@@ -47,6 +47,8 @@ defmodule SuperPi.MixProject do
       {:bandit, "~> 1.6"},
       {:plug, "~> 1.16"},
       {:jason, "~> 1.4"},
+      {:floki, "~> 0.37"},
+      {:tzdata, "~> 1.2"},
       {:jaxon, "~> 2.0"},
       {:nimble_options, "~> 1.1"},
 
