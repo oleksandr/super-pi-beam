@@ -10,9 +10,12 @@ defmodule SuperPi.AI.Providers.HTTP do
   layer of retries would repeat a request the first one already counted.
   """
 
+  require Logger
+
   alias SuperPi.AI.StreamNormalizer
 
   @default_timeout 120_000
+  @stream_retry_ms 2_000
 
   @spec stream(atom(), String.t(), String.t(), list(), map(), keyword()) ::
           {:ok, map()} | {:retry_after, non_neg_integer()} | {:error, term()}
@@ -43,9 +46,10 @@ defmodule SuperPi.AI.Providers.HTTP do
     {events, next} = StreamNormalizer.feed_chunk(st, chunk)
     Enum.each(events, on_delta)
 
+    # Newest first; `finish/5` reverses once.
     resp
     |> Req.Response.put_private(:normalizer, next)
-    |> Req.Response.put_private(:events, Req.Response.get_private(resp, :events, []) ++ events)
+    |> Req.Response.put_private(:events_rev, Enum.reverse(events, Req.Response.get_private(resp, :events_rev, [])))
   end
 
   defp feed(resp, chunk, _init, _on_delta) do
@@ -56,16 +60,17 @@ defmodule SuperPi.AI.Providers.HTTP do
     st = Req.Response.get_private(resp, :normalizer, init)
     {flushed, final} = StreamNormalizer.flush(st)
     Enum.each(flushed, on_delta)
-    events = Req.Response.get_private(resp, :events, []) ++ flushed
+    events = Enum.reverse(Req.Response.get_private(resp, :events_rev, []), flushed)
 
-    case Enum.find_value(events, fn {:error, err} -> err; _ -> nil end) do
-      nil ->
-        content =
-          case Enum.find_value(Enum.reverse(events), fn {:done, d} -> d; _ -> nil end) do
-            %{content: content} -> content
-            nil -> synthesize(final)
-          end
+    error = Enum.find_value(events, fn {:error, err} -> err; _ -> nil end)
+    done = Enum.find_value(Enum.reverse(events), fn {:done, d} -> d; _ -> nil end)
 
+    case {error, done} do
+      {%{retryable: true} = err, _} ->
+        Logger.warning("[#{provider}] retryable error in the stream: #{inspect(err.reason)}")
+        {:retry_after, @stream_retry_ms}
+
+      {nil, %{content: content}} ->
         {:ok,
          %{
            "role" => "assistant",
@@ -76,13 +81,15 @@ defmodule SuperPi.AI.Providers.HTTP do
            "stop_reason" => final.stop_reason
          }}
 
-      err ->
+      # The connection closed before the terminal event. The blocks may be cut anywhere, a tool
+      # call's arguments too, so nothing of this attempt is used.
+      {nil, nil} ->
+        Logger.warning("[#{provider}] stream ended without its terminal event; retrying")
+        {:retry_after, @stream_retry_ms}
+
+      {err, _} ->
         {:error, {:stream_error, err}}
     end
-  end
-
-  defp synthesize(%StreamNormalizer{blocks: blocks}) do
-    blocks |> Enum.sort_by(fn {idx, _} -> idx end) |> Enum.map(fn {_idx, b} -> Map.delete(b, "raw_json") end)
   end
 
   # `retry-after` is a number of seconds. Capped, so a wrong header cannot stall a turn for an hour.

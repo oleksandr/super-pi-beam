@@ -29,7 +29,7 @@ defmodule SuperPi.Env.SandboxRunner do
     timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
 
     task =
-      Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
+      start_owned(fn ->
         Process.flag(:max_heap_size, %{
           size: max_heap_words,
           kill: true,
@@ -58,6 +58,56 @@ defmodule SuperPi.Env.SandboxRunner do
   end
 
   @doc """
+  Starts `fun` as an unlinked task under `SuperPi.ToolTaskSupervisor` that does not outlive its
+  caller: a watcher process kills the task when the caller exits. A task that runs an OS command
+  sends `{:os_pid, pid}` to the watcher (an arity-1 `fun` gets the watcher pid), and the watcher
+  kills that process tree first. The caller receives `{ref, result}` or `{:DOWN, ref, ...}`, as
+  with `Task.Supervisor.async_nolink/2`.
+
+  Nested tasks chain: cancelling a conversation kills its tool task, which ends the sandbox task
+  under it, which ends the command and its OS processes.
+  """
+  @spec start_owned((-> term()) | (pid() -> term())) :: Task.t()
+  def start_owned(fun) when is_function(fun, 0) or is_function(fun, 1) do
+    owner = self()
+    watcher = spawn(fn -> watch_owner(Process.monitor(owner), nil, nil) end)
+
+    Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
+      # The task announces itself, so the watcher knows it even if the caller dies at once.
+      send(watcher, {:task, self()})
+      if is_function(fun, 1), do: fun.(watcher), else: fun.()
+    end)
+  end
+
+  defp watch_owner(owner_ref, task, os_pid) do
+    receive do
+      {:task, pid} ->
+        Process.monitor(pid)
+        watch_owner(owner_ref, pid, os_pid)
+
+      {:os_pid, pid} ->
+        watch_owner(owner_ref, task, pid)
+
+      {:DOWN, ^owner_ref, :process, _, _} ->
+        kill_process_tree(os_pid)
+        kill_owned_task(task)
+
+      {:DOWN, _ref, :process, ^task, _} ->
+        :ok
+    end
+  end
+
+  defp kill_owned_task(nil) do
+    receive do
+      {:task, pid} -> Process.exit(pid, :kill)
+    after
+      5_000 -> :ok
+    end
+  end
+
+  defp kill_owned_task(pid), do: Process.exit(pid, :kill)
+
+  @doc """
   Executes an external OS command safely using `Exile` streaming with backpressure and `4 MiB` spill-to-disk
   protection (`REQ-SAFE-02`).
   """
@@ -71,14 +121,14 @@ defmodule SuperPi.Env.SandboxRunner do
     parent = self()
 
     task =
-      Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
+      start_owned(fn watcher ->
         Process.flag(:max_heap_size, %{
           size: Keyword.get(opts, :max_heap_words, @default_max_heap_words),
           kill: true,
           error_logger: false
         })
 
-        exec_with_spill(cmd, args, cd, spill_limit, parent)
+        exec_with_spill(cmd, args, cd, spill_limit, [parent, watcher])
       end)
 
     # On timeout, kill the OS process tree before the task. Once the task dies,
@@ -121,7 +171,7 @@ defmodule SuperPi.Env.SandboxRunner do
     end
   end
 
-  defp exec_with_spill(cmd, args, cd, spill_limit, parent) do
+  defp exec_with_spill(cmd, args, cd, spill_limit, report_to) do
     case System.find_executable(cmd) do
       nil ->
         {:error, %{type: "command_not_found", reason: "Executable not found: #{cmd}"}}
@@ -131,7 +181,7 @@ defmodule SuperPi.Env.SandboxRunner do
           {:ok, proc} ->
             case Exile.Process.os_pid(proc) do
               {:ok, os_pid} when is_integer(os_pid) ->
-                send(parent, {:os_pid, os_pid})
+                Enum.each(report_to, &send(&1, {:os_pid, os_pid}))
 
               _ ->
                 :ok

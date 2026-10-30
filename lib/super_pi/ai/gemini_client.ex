@@ -77,12 +77,13 @@ defmodule SuperPi.AI.GeminiClient do
                 on_delta.(ev)
               end)
 
-              all_ev = Req.Response.get_private(resp, :events, []) ++ events
+              # Newest first; reversed once when the stream ends.
+              events_rev = Enum.reverse(events, Req.Response.get_private(resp, :events_rev, []))
 
               resp =
                 resp
                 |> Req.Response.put_private(:normalizer, next_st)
-                |> Req.Response.put_private(:events, all_ev)
+                |> Req.Response.put_private(:events_rev, events_rev)
                 |> Req.Response.put_private(:raw_chunks, Req.Response.get_private(resp, :raw_chunks, "") <> chunk)
 
               {:cont, {req, resp}}
@@ -94,16 +95,20 @@ defmodule SuperPi.AI.GeminiClient do
             st = Req.Response.get_private(resp, :normalizer, normalizer_init)
             {flush_evs, final_st} = StreamNormalizer.flush(st)
             Enum.each(flush_evs, on_delta)
-            events = Req.Response.get_private(resp, :events, []) ++ flush_evs
+            events = Enum.reverse(Req.Response.get_private(resp, :events_rev, []), flush_evs)
 
-            case Enum.find_value(events, fn {:error, err} -> err; _ -> nil end) do
-              nil ->
-                done_payload =
-                  Enum.find_value(Enum.reverse(events), fn
-                    {:done, d} -> d
-                    _ -> nil
-                  end) || synthesize_done_from_state(final_st)
+            error = Enum.find_value(events, fn {:error, err} -> err; _ -> nil end)
+            done = Enum.find_value(Enum.reverse(events), fn {:done, d} -> d; _ -> nil end)
 
+            case {error, done} do
+              {%{retryable: true}, _} ->
+                {:retry_after, 2_000}
+
+              # The stream ended before a `finishReason`: the answer may be cut, so retry it.
+              {nil, nil} ->
+                {:retry_after, 2_000}
+
+              {nil, done_payload} ->
                 {:ok,
                  %{
                    "role" => "assistant",
@@ -113,7 +118,7 @@ defmodule SuperPi.AI.GeminiClient do
                    "usage" => final_st.usage
                  }}
 
-              err ->
+              {err, _} ->
                 {:error, err}
             end
 
@@ -169,7 +174,7 @@ defmodule SuperPi.AI.GeminiClient do
       schema when is_map(schema) and map_size(schema) > 0 ->
         Map.put(base, "generationConfig", %{
           "responseMimeType" => "application/json",
-          "responseSchema" => schema
+          "responseSchema" => to_gemini_schema(schema)
         })
 
       _ ->
@@ -305,101 +310,50 @@ defmodule SuperPi.AI.GeminiClient do
   defp to_gemini_content(_), do: nil
 
   defp to_gemini_function_declaration(%{"name" => name} = tool) do
-    desc = Map.get(tool, "description", "Execute #{name}")
-    params = Map.get(tool, "parameters") || default_schema_for_builtin(name)
-
     %{
       "name" => name,
-      "description" => desc,
-      "parameters" => params
+      "description" => Map.get(tool, "description", "Execute #{name}"),
+      "parameters" => tool |> SuperPi.AI.ToolSchemas.parameters(name) |> to_gemini_schema()
     }
   end
 
-  defp default_schema_for_builtin("read") do
-    %{
-      "type" => "OBJECT",
-      "properties" => %{
-        "path" => %{"type" => "STRING", "description" => "File path to read"}
-      },
-      "required" => ["path"]
-    }
+  # Gemini takes an OpenAPI subset of JSON Schema: upper-case type names, one type per schema,
+  # and no keys outside that subset (`additionalProperties`, `$schema` and the like are refused).
+  @gemini_schema_keys ~w(type format title description nullable enum minItems maxItems minProperties
+                         maxProperties minLength maxLength pattern minimum maximum default example
+                         propertyOrdering required)
+
+  @doc false
+  def to_gemini_schema(%{} = schema) do
+    {type, nullable?} = gemini_type(Map.get(schema, "type"))
+
+    schema
+    |> Map.take(@gemini_schema_keys)
+    |> put_present("type", type)
+    |> then(&if(nullable?, do: Map.put(&1, "nullable", true), else: &1))
+    |> put_present("properties", map_values(Map.get(schema, "properties"), &to_gemini_schema/1))
+    |> put_present("items", if(is_map(schema["items"]), do: to_gemini_schema(schema["items"])))
+    |> put_present("anyOf", if(is_list(schema["anyOf"]), do: Enum.map(schema["anyOf"], &to_gemini_schema/1)))
   end
 
-  defp default_schema_for_builtin("write") do
-    %{
-      "type" => "OBJECT",
-      "properties" => %{
-        "path" => %{"type" => "STRING", "description" => "File path to write"},
-        "content" => %{"type" => "STRING", "description" => "Content to write"}
-      },
-      "required" => ["path", "content"]
-    }
+  def to_gemini_schema(_other), do: %{"type" => "OBJECT", "properties" => %{}}
+
+  defp gemini_type(type) when is_binary(type), do: {String.upcase(type), false}
+
+  defp gemini_type(types) when is_list(types) do
+    case Enum.reject(types, &(&1 == "null")) do
+      [type | _] -> {String.upcase(type), "null" in types}
+      [] -> {nil, true}
+    end
   end
 
-  defp default_schema_for_builtin("edit") do
-    %{
-      "type" => "OBJECT",
-      "properties" => %{
-        "path" => %{"type" => "STRING", "description" => "File path to edit"},
-        "target" => %{"type" => "STRING", "description" => "Exact snippet to replace"},
-        "replacement" => %{"type" => "STRING", "description" => "New replacement text"}
-      },
-      "required" => ["path", "target", "replacement"]
-    }
-  end
+  defp gemini_type(_), do: {nil, false}
 
-  defp default_schema_for_builtin("bash") do
-    %{
-      "type" => "OBJECT",
-      "properties" => %{
-        "command" => %{"type" => "STRING", "description" => "Shell command to execute"}
-      },
-      "required" => ["command"]
-    }
-  end
+  defp map_values(%{} = map, fun), do: Map.new(map, fn {k, v} -> {k, fun.(v)} end)
+  defp map_values(_, _fun), do: nil
 
-  defp default_schema_for_builtin("grep") do
-    %{
-      "type" => "OBJECT",
-      "properties" => %{
-        "pattern" => %{"type" => "STRING", "description" => "Regex pattern"},
-        "path" => %{"type" => "STRING", "description" => "Directory path"}
-      },
-      "required" => ["pattern"]
-    }
-  end
-
-  defp default_schema_for_builtin("find") do
-    %{
-      "type" => "OBJECT",
-      "properties" => %{
-        "path" => %{"type" => "STRING", "description" => "Directory path"}
-      }
-    }
-  end
-
-  defp default_schema_for_builtin("ls") do
-    %{
-      "type" => "OBJECT",
-      "properties" => %{
-        "path" => %{"type" => "STRING", "description" => "Directory path"}
-      }
-    }
-  end
-
-  defp default_schema_for_builtin("tool_search") do
-    %{
-      "type" => "OBJECT",
-      "properties" => %{
-        "query" => %{"type" => "STRING", "description" => "Keyword to search deferred tools"}
-      },
-      "required" => ["query"]
-    }
-  end
-
-  defp default_schema_for_builtin(_) do
-    %{"type" => "OBJECT", "properties" => %{}}
-  end
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
 
   defp normalize_gemini_model(model) when is_binary(model) do
     cleaned =
@@ -420,13 +374,4 @@ defmodule SuperPi.AI.GeminiClient do
   end
 
   defp normalize_gemini_model(_), do: @default_gemini_model
-
-  defp synthesize_done_from_state(%StreamNormalizer{} = st) do
-    ordered =
-      st.blocks
-      |> Enum.sort_by(fn {idx, _} -> idx end)
-      |> Enum.map(fn {_idx, b} -> Map.delete(b, "raw_json") end)
-
-    %{stop_reason: st.stop_reason, content: ordered, usage: st.usage}
-  end
 end

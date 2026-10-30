@@ -62,12 +62,15 @@ defmodule SuperPi.Drain do
     for {id, pid} <- Locator.all(), node(pid) == node(), busy?(pid), do: id
   end
 
+  # A machine that does not answer in time counts as busy: stopping the node under a running turn
+  # costs more than waiting. A machine that is gone is not busy.
   defp busy?(pid) do
     case :gen_statem.call(pid, :get_state, 1_000) do
       {:idle, _data} -> false
       {_state, _data} -> true
     end
   catch
+    :exit, {:timeout, _} -> true
     :exit, _ -> false
   end
 end

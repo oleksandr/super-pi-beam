@@ -68,10 +68,11 @@ defmodule SuperPi.Durable.Context do
 
   @doc """
   Derives the active LLM context for `conversation_id` according to the 10-rule specification.
+  `visible` is the result of `visible_entries_with_graph/1` when the caller already has it.
   """
-  @spec derive(integer()) :: derived_context()
-  def derive(conversation_id) do
-    {all_visible, graph} = visible_entries_with_graph(conversation_id)
+  @spec derive(integer(), {[Entry.t()], Graph.t()} | nil) :: derived_context()
+  def derive(conversation_id, visible \\ nil) do
+    {all_visible, graph} = visible || visible_entries_with_graph(conversation_id)
     {sections, tools} = replay_system_entries(all_visible)
 
     {head_marker, sliced_entries} = apply_head_cutoff(all_visible)
@@ -80,6 +81,7 @@ defmodule SuperPi.Durable.Context do
     messages =
       edited_entries
       |> Enum.flat_map(&project_entry_to_messages/1)
+      |> repair_tool_pairs()
 
     system_prompt =
       sections
@@ -104,9 +106,9 @@ defmodule SuperPi.Durable.Context do
   state. Appends a `"full"` baseline on first request, a `"delta"` entry only when a section or tool
   changed, or nothing when unchanged (preserving LLM prompt cache prefixes).
   """
-  @spec ensure_system_state!(integer(), [map()], [map()]) :: {:unchanged | :full | :delta, Entry.t() | nil}
-  def ensure_system_state!(conversation_id, desired_sections, desired_tools) do
-    {all_visible, _graph} = visible_entries_with_graph(conversation_id)
+  @spec ensure_system_state!(integer(), [map()], [map()], [Entry.t()] | nil) :: {:unchanged | :full | :delta, Entry.t() | nil}
+  def ensure_system_state!(conversation_id, desired_sections, desired_tools, visible \\ nil) do
+    all_visible = visible || conversation_id |> visible_entries_with_graph() |> elem(0)
     system_entries = Enum.filter(all_visible, &(&1.kind == "pi.system"))
 
     norm_sections = normalize_sections(desired_sections)
@@ -252,6 +254,46 @@ defmodule SuperPi.Durable.Context do
     end)
   end
 
+  # Providers refuse a history where a tool call has no result, or where a user message comes
+  # between an assistant's tool calls and their results (Anthropic and OpenAI return 400). The
+  # machine no longer stores such a history, but older conversations can hold one. So the results
+  # of each assistant entry move right after it, in call order, and a missing one is added.
+  defp repair_tool_pairs([]), do: []
+
+  defp repair_tool_pairs([%{"role" => "assistant", "content" => content} = msg | rest]) when is_list(content) do
+    case for(%{"type" => "tool_call", "id" => id} <- content, do: id) do
+      [] ->
+        [msg | repair_tool_pairs(rest)]
+
+      call_ids ->
+        {segment, later} = Enum.split_while(rest, &(&1["role"] != "assistant"))
+        id_set = MapSet.new(call_ids)
+        {results, others} = Enum.split_with(segment, &(&1["role"] == "tool" and MapSet.member?(id_set, &1["tool_call_id"])))
+        by_id = results |> Enum.reverse() |> Map.new(&{&1["tool_call_id"], &1})
+
+        ordered =
+          for %{"type" => "tool_call", "id" => id} = call <- content do
+            Map.get_lazy(by_id, id, fn -> missing_tool_result(call) end)
+          end
+
+        [msg | ordered] ++ others ++ repair_tool_pairs(later)
+    end
+  end
+
+  defp repair_tool_pairs([msg | rest]), do: [msg | repair_tool_pairs(rest)]
+
+  defp missing_tool_result(call) do
+    %{
+      "role" => "tool",
+      "tool_call_id" => call["id"],
+      "name" => call["name"],
+      "is_error" => true,
+      "content" => "Tool call has no result: the turn was interrupted.",
+      "structured_output" => nil,
+      "details" => %{"repaired" => true}
+    }
+  end
+
   defp project_entry_to_messages(%Entry{kind: "pi.message", data: data}), do: [data]
 
   defp project_entry_to_messages(%Entry{kind: "pi.compaction", data: data}) do
@@ -280,11 +322,15 @@ defmodule SuperPi.Durable.Context do
     end)
   end
 
+  # The parameter schema goes to the model, so it must survive. MCP tools name it `input_schema`.
   defp normalize_tools(tools) do
     Enum.map(tools, fn t ->
+      name = to_string(Map.get(t, "name") || Map.get(t, :name))
+
       %{
-        "name" => to_string(Map.get(t, "name") || Map.get(t, :name)),
-        "description" => to_string(Map.get(t, "description") || Map.get(t, :description, ""))
+        "name" => name,
+        "description" => to_string(Map.get(t, "description") || Map.get(t, :description, "")),
+        "parameters" => SuperPi.AI.ToolSchemas.parameters(t, name)
       }
     end)
   end

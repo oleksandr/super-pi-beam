@@ -214,8 +214,13 @@ defmodule SuperPi.AI.AnthropicOpenAITest do
       assert {:retry_after, 60_000} = Anthropic.generate(payload(), [])
     end
 
-    test "an error event in the stream is an error" do
-      serve(:anthropic, [{200, MockLLM.sse([{"error", %{"type" => "error", "error" => %{"type" => "overloaded_error", "message" => "Overloaded"}}}])}])
+    test "an overloaded error event in the stream is retried; another error event is an error" do
+      serve(:anthropic, [
+        {200, MockLLM.sse([{"error", %{"type" => "error", "error" => %{"type" => "overloaded_error", "message" => "Overloaded"}}}])},
+        {200, MockLLM.sse([{"error", %{"type" => "error", "error" => %{"type" => "invalid_request_error", "message" => "Bad"}}}])}
+      ])
+
+      assert {:retry_after, 2_000} = Anthropic.generate(payload(), [])
       assert {:error, {:stream_error, _}} = Anthropic.generate(payload(), [])
     end
 
@@ -349,6 +354,57 @@ defmodule SuperPi.AI.AnthropicOpenAITest do
       refute OpenAI.handles?("claude-x")
       refute OpenAI.handles?("ollama-llama")
       assert "gpt-5" in Enum.map(OpenAI.models(), & &1["id"])
+    end
+  end
+
+  describe "truncated streams and in-stream errors (Kanban Tasks 51 and 56)" do
+    test "an Anthropic stream cut in the middle of a tool call is retried and never returns the call" do
+      cut = anthropic_tool_use() |> Enum.take(6)
+      serve(:anthropic, [{200, MockLLM.sse(cut)}])
+      assert {:retry_after, 2_000} = Anthropic.generate(payload(), [])
+    end
+
+    test "an Anthropic stream with all its blocks but no message_stop is retried" do
+      serve(:anthropic, [{200, MockLLM.sse(Enum.drop(anthropic_text(["Hel", "lo"]), -1))}])
+      assert {:retry_after, 2_000} = Anthropic.generate(payload(), [])
+    end
+
+    test "tool arguments that are not valid JSON at message_stop are retried, not run" do
+      events =
+        Enum.map(anthropic_tool_use(), fn
+          {"content_block_delta", %{"index" => 1, "delta" => %{"partial_json" => " \"mix.exs\"}"}} = ev} ->
+            {"content_block_delta", put_in(ev, ["delta", "partial_json"], " \"mix.exs\"")}
+
+          other ->
+            other
+        end)
+
+      serve(:anthropic, [{200, MockLLM.sse(events)}])
+      assert {:retry_after, 2_000} = Anthropic.generate(payload(), [])
+    end
+
+    test "an OpenAI stream without [DONE] is retried" do
+      serve(:openai, [{200, MockLLM.sse(Enum.take(openai_tool_call(), 2))}])
+      assert {:retry_after, 2_000} = OpenAI.generate(payload(%{model: "gpt-5"}), [])
+    end
+
+    test "an OpenAI error inside a 200 stream: server errors are retried, others are errors" do
+      serve(:openai, [
+        {200, MockLLM.sse([openai_chunk(%{"content" => "Hi"}), %{"error" => %{"message" => "The server had an error", "type" => "server_error"}}])},
+        {200, MockLLM.sse([%{"error" => %{"message" => "Invalid", "type" => "invalid_request_error"}}])}
+      ])
+
+      assert {:retry_after, 2_000} = OpenAI.generate(payload(%{model: "gpt-5"}), [])
+      assert {:error, {:stream_error, _}} = OpenAI.generate(payload(%{model: "gpt-5"}), [])
+    end
+
+    test "a tool call with no arguments at all has empty arguments" do
+      events =
+        anthropic_tool_use()
+        |> Enum.reject(&match?({"content_block_delta", %{"index" => 1}}, &1))
+
+      serve(:anthropic, [{200, MockLLM.sse(events)}])
+      assert {:ok, %{"content" => [_text, %{"type" => "tool_call", "arguments" => %{}}]}} = Anthropic.generate(payload(), [])
     end
   end
 

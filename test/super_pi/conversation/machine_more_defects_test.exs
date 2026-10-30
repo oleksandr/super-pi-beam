@@ -32,20 +32,21 @@ defmodule SuperPi.Conversation.MachineMoreDefectsTest do
     Repo.all(from t in TaskSchema, where: t.conversation_id == ^conv_id and t.kind == "pi.generation")
   end
 
-  # Waits until `pid` has at least one message queued (the blocked machine cannot consume it).
-  defp wait_for_queued_message(pid, tries \\ 200) do
-    {:message_queue_len, len} = Process.info(pid, :message_queue_len)
+  # Waits until the machine holds the steer text. The machine answers a steer at once and stores
+  # the text when the running step ends.
+  defp wait_for_steer(pid, tries \\ 200) do
+    {_state, data} = Machine.get_state(pid)
 
     cond do
-      len >= 1 ->
+      data.steer_messages != [] ->
         :ok
 
       tries == 0 ->
-        flunk("steer call never reached the machine mailbox")
+        flunk("steer never reached the machine")
 
       true ->
         Process.sleep(5)
-        wait_for_queued_message(pid, tries - 1)
+        wait_for_steer(pid, tries - 1)
     end
   end
 
@@ -97,7 +98,7 @@ defmodule SuperPi.Conversation.MachineMoreDefectsTest do
       assert_receive {:responder_started, responder_pid}, 5_000
 
       steer = Task.async(fn -> submit(pid, "STEER-ME", mode: :steer, timeout: 10_000) end)
-      wait_for_queued_message(pid)
+      wait_for_steer(pid)
 
       send(responder_pid, :release)
       Task.await(first, 10_000)
@@ -148,7 +149,7 @@ defmodule SuperPi.Conversation.MachineMoreDefectsTest do
       assert_receive {:executed, "a", tool_pid}, 5_000
 
       steer = Task.async(fn -> submit(pid, "STEER-ME", mode: :steer, timeout: 10_000) end)
-      wait_for_queued_message(pid)
+      wait_for_steer(pid)
 
       send(tool_pid, :release)
       Task.await(first, 10_000)

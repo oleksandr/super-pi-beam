@@ -212,7 +212,7 @@ defmodule SuperPi.Gateway.Router do
         # 4. Start or update conversation machine with harness extensions
         extensions = Harness.remote_extensions(harness)
 
-        pid = ensure_machine_started!(conv_id, extensions)
+        pid = SuperPi.Conversation.Locator.ensure_started!(conv_id, extensions, set_extensions: true)
 
         # 5. Handle Streaming vs Non-Streaming
         if stream? do
@@ -272,12 +272,47 @@ defmodule SuperPi.Gateway.Router do
       not Enum.all?(messages, &is_map/1) ->
         {:error, 400, "Each item in 'messages' must be an object"}
 
+      bad_id = invalid_tool_call_arguments(messages) ->
+        {:error, 400, "invalid_tool_call_arguments",
+         "messages[].tool_calls[].function.arguments of tool call '#{bad_id}' is not a JSON object string"}
+
       true ->
         :ok
     end
   end
 
   defp validate_chat_params(_), do: {:error, 400, "Request body must be a JSON object"}
+
+  # The id of the first assistant tool call whose arguments do not decode to a JSON object, or nil.
+  defp invalid_tool_call_arguments(messages) do
+    Enum.find_value(messages, fn
+      %{"role" => "assistant", "tool_calls" => calls} when is_list(calls) ->
+        Enum.find_value(calls, fn tc ->
+          args = get_in(tc, ["function", "arguments"])
+          if match?({:ok, _}, decode_tool_arguments(args)), do: nil, else: Map.get(tc, "id") || "unknown"
+        end)
+
+      _ ->
+        nil
+    end)
+  end
+
+  # OpenAI sends tool call arguments as a JSON string. Stored arguments are always a map.
+  defp decode_tool_arguments(args) when is_map(args), do: {:ok, args}
+  defp decode_tool_arguments(nil), do: {:ok, %{}}
+
+  defp decode_tool_arguments(args) when is_binary(args) do
+    if String.trim(args) == "" do
+      {:ok, %{}}
+    else
+      case Jason.decode(args) do
+        {:ok, %{} = decoded} -> {:ok, decoded}
+        _ -> :error
+      end
+    end
+  end
+
+  defp decode_tool_arguments(_), do: :error
 
   defp send_json(conn, status, data) do
     conn
@@ -658,12 +693,15 @@ defmodule SuperPi.Gateway.Router do
                 if is_list(tool_calls) do
                   Enum.reduce(tool_calls, content_blocks, fn tc, acc ->
                     func = Map.get(tc, "function", %{})
+                    # Checked in `validate_chat_params/1`.
+                    {:ok, args} = decode_tool_arguments(Map.get(func, "arguments"))
+
                     acc ++ [
                       %{
                         "type" => "tool_call",
                         "id" => Map.get(tc, "id"),
                         "name" => Map.get(func, "name"),
-                        "arguments" => Map.get(func, "arguments")
+                        "arguments" => args
                       }
                     ]
                   end)
@@ -671,13 +709,7 @@ defmodule SuperPi.Gateway.Router do
                   content_blocks
                 end
 
-              entry_data = %{
-                "role" => "assistant",
-                "content" => content_blocks
-              }
-
-              entry_data = if tool_calls, do: Map.put(entry_data, "tool_calls", tool_calls), else: entry_data
-              Storage.append_entry!(conv_id, "pi.message", entry_data)
+              Storage.append_entry!(conv_id, "pi.message", %{"role" => "assistant", "content" => content_blocks})
 
             "tool" ->
               Storage.append_entry!(conv_id, "pi.message", %{
@@ -724,22 +756,10 @@ defmodule SuperPi.Gateway.Router do
 
   defp extract_content_text(_), do: ""
 
-  defp ensure_machine_started!(conv_id, extensions) do
-    case SuperPi.Conversation.Locator.whereis(conv_id) do
-      pid when is_pid(pid) ->
-        Machine.set_extensions(pid, extensions)
-        pid
-
-      nil ->
-        {:ok, pid} = SuperPi.Conversation.Locator.ensure_started(conv_id, extensions: extensions)
-        pid
-    end
-  end
-
   # --- Non-Streaming Execution ---
 
   defp handle_sync_completion(conn, conv_id, pid, user_prompt, model) do
-    case safe_machine_submit(pid, user_prompt, mode: :queue, timeout: 120_000, otel_ctx: SuperPi.Telemetry.current_ctx()) do
+    case Machine.safe_submit(pid, user_prompt, mode: :queue, timeout: 120_000, otel_ctx: SuperPi.Telemetry.current_ctx()) do
       {:ok, assistant_msg} ->
         reply_text =
           case assistant_msg do
@@ -797,14 +817,6 @@ defmodule SuperPi.Gateway.Router do
     end
   end
 
-  defp safe_machine_submit(pid, prompt, opts) do
-    try do
-      Machine.submit(pid, prompt, opts)
-    catch
-      :exit, reason -> {:error, reason}
-    end
-  end
-
   # --- Streaming Execution (Server-Sent Events) ---
 
   defp handle_streaming_completion(conn, conv_id, pid, user_prompt, model) do
@@ -852,7 +864,7 @@ defmodule SuperPi.Gateway.Router do
     # Launch turn asynchronously
     task =
       Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
-        safe_machine_submit(pid, user_prompt, mode: :queue, timeout: 300_000, otel_ctx: otel_ctx)
+        Machine.safe_submit(pid, user_prompt, mode: :queue, timeout: 300_000, otel_ctx: otel_ctx)
       end)
 
     try do

@@ -34,7 +34,9 @@ defmodule SuperPi.Durable.ContextTest do
             %{"id" => "git", "content" => step.git}
           ]
 
-          tools = Enum.map(step.tools, &%{"name" => &1, "description" => "Tool #{&1}"})
+          # Each tool keeps its parameter schema; a built-in without one gets the built-in schema.
+          tools =
+            Enum.map(step.tools, &%{"name" => &1, "description" => "Tool #{&1}", "parameters" => SuperPi.AI.ToolSchemas.for_tool(&1)})
 
           {mode, _entry} = Context.ensure_system_state!(conv.id, sections, tools)
 

@@ -9,7 +9,7 @@ defmodule SuperPi.Conversation.Machine do
   - `:idle` — Accepts `submit/3` (`:queue`, `:steer`, `:write`) and manual `compact/2`.
   - `:preparing_request` — Runs `before_agent_start`, derives context (`Context.derive/1`), runs `before_request` and `before_provider_request`.
   - `:streaming_llm` — Streams or invokes the configured `llm_responder` and normalizes events; handles mid-stream `:steer` preemption.
-  - `:executing_tools` — Runs tool calls through `before_tool` -> `wrap_tool` -> `SandboxRunner` -> `after_tool`, then `after_tools`; handles mid-batch `:steer` preemption by skipping remaining queued tools in the batch.
+  - `:executing_tools` — Runs tool calls one at a time: `before_tool` in the machine, then `wrap_tool` -> `SandboxRunner` -> `after_tool` in a task, so the machine still answers `cancel`, `steer` and `get_state` while a tool runs. Then `after_tools`. A `:steer` lets the running tool finish and skips the rest of the batch.
   - `:sleeping_backoff` — Pauses turn execution when provider rate-limits/retries occur (`TaskEngine.sleep_until/3`).
   - `:compacting` — Runs `before_compact` or default compaction and records `pi.compaction` with `head_entry_id`.
   - `:settling_run` — Runs `after_run` verification gate; either loops back to `:preparing_request` (`{:continue, prompt}`) or completes the durable `pi.generation` task and returns to `:idle`.
@@ -17,9 +17,12 @@ defmodule SuperPi.Conversation.Machine do
 
   @behaviour :gen_statem
 
+  @steer_skip_text "Tool call skipped: the user steered the conversation."
+
   require Logger
 
   alias SuperPi.Durable.{Context, DeferredFlusher, Doc, Storage, TaskEngine}
+  alias SuperPi.Durable.Schemas.Task, as: TaskSchema
   alias SuperPi.Env.SandboxRunner
   alias SuperPi.Extension
 
@@ -29,11 +32,15 @@ defmodule SuperPi.Conversation.Machine do
     :llm_responder,
     :tool_executor,
     :active_llm_task,
+    # %{task: Task.t(), call: tool_call} while a tool runs.
+    :active_tool,
     retry_count: 0,
     extensions: [],
     pending_tool_calls: [],
     completed_tool_results: [],
     steer_preempted: false,
+    # Steer texts, newest first, stored when the running step ends (`flush_steer_messages/1`).
+    steer_messages: [],
     last_assistant_message: nil,
     reply_from: nil,
     turn_span: nil,
@@ -95,11 +102,22 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   @doc """
-  Cancels any active running turn, terminating active LLM task / tool execution,
-  recording a cancelled state, replying to any waiting submit caller, and returning to :idle.
+  Cancels the running turn: stops the LLM request or the running tool (with its OS processes),
+  records a "cancelled" result for every tool call without a result, marks the durable task
+  `cancelled`, replies `{:error, :cancelled}` to the waiting submit caller and returns to `:idle`.
   """
   def cancel(pid_or_via) do
     :gen_statem.cast(pid_or_via, :cancel)
+  end
+
+  @doc """
+  `submit/3` for entry points (gateway, RPC): a machine that exits or a call that times out is
+  `{:error, reason}`, not an exit of the caller.
+  """
+  def safe_submit(pid_or_via, text, opts \\ []) do
+    submit(pid_or_via, text, opts)
+  catch
+    :exit, reason -> {:error, reason}
   end
 
   @doc """
@@ -112,10 +130,13 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   @doc """
-  Triggers manual or threshold compaction on the conversation.
+  Runs manual compaction. During a turn the request waits until the conversation is idle, so a
+  compaction never lands between a tool call and its result. `opts[:timeout]` (default 30 s)
+  bounds the wait. Returns `{:ok, :noop}`, `{:ok, :cancelled}` or `{:ok, result}`.
   """
   def compact(pid_or_via, opts \\ []) do
-    :gen_statem.call(pid_or_via, {:compact, opts}, 30_000)
+    {timeout, opts} = Keyword.pop(opts, :timeout, 30_000)
+    :gen_statem.call(pid_or_via, {:compact, opts}, timeout)
   end
 
   @doc """
@@ -247,6 +268,8 @@ defmodule SuperPi.Conversation.Machine do
        data
        | active_task_id: nil,
          steer_preempted: false,
+         steer_messages: [],
+         active_tool: nil,
          pending_tool_calls: [],
          completed_tool_results: [],
          turn_span: nil,
@@ -268,16 +291,24 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   def handle_event(:cast, :cancel, _state, %__MODULE__{} = data) do
-    if data.active_llm_task do
-      try do
-        Task.shutdown(data.active_llm_task, :brutal_kill)
-      rescue
-        _ -> :ok
+    shutdown_task(data.active_llm_task)
+
+    # Killing the tool task ends its sandbox task and the OS processes under it.
+    running_call =
+      case data.active_tool do
+        %{task: task, call: call} ->
+          shutdown_task(task)
+          [call]
+
+        nil ->
+          []
       end
-    end
+
+    record_skipped_results(data.conversation_id, running_call ++ data.pending_tool_calls, "Tool call cancelled by the user.")
+    data = flush_steer_messages(data)
 
     if data.active_task_id do
-      TaskEngine.fail_task(data.active_task_id, %{"error" => "cancelled"})
+      data.active_task_id |> TaskEngine.cancel_task(%{"reason" => "cancelled"}) |> check_task(data.active_task_id, "cancel")
     end
 
     replies = if data.reply_from, do: [{:reply, data.reply_from, {:error, :cancelled}}], else: []
@@ -289,9 +320,9 @@ defmodule SuperPi.Conversation.Machine do
          turn_status: {:error, :cancelled},
          active_task_id: nil,
          active_llm_task: nil,
+         active_tool: nil,
          pending_tool_calls: [],
          completed_tool_results: [],
-         steer_preempted: false,
          retry_count: 0
      }, replies}
   end
@@ -355,8 +386,9 @@ defmodule SuperPi.Conversation.Machine do
     {:next_state, :compacting, %__MODULE__{data | reply_from: from}, [{:next_event, :internal, {:run_compaction, opts}}]}
   end
 
-  def handle_event({:call, from}, {:compact, _opts}, state, _data) when state != :idle do
-    {:keep_state_and_data, [{:reply, from, {:error, :busy}}]}
+  # Compaction during a turn could cut between a tool call and its result: wait for `:idle`.
+  def handle_event({:call, _from}, {:compact, _opts}, state, _data) when state != :idle do
+    {:keep_state_and_data, [:postpone]}
   end
 
   # --- Queued `:queue` submissions while busy use `:postpone` (`REQ-FSM-03`) ---
@@ -366,46 +398,28 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   # --- Preemptive `:steer` submission while executing tools or streaming (`REQ-FSM-03`) ---
+  # The running step finishes first. The steer text is stored after the assistant entry and the
+  # results of all its tool calls, so no user entry ever splits a tool call from its result.
   def handle_event({:call, from}, {:submit, :steer, text, _opts}, busy_state, %__MODULE__{} = data)
-      when busy_state in [:streaming_llm, :executing_tools, :sleeping_backoff] do
-    Storage.append_entry!(data.conversation_id, "pi.message", %{
-      "role" => "user",
-      "content" => [%{"type" => "text", "text" => text}],
-      "steer" => true
-    })
+      when busy_state in [:streaming_llm, :executing_tools] do
+    {:keep_state, %__MODULE__{data | steer_preempted: true, steer_messages: [text | data.steer_messages]},
+     [{:reply, from, {:ok, :steered}}]}
+  end
 
-    # For any pending tool calls that will be skipped, record synthetic canceled results
-    # so every assistant tool call is paired with a tool result
-    Enum.each(data.pending_tool_calls, fn tc ->
-      tool_id = Map.get(tc, "id") || "unknown"
-      tool_name = Map.get(tc, "name") || "unknown"
+  # The rate-limited attempt stored no assistant entry, so the steer text goes in now and the
+  # turn starts again at once. The task leaves `sleeping`; its wake job then does nothing.
+  def handle_event({:call, from}, {:submit, :steer, text, _opts}, :sleeping_backoff, %__MODULE__{} = data) do
+    case data.active_task_id |> TaskEngine.start_task() |> check_task(data.active_task_id, "resume after steer") do
+      :ok ->
+        data = flush_steer_messages(%__MODULE__{data | steer_messages: [text | data.steer_messages]})
+        {:next_state, :preparing_request, data, [{:reply, from, {:ok, :steered}}, {:next_event, :internal, :prepare}]}
 
-      Storage.append_entry!(data.conversation_id, "pi.message", %{
-        "role" => "tool",
-        "tool_call_id" => tool_id,
-        "name" => tool_name,
-        "is_error" => true,
-        "content" => "Tool execution skipped due to user steering.",
-        "structured_output" => nil,
-        "details" => %{"skipped" => true}
-      })
-    end)
+      {:error, reason} ->
+        {:next_state, :idle, data, actions} =
+          finish_run_with_error(%__MODULE__{data | steer_messages: [text | data.steer_messages]}, {:task_transition_failed, reason})
 
-    next_state =
-      if busy_state == :sleeping_backoff do
-        :preparing_request
-      else
-        busy_state
-      end
-
-    actions =
-      if busy_state == :sleeping_backoff do
-        [{:reply, from, {:ok, :steered}}, {:next_event, :internal, :prepare}]
-      else
-        [{:reply, from, {:ok, :steered}}]
-      end
-
-    {:next_state, next_state, %__MODULE__{data | steer_preempted: true, pending_tool_calls: []}, actions}
+        {:next_state, :idle, data, [{:reply, from, {:ok, :steered}} | actions]}
+    end
   end
 
   # Wait for `:steer` if in other transitional states
@@ -438,9 +452,11 @@ defmodule SuperPi.Conversation.Machine do
 
     # Only tools that the workspace can serve are offered (`SuperPi.Env.Workspace`).
     tools = SuperPi.Env.Workspace.offered_tools(Map.get(mutated_agent, "tools", []), mutated_agent)
-    Context.ensure_system_state!(data.conversation_id, sections, tools)
 
-    derived = Context.derive(data.conversation_id)
+    # One read of the history serves the system-state check and the derivation.
+    {visible, graph} = Context.visible_entries_with_graph(data.conversation_id)
+    {_change, system_entry} = Context.ensure_system_state!(data.conversation_id, sections, tools, visible)
+    derived = Context.derive(data.conversation_id, {visible ++ List.wrap(system_entry), graph})
     derived = Extension.run_before_request(data.extensions, derived, ctx)
 
     effective_payload_model =
@@ -456,11 +472,15 @@ defmodule SuperPi.Conversation.Machine do
 
     case Extension.run_before_provider_request(data.extensions, provider_payload, ctx) do
       {:ok, final_payload} ->
-        if data.active_task_id do
-          TaskEngine.checkpoint_task(data.active_task_id, "streaming_llm", %{"model" => final_payload.model})
-        end
+        checkpoint =
+          if data.active_task_id,
+            do: data.active_task_id |> TaskEngine.checkpoint_task("streaming_llm", %{"model" => final_payload.model}) |> check_task(data.active_task_id, "checkpoint"),
+            else: :ok
 
-        {:next_state, :streaming_llm, data, [{:next_event, :internal, {:invoke_llm, final_payload}}]}
+        case checkpoint do
+          :ok -> {:next_state, :streaming_llm, data, [{:next_event, :internal, {:invoke_llm, final_payload}}]}
+          {:error, reason} -> finish_run_with_error(data, {:task_transition_failed, reason})
+        end
 
       {:abort, reason} ->
         finish_run_with_error(data, reason)
@@ -482,37 +502,18 @@ defmodule SuperPi.Conversation.Machine do
     model = Map.get(payload, :model, "unknown")
 
     task =
-      case Process.whereis(SuperPi.ToolTaskSupervisor) do
-        nil ->
-          Task.async(fn ->
-            Logger.metadata(log_metadata)
-            SuperPi.Telemetry.attach(otel_ctx)
+      SandboxRunner.start_owned(fn ->
+        Logger.metadata(log_metadata)
+        SuperPi.Telemetry.attach(otel_ctx)
 
-            try do
-              SuperPi.Telemetry.llm_span(model, fn -> responder.(payload, ctx) end)
-            rescue
-              e -> {:error, {:raised, e}}
-            catch
-              :exit, reason -> {:error, {:exit, reason}}
-            end
-          end)
-
-        _pid ->
-          Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
-            Logger.metadata(log_metadata)
-            SuperPi.Telemetry.attach(otel_ctx)
-
-            try do
-              SuperPi.Telemetry.llm_span(model, fn -> responder.(payload, ctx) end)
-            rescue
-              e -> {:error, {:raised, e}}
-            catch
-              :exit, reason -> {:error, {:exit, reason}}
-            end
-          end)
-      end
-
-    Process.sleep(40)
+        try do
+          SuperPi.Telemetry.llm_span(model, fn -> responder.(payload, ctx) end)
+        rescue
+          e -> {:error, {:raised, e}}
+        catch
+          :exit, reason -> {:error, {:exit, reason}}
+        end
+      end)
 
     {:keep_state, %__MODULE__{data | active_llm_task: task}}
   end
@@ -524,20 +525,24 @@ defmodule SuperPi.Conversation.Machine do
 
     case task_res do
       {:ok, assistant_msg} ->
+        usage = Map.get(assistant_msg, "usage") || %{}
+        record_usage!(next_data.conversation_id, usage)
+
+        # `after_response` runs before tool dispatch: what it returns is stored and dispatched.
+        assistant_msg =
+          try do
+            case Extension.run_after_response(next_data.extensions, assistant_msg, ctx) do
+              %{} = msg -> msg
+              _ -> assistant_msg
+            end
+          rescue
+            _ -> assistant_msg
+          end
+
         content =
           case Map.get(assistant_msg, "content") do
             list when is_list(list) -> list
             _ -> []
-          end
-
-        usage = Map.get(assistant_msg, "usage") || %{}
-        record_usage!(next_data.conversation_id, usage)
-
-        assistant_msg =
-          try do
-            Extension.run_after_response(next_data.extensions, assistant_msg, ctx)
-          rescue
-            _ -> assistant_msg
           end
 
         Storage.append_entry!(next_data.conversation_id, "pi.message", %{
@@ -554,7 +559,9 @@ defmodule SuperPi.Conversation.Machine do
 
         cond do
           next_data.steer_preempted ->
-            {:next_state, :preparing_request, %__MODULE__{next_data | steer_preempted: false}, [{:next_event, :internal, :prepare}]}
+            record_skipped_results(next_data.conversation_id, tool_calls, @steer_skip_text)
+
+            {:next_state, :preparing_request, flush_steer_messages(next_data), [{:next_event, :internal, :prepare}]}
 
           tool_calls != [] ->
             if next_data.active_task_id do
@@ -573,11 +580,14 @@ defmodule SuperPi.Conversation.Machine do
         end
 
       {:retry_after, delay_ms} ->
+        # Watchers may already hold text deltas of this attempt. The next attempt streams its own.
+        publish_stream_event(next_data.conversation_id, %{"type" => "stream_reset", "retry_in_ms" => delay_ms})
+
         if next_data.retry_count < 3 do
           wake_at = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
 
           if next_data.active_task_id do
-            TaskEngine.sleep_until(next_data.active_task_id, wake_at, %{"phase" => "backoff"})
+            next_data.active_task_id |> TaskEngine.sleep_until(wake_at, %{"phase" => "backoff"}) |> check_task(next_data.active_task_id, "sleep")
           end
 
           {:next_state, :sleeping_backoff, %__MODULE__{next_data | retry_count: next_data.retry_count + 1},
@@ -586,6 +596,8 @@ defmodule SuperPi.Conversation.Machine do
           if next_data.active_task_id do
             TaskEngine.fail_task(next_data.active_task_id, %{"error" => "Rate limit retry cap exceeded (3 attempts)"})
           end
+
+          next_data = flush_steer_messages(next_data)
 
           actions =
             if next_data.reply_from do
@@ -609,6 +621,8 @@ defmodule SuperPi.Conversation.Machine do
           TaskEngine.fail_task(next_data.active_task_id, %{"error" => err_msg})
         end
 
+        next_data = flush_steer_messages(next_data)
+
         actions =
           if next_data.reply_from do
             [{:reply, next_data.reply_from, {:error, err_msg}}]
@@ -621,7 +635,7 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   def handle_event(:info, {:DOWN, ref, :process, _pid, reason}, :streaming_llm, %__MODULE__{active_llm_task: %Task{ref: ref}} = data) do
-    next_data = %__MODULE__{data | active_llm_task: nil}
+    next_data = flush_steer_messages(%__MODULE__{data | active_llm_task: nil})
 
     if next_data.active_task_id do
       TaskEngine.fail_task(next_data.active_task_id, %{"error" => inspect(reason)})
@@ -645,12 +659,15 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   def handle_event(:state_timeout, :wake_from_backoff, :sleeping_backoff, %__MODULE__{} = data) do
-    if data.active_task_id do
-      TaskEngine.wake_sleeping_task(data.active_task_id)
-      TaskEngine.start_task(data.active_task_id)
-    end
+    resumed =
+      if data.active_task_id,
+        do: data.active_task_id |> TaskEngine.start_task() |> check_task(data.active_task_id, "wake"),
+        else: :ok
 
-    {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
+    case resumed do
+      :ok -> {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
+      {:error, reason} -> finish_run_with_error(data, {:task_transition_failed, reason})
+    end
   end
 
   # --- State: :executing_tools ---
@@ -662,9 +679,11 @@ defmodule SuperPi.Conversation.Machine do
 
   def handle_event(event_type, :next_tool, :executing_tools, %__MODULE__{steer_preempted: true} = data)
       when event_type in [:internal, :info] do
-    # Steer preemption arrived mid-batch: skip remaining tools and immediately start next turn
-    {:next_state, :preparing_request, %__MODULE__{data | steer_preempted: false, pending_tool_calls: []},
-     [{:next_event, :internal, :prepare}]}
+    # A steer arrived mid-batch: the rest of the batch gets "skipped" results, then the steer
+    # text goes in and the next request starts.
+    record_skipped_results(data.conversation_id, data.pending_tool_calls, @steer_skip_text)
+    data = flush_steer_messages(%__MODULE__{data | pending_tool_calls: []})
+    {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
   end
 
   def handle_event(event_type, :next_tool, :executing_tools, %__MODULE__{pending_tool_calls: []} = data)
@@ -709,12 +728,13 @@ defmodule SuperPi.Conversation.Machine do
     end
   end
 
-  def handle_event(event_type, :next_tool, :executing_tools, %__MODULE__{pending_tool_calls: [tc | rest]} = data)
+  def handle_event(event_type, :next_tool, :executing_tools, %__MODULE__{pending_tool_calls: [tc | rest], active_tool: nil} = data)
       when event_type in [:internal, :info] do
     ctx = hook_ctx(data)
     tool_name = Map.get(tc, "name", "unknown")
     tool_id = Map.get(tc, "id", "call_0")
     raw_args = Map.get(tc, "arguments", %{})
+    data = %__MODULE__{data | pending_tool_calls: rest}
 
     before_tool_res =
       try do
@@ -723,118 +743,72 @@ defmodule SuperPi.Conversation.Machine do
         e -> {:block, "Extension error: #{Exception.message(e)}"}
       end
 
-    tool_result =
-      case before_tool_res do
-        {:block, reason} ->
-          publish_stream_event(data.conversation_id, %{
-            "type" => "tool_blocked",
-            "tool_call_id" => tool_id,
-            "name" => tool_name,
-            "reason" => reason
-          })
+    case before_tool_res do
+      {:block, reason} ->
+        publish_stream_event(data.conversation_id, %{
+          "type" => "tool_blocked",
+          "tool_call_id" => tool_id,
+          "name" => tool_name,
+          "reason" => reason
+        })
 
-          %{
-            "tool_call_id" => tool_id,
-            "name" => tool_name,
-            "is_error" => true,
-            "output" => "Blocked by extension: #{reason}",
-            "structured_output" => nil,
-            "details" => %{"blocked" => true}
-          }
+        finish_tool(data, %{
+          "tool_call_id" => tool_id,
+          "name" => tool_name,
+          "is_error" => true,
+          "output" => "Blocked by extension: #{reason}",
+          "structured_output" => nil,
+          "details" => %{"blocked" => true}
+        })
 
-        decision when elem(decision, 0) in [:allow, :allow_overwritten] ->
-          {validated_args, overwritten_keys} =
-            case decision do
-              {:allow, a} -> {a, []}
-              {:allow_overwritten, a, keys} -> {a, keys}
-            end
-
-          publish_stream_event(data.conversation_id, %{
-            "type" => "tool_started",
-            "tool_call_id" => tool_id,
-            "name" => tool_name,
-            "arguments" => validated_args,
-            "overwritten_keys" => overwritten_keys
-          })
-
-          log_metadata = Logger.metadata()
-          otel_ctx = SuperPi.Telemetry.current_ctx()
-
-          core_fn = fn exec_args ->
-            case SandboxRunner.run_isolated(fn ->
-                   Logger.metadata(log_metadata)
-                   SuperPi.Telemetry.attach(otel_ctx)
-                   SuperPi.Telemetry.tool_span(tool_name, fn -> data.tool_executor.(tool_name, exec_args, ctx) end)
-                 end) do
-              {:ok, %{} = res} ->
-                Map.merge(
-                  %{
-                    "tool_call_id" => tool_id,
-                    "name" => tool_name,
-                    "is_error" => false,
-                    "output" => "",
-                    "structured_output" => nil,
-                    "details" => %{}
-                  },
-                  res
-                )
-
-              {:error, err} ->
-                %{
-                  "tool_call_id" => tool_id,
-                  "name" => tool_name,
-                  "is_error" => true,
-                  "output" => "Tool execution error: #{inspect(err)}",
-                  "structured_output" => nil,
-                  "details" => err
-                }
-            end
+      decision when elem(decision, 0) in [:allow, :allow_overwritten] ->
+        {validated_args, overwritten_keys} =
+          case decision do
+            {:allow, a} -> {a, []}
+            {:allow_overwritten, a, keys} -> {a, keys}
           end
 
-          wrapped_res = Extension.run_wrap_tool(data.extensions, tool_name, validated_args, core_fn, ctx)
-          final_res = Extension.run_after_tool(data.extensions, tool_name, validated_args, wrapped_res, ctx)
+        publish_stream_event(data.conversation_id, %{
+          "type" => "tool_started",
+          "tool_call_id" => tool_id,
+          "name" => tool_name,
+          "arguments" => validated_args,
+          "overwritten_keys" => overwritten_keys
+        })
 
-          final_res =
-            if overwritten_keys != [] do
-              notice = "[Hook Notice: PreToolUse rewrote tool arguments for keys: #{Enum.join(overwritten_keys, ", ")}]\n"
-              Map.update(final_res, "output", notice, &(notice <> to_string(&1)))
-            else
-              final_res
-            end
+        log_metadata = Logger.metadata()
+        otel_ctx = SuperPi.Telemetry.current_ctx()
 
-          publish_stream_event(data.conversation_id, %{
-            "type" => "tool_completed",
-            "tool_call_id" => tool_id,
-            "name" => tool_name,
-            "is_error" => Map.get(final_res, "is_error", false),
-            "output" => Map.get(final_res, "output", "")
-          })
+        task =
+          SandboxRunner.start_owned(fn ->
+            Logger.metadata(log_metadata)
+            SuperPi.Telemetry.attach(otel_ctx)
+            run_tool_pipeline(data, tool_id, tool_name, validated_args, overwritten_keys, ctx, {log_metadata, otel_ctx})
+          end)
 
-          final_res
-      end
+        {:keep_state, %__MODULE__{data | active_tool: %{task: task, call: tc}}}
+    end
+  end
 
-    # Persist tool result as a durable entry (`pi.message` role `tool` with 3-channel fields)
-    Storage.append_entry!(data.conversation_id, "pi.message", %{
-      "role" => "tool",
-      "tool_call_id" => tool_id,
-      "name" => tool_name,
-      "is_error" => tool_result["is_error"],
-      "content" => tool_result["output"],
-      "structured_output" => tool_result["structured_output"],
-      "details" => tool_result["details"]
-    })
+  def handle_event(:info, {ref, tool_result}, :executing_tools, %__MODULE__{active_tool: %{task: %Task{ref: ref}}} = data) do
+    Process.demonitor(ref, [:flush])
+    publish_tool_completed(data.conversation_id, tool_result)
+    finish_tool(%__MODULE__{data | active_tool: nil}, tool_result)
+  end
 
-    # Check if tool returned a control action (`add_tools`, `handoff`, `terminate`)
-    apply_tool_control_directive(data.conversation_id, Map.get(tool_result, "control"))
-
-    next_data = %__MODULE__{
-      data
-      | pending_tool_calls: rest,
-        completed_tool_results: [tool_result | data.completed_tool_results]
+  # A hook raised in the tool task, or the task was killed.
+  def handle_event(:info, {:DOWN, ref, :process, _pid, reason}, :executing_tools, %__MODULE__{active_tool: %{task: %Task{ref: ref}, call: tc}} = data) do
+    tool_result = %{
+      "tool_call_id" => Map.get(tc, "id", "call_0"),
+      "name" => Map.get(tc, "name", "unknown"),
+      "is_error" => true,
+      "output" => "Tool execution error: #{inspect(reason)}",
+      "structured_output" => nil,
+      "details" => %{"crashed" => true}
     }
 
-    send(self(), :next_tool)
-    {:keep_state, next_data}
+    publish_tool_completed(data.conversation_id, tool_result)
+    finish_tool(%__MODULE__{data | active_tool: nil}, tool_result)
   end
 
   # --- State: :compacting ---
@@ -868,8 +842,15 @@ defmodule SuperPi.Conversation.Machine do
 
         :default ->
           case SuperPi.Compaction.compact!(data.conversation_id, :manual, opts) do
-            {:ok, %{entry: entry, summary: summary_text, head_entry_id: head_id}} ->
-              {:ok, %{entry_id: entry.id, summary: summary_text, head_entry_id: head_id}}
+            {:ok, %{entry: entry, summary: summary_text, head_entry_id: head_id} = res} ->
+              {:ok,
+               %{
+                 entry_id: entry.id,
+                 summary: summary_text,
+                 head_entry_id: head_id,
+                 compacted_count: Map.get(res, :compacted_count),
+                 kept_count: Map.get(res, :kept_count)
+               }}
 
             {:ok, :noop} ->
               {:ok, :noop}
@@ -907,60 +888,12 @@ defmodule SuperPi.Conversation.Machine do
         {:next_state, :preparing_request, data, [{:next_event, :internal, :prepare}]}
 
       :accept ->
-        if data.active_task_id do
-          TaskEngine.complete_task(data.active_task_id, %{
-            "assistantMessage" => data.last_assistant_message
-          })
-        end
-
-        case SuperPi.Compaction.check_policy(data.conversation_id) do
-          {:threshold, _} ->
-            SuperPi.Compaction.compact!(data.conversation_id, :threshold)
-
-          {:background, _} ->
-            SuperPi.Compaction.compact!(data.conversation_id, :background, enqueue: true)
-
-          :none ->
-            :ok
-        end
-
-        actions =
-          if data.reply_from do
-            [{:reply, data.reply_from, {:ok, data.last_assistant_message}}]
-          else
-            []
-          end
-
-        {:next_state, :idle, %__MODULE__{data | active_task_id: nil, reply_from: nil}, actions}
+        complete_run(data)
     end
   end
 
   def handle_event(:internal, :settle, :settling_run, %__MODULE__{} = data) do
-    if data.active_task_id do
-      TaskEngine.complete_task(data.active_task_id, %{
-        "assistantMessage" => data.last_assistant_message
-      })
-    end
-
-    case SuperPi.Compaction.check_policy(data.conversation_id) do
-      {:threshold, _} ->
-        SuperPi.Compaction.compact!(data.conversation_id, :threshold)
-
-      {:background, _} ->
-        SuperPi.Compaction.compact!(data.conversation_id, :background, enqueue: true)
-
-      :none ->
-        :ok
-    end
-
-    actions =
-      if data.reply_from do
-        [{:reply, data.reply_from, {:ok, data.last_assistant_message}}]
-      else
-        []
-      end
-
-    {:next_state, :idle, %__MODULE__{data | active_task_id: nil, reply_from: nil, pending_tool_calls: [], completed_tool_results: []}, actions}
+    complete_run(data)
   end
 
   # --- Catch-all event handlers for unhandled messages ---
@@ -975,10 +908,31 @@ defmodule SuperPi.Conversation.Machine do
 
   # --- Helpers ---
 
+  # Completes the durable task, compacts if the policy says so and answers the submit caller.
+  defp complete_run(%__MODULE__{} = data) do
+    if data.active_task_id do
+      data.active_task_id
+      |> TaskEngine.complete_task(%{"assistantMessage" => data.last_assistant_message})
+      |> check_task(data.active_task_id, "complete")
+    end
+
+    case SuperPi.Compaction.check_policy(data.conversation_id) do
+      {:threshold, _} -> SuperPi.Compaction.compact!(data.conversation_id, :threshold)
+      {:background, _} -> SuperPi.Compaction.compact!(data.conversation_id, :background, enqueue: true)
+      :none -> :ok
+    end
+
+    actions = if data.reply_from, do: [{:reply, data.reply_from, {:ok, data.last_assistant_message}}], else: []
+
+    {:next_state, :idle, %__MODULE__{data | active_task_id: nil, reply_from: nil, pending_tool_calls: [], completed_tool_results: []}, actions}
+  end
+
   defp finish_run_with_error(%__MODULE__{} = data, reason) do
     if data.active_task_id do
       TaskEngine.fail_task(data.active_task_id, %{"error" => inspect(reason)})
     end
+
+    data = flush_steer_messages(data)
 
     actions =
       if data.reply_from do
@@ -989,6 +943,130 @@ defmodule SuperPi.Conversation.Machine do
 
     {:next_state, :idle, %__MODULE__{data | active_task_id: nil, reply_from: nil, turn_status: {:error, reason}}, actions}
   end
+
+  # Runs in the tool task: `wrap_tool` around the sandboxed executor, then `after_tool`.
+  defp run_tool_pipeline(data, tool_id, tool_name, args, overwritten_keys, ctx, {log_metadata, otel_ctx}) do
+    core_fn = fn exec_args ->
+      case SandboxRunner.run_isolated(fn ->
+             Logger.metadata(log_metadata)
+             SuperPi.Telemetry.attach(otel_ctx)
+             SuperPi.Telemetry.tool_span(tool_name, fn -> data.tool_executor.(tool_name, exec_args, ctx) end)
+           end) do
+        {:ok, %{} = res} ->
+          Map.merge(
+            %{
+              "tool_call_id" => tool_id,
+              "name" => tool_name,
+              "is_error" => false,
+              "output" => "",
+              "structured_output" => nil,
+              "details" => %{}
+            },
+            res
+          )
+
+        {:error, err} ->
+          %{
+            "tool_call_id" => tool_id,
+            "name" => tool_name,
+            "is_error" => true,
+            "output" => "Tool execution error: #{inspect(err)}",
+            "structured_output" => nil,
+            "details" => err
+          }
+      end
+    end
+
+    wrapped_res = Extension.run_wrap_tool(data.extensions, tool_name, args, core_fn, ctx)
+    final_res = Extension.run_after_tool(data.extensions, tool_name, args, wrapped_res, ctx)
+
+    if overwritten_keys != [] do
+      notice = "[Hook Notice: PreToolUse rewrote tool arguments for keys: #{Enum.join(overwritten_keys, ", ")}]\n"
+      Map.update(final_res, "output", notice, &(notice <> to_string(&1)))
+    else
+      final_res
+    end
+  end
+
+  defp publish_tool_completed(conv_id, tool_result) do
+    publish_stream_event(conv_id, %{
+      "type" => "tool_completed",
+      "tool_call_id" => tool_result["tool_call_id"],
+      "name" => tool_result["name"],
+      "is_error" => Map.get(tool_result, "is_error", false),
+      "output" => Map.get(tool_result, "output", "")
+    })
+  end
+
+  # Stores the result, applies its control directive and moves to the next call of the batch.
+  defp finish_tool(%__MODULE__{} = data, tool_result) do
+    append_tool_result!(data.conversation_id, tool_result)
+    apply_tool_control_directive(data.conversation_id, Map.get(tool_result, "control"))
+    send(self(), :next_tool)
+    {:keep_state, %__MODULE__{data | completed_tool_results: [tool_result | data.completed_tool_results]}}
+  end
+
+  # A `pi.message` with role `tool` and the 3 result channels.
+  defp append_tool_result!(conv_id, tool_result) do
+    Storage.append_entry!(conv_id, "pi.message", %{
+      "role" => "tool",
+      "tool_call_id" => tool_result["tool_call_id"],
+      "name" => tool_result["name"],
+      "is_error" => tool_result["is_error"],
+      "content" => tool_result["output"],
+      "structured_output" => tool_result["structured_output"],
+      "details" => tool_result["details"]
+    })
+  end
+
+  # Every tool call of a stored assistant entry needs a result before the next user entry,
+  # or the provider refuses the whole history (Anthropic and OpenAI return 400).
+  defp record_skipped_results(conv_id, tool_calls, text) do
+    Enum.each(tool_calls, fn tc ->
+      append_tool_result!(conv_id, %{
+        "tool_call_id" => Map.get(tc, "id") || "unknown",
+        "name" => Map.get(tc, "name") || "unknown",
+        "is_error" => true,
+        "output" => text,
+        "structured_output" => nil,
+        "details" => %{"skipped" => true}
+      })
+    end)
+  end
+
+  defp flush_steer_messages(%__MODULE__{steer_messages: []} = data), do: %__MODULE__{data | steer_preempted: false}
+
+  defp flush_steer_messages(%__MODULE__{} = data) do
+    data.steer_messages
+    |> Enum.reverse()
+    |> Enum.each(fn text ->
+      Storage.append_entry!(data.conversation_id, "pi.message", %{
+        "role" => "user",
+        "content" => [%{"type" => "text", "text" => text}],
+        "steer" => true
+      })
+    end)
+
+    %__MODULE__{data | steer_messages: [], steer_preempted: false}
+  end
+
+  # A refused task transition is logged, never ignored: a task left in the wrong state is
+  # resumed or replayed later (Kanban Task 52).
+  defp check_task({:ok, _task}, _task_id, _what), do: :ok
+  defp check_task(%TaskSchema{}, _task_id, _what), do: :ok
+
+  defp check_task({:error, reason}, task_id, what) do
+    Logger.error("[Machine] task #{task_id}: #{what} refused: #{inspect(reason)}")
+    {:error, reason}
+  end
+
+  defp shutdown_task(%Task{} = task) do
+    Task.shutdown(task, :brutal_kill)
+  rescue
+    _ -> :ok
+  end
+
+  defp shutdown_task(_), do: :ok
 
   defp apply_tool_control_directive(_conv_id, nil), do: :ok
 
@@ -1107,8 +1185,8 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   defp record_usage!(conversation_id, usage) when is_map(usage) do
-    in_tok = Map.get(usage, "input_tokens", 0) || Map.get(usage, :input_tokens, 0) || 0
-    out_tok = Map.get(usage, "output_tokens", 0) || Map.get(usage, :output_tokens, 0) || 0
+    in_tok = Map.get(usage, "input_tokens") || Map.get(usage, :input_tokens) || 0
+    out_tok = Map.get(usage, "output_tokens") || Map.get(usage, :output_tokens) || 0
 
     Storage.commit(fn seq ->
       # Read inside the transaction, from the database, so concurrent writers add up.

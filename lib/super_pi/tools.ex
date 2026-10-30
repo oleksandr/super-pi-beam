@@ -66,7 +66,14 @@ defmodule SuperPi.Tools do
   def register_tool!(%{"name" => name} = spec, exposure \\ :direct)
       when is_binary(name) and exposure in [:direct, :model_only, :codemode, :deferred, :hidden] do
     ensure_catalog_ets!()
-    entry = Map.put(spec, "exposure", Atom.to_string(exposure))
+
+    # One key for the schema in the catalog, whatever the source called it.
+    entry =
+      spec
+      |> Map.drop(["input_schema", "inputSchema"])
+      |> Map.put("parameters", SuperPi.AI.ToolSchemas.parameters(spec, name))
+      |> Map.put("exposure", Atom.to_string(exposure))
+
     :ets.insert(@catalog_ets, {name, entry})
     entry
   end

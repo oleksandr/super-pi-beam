@@ -3,8 +3,24 @@ defmodule SuperPi.AI.ToolSchemas do
   JSON Schema (`"type": "object"`) for the built-in tools, which are registered with a name and a
   description only. The providers send these as the tool's parameter schema.
 
-  The Gemini client has its own copy in the upper-case dialect that Gemini wants.
+  The Gemini client converts these to the upper-case dialect that Gemini wants.
   """
+
+  @schema_keys ["parameters", :parameters, "input_schema", :input_schema, "inputSchema", :inputSchema]
+
+  @doc """
+  The parameter schema of a tool spec, under any of the keys in use (`parameters`, MCP
+  `input_schema`/`inputSchema`), else the built-in schema for `name`.
+  """
+  @spec parameters(map(), String.t()) :: map()
+  def parameters(spec, name) do
+    Enum.find_value(@schema_keys, fn key ->
+      case Map.get(spec, key) do
+        %{} = schema when map_size(schema) > 0 -> schema
+        _ -> nil
+      end
+    end) || for_tool(name)
+  end
 
   @doc "The parameter schema for tool `name`. An unknown tool gets an empty object schema."
   @spec for_tool(String.t()) :: map()

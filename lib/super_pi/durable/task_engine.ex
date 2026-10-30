@@ -243,7 +243,17 @@ defmodule SuperPi.Durable.TaskEngine do
     fail_task(task_id, %{"error" => error_msg})
   end
 
-  def fail_task(task_id, error_map) when is_map(error_map) do
+  def fail_task(task_id, error_map) when is_map(error_map), do: settle_task(task_id, "failed", error_map)
+
+  @doc """
+  Cancels a `"running"` or `"sleeping"` task with `result` (a user cancel). Live children are
+  aborted and a waiting parent is reconciled, as for `fail_task/2`. A sleeping task's wake job
+  finds it no longer sleeping and does nothing.
+  """
+  def cancel_task(task_id, result \\ %{"reason" => "cancelled"}) when is_map(result),
+    do: settle_task(task_id, "cancelled", result)
+
+  defp settle_task(task_id, target_status, result) do
     tx(fn seq ->
       task = lock_task(task_id) || raise Ecto.NoResultsError, queryable: TaskSchema
 
@@ -255,7 +265,7 @@ defmodule SuperPi.Durable.TaskEngine do
           abort_task!(child.id)
         end)
 
-        case Fsmx.transition_changeset(task, "failed", %{result: error_map, updated_seq: seq}, state_field: :status)
+        case Fsmx.transition_changeset(task, target_status, %{result: result, updated_seq: seq}, state_field: :status)
              |> Repo.update() do
           {:ok, updated} ->
             reconcile_parent_after_child_settled!(updated, seq)

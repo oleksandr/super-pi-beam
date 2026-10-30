@@ -104,7 +104,7 @@ defmodule SuperPi.AI.Providers.Anthropic do
     %{
       "name" => name,
       "description" => Map.get(tool, "description") || "Execute #{name}",
-      "input_schema" => Map.get(tool, "parameters") || SuperPi.AI.ToolSchemas.for_tool(name)
+      "input_schema" => SuperPi.AI.ToolSchemas.parameters(tool, name)
     }
   end
 

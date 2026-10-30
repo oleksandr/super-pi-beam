@@ -62,6 +62,23 @@ defmodule SuperPi.Conversation.Locator do
     end
   end
 
+  @doc """
+  The pid of the conversation's machine, started with `extensions` when none runs. With
+  `set_extensions: true` a running machine gets `extensions` too: the gateway resolves the harness
+  on every request. The RPC server keeps a running machine's extensions.
+  """
+  def ensure_started!(conversation_id, extensions, opts \\ []) do
+    case whereis(conversation_id) do
+      pid when is_pid(pid) ->
+        if Keyword.get(opts, :set_extensions, false), do: Machine.set_extensions(pid, extensions)
+        pid
+
+      nil ->
+        {:ok, pid} = ensure_started(conversation_id, extensions: extensions)
+        pid
+    end
+  end
+
   defp start(conversation_id, machine_opts, opts, retries \\ 50) do
     restart = Keyword.get(opts, :restart, :transient)
     supervision = Keyword.get(opts, :supervision) || Application.get_env(:super_pi, :machine_supervision, :horde)

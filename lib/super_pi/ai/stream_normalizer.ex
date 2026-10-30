@@ -308,7 +308,7 @@ defmodule SuperPi.AI.StreamNormalizer do
 
       "error" ->
         err = Map.get(event, "error", %{"message" => "unknown_error"})
-        {start_events ++ [{:error, %{reason: err}}], state}
+        {start_events ++ [{:error, %{reason: err, retryable: retryable_error?(err)}}], state}
 
       _ ->
         {start_events, state}
@@ -323,6 +323,11 @@ defmodule SuperPi.AI.StreamNormalizer do
 
     # Support both OpenAI Chat Completions deltas and Responses API events
     cond do
+      # An error sent inside a 200 stream.
+      is_map(Map.get(event, "error")) ->
+        err = event["error"]
+        {start_events ++ [{:error, %{reason: err, retryable: retryable_error?(err)}}], state}
+
       is_list(Map.get(event, "choices")) ->
         choice = List.first(event["choices"]) || %{}
         delta = Map.get(choice, "delta") || %{}
@@ -632,21 +637,41 @@ defmodule SuperPi.AI.StreamNormalizer do
       |> Enum.map(fn {_idx, block} ->
         case block do
           %{"type" => "tool_call", "raw_json" => raw} = tc ->
-            final_args =
-              case Jason.decode(raw) do
-                {:ok, decoded} when is_map(decoded) -> decoded
-                _ -> tc["arguments"]
-              end
-
-            tc
-            |> Map.put("arguments", final_args)
-            |> Map.delete("raw_json")
+            # Partial JSON is for UI deltas only. A tool runs only with arguments that parse.
+            case strict_arguments(raw) do
+              {:ok, args} -> tc |> Map.put("arguments", args) |> Map.delete("raw_json")
+              :error -> {:invalid, tc["id"]}
+            end
 
           other ->
             other
         end
       end)
 
+    case for({:invalid, id} <- ordered_content, do: id) do
+      [] -> finalize_valid(state, ordered_content)
+      ids -> {[{:error, %{reason: {:invalid_tool_arguments, ids}, retryable: true}}], %__MODULE__{state | done?: true}}
+    end
+  end
+
+  defp strict_arguments(raw) do
+    if String.trim(raw) == "" do
+      {:ok, %{}}
+    else
+      case Jason.decode(raw) do
+        {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
+        _ -> :error
+      end
+    end
+  end
+
+  # Overload, rate limit and internal errors pass; the request can be sent again.
+  @retryable_errors ~w(overloaded_error rate_limit_error api_error server_error rate_limit_exceeded)
+
+  defp retryable_error?(%{} = err), do: err["type"] in @retryable_errors or err["code"] in @retryable_errors
+  defp retryable_error?(_), do: false
+
+  defp finalize_valid(%__MODULE__{} = state, ordered_content) do
     done_event =
       {:done,
        %{

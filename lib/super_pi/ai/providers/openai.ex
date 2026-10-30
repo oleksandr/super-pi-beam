@@ -92,7 +92,7 @@ defmodule SuperPi.AI.Providers.OpenAI do
       "function" => %{
         "name" => name,
         "description" => Map.get(tool, "description") || "Execute #{name}",
-        "parameters" => Map.get(tool, "parameters") || SuperPi.AI.ToolSchemas.for_tool(name)
+        "parameters" => SuperPi.AI.ToolSchemas.parameters(tool, name)
       }
     }
   end

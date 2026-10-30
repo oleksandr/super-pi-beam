@@ -20,7 +20,6 @@ defmodule SuperPi.RPC.Server do
 
   use GenServer
 
-  alias SuperPi.Compaction
   alias SuperPi.Conversation.Machine
   alias SuperPi.Durable.{Context, Doc, Storage}
   alias SuperPi.Durable.Schemas.Conversation
@@ -676,11 +675,11 @@ defmodule SuperPi.RPC.Server do
     async? = Map.get(params, "async", false)
     extensions = resolve_extensions(params)
 
-    pid = ensure_machine_started!(conv_id, extensions)
+    pid = SuperPi.Conversation.Locator.ensure_started!(conv_id, extensions)
 
     if async? do
       Task.Supervisor.start_child(SuperPi.ToolTaskSupervisor, fn ->
-        case safe_machine_submit(pid, text, mode: mode, timeout: 120_000) do
+        case Machine.safe_submit(pid, text, mode: mode, timeout: 120_000) do
           {:ok, res} ->
             Phoenix.PubSub.broadcast(
               SuperPi.PubSub,
@@ -712,7 +711,7 @@ defmodule SuperPi.RPC.Server do
       {jsonrpc_result(id, %{"status" => "accepted", "conversation_id" => conv_id, "seq" => Storage.current_seq()}),
        client_state, []}
     else
-      case safe_machine_submit(pid, text, mode: mode, timeout: 120_000) do
+      case Machine.safe_submit(pid, text, mode: mode, timeout: 120_000) do
         {:ok, res} ->
           event = %{
             "type" => "turn_completed",
@@ -771,19 +770,37 @@ defmodule SuperPi.RPC.Server do
     end
   end
 
+  # Through the machine: during a turn the compaction waits for the turn to end.
   defp dispatch_method("session.compact", params, id, client_state) do
     conv_id = Map.fetch!(params, "conversation_id")
     keep_tokens = Map.get(params, "keep_recent_tokens", 20_000)
-    {:ok, res} = Compaction.compact!(conv_id, :manual, keep_recent_tokens: keep_tokens)
+    pid = SuperPi.Conversation.Locator.ensure_started!(conv_id, resolve_extensions(params))
+
+    result =
+      try do
+        Machine.compact(pid, keep_recent_tokens: keep_tokens, timeout: 120_000)
+      catch
+        :exit, {:timeout, _} -> {:error, :timeout}
+      end
 
     reply =
-      jsonrpc_result(id, %{
-        "entry_id" => res.entry.id,
-        "head_entry_id" => res.head_entry_id,
-        "compacted_count" => res.compacted_count,
-        "kept_count" => res.kept_count,
-        "summary" => res.summary
-      })
+      case result do
+        {:ok, %{entry_id: entry_id} = res} ->
+          jsonrpc_result(id, %{
+            "compacted" => true,
+            "entry_id" => entry_id,
+            "head_entry_id" => res.head_entry_id,
+            "compacted_count" => Map.get(res, :compacted_count),
+            "kept_count" => Map.get(res, :kept_count),
+            "summary" => res.summary
+          })
+
+        {:ok, outcome} when outcome in [:noop, :cancelled] ->
+          jsonrpc_result(id, %{"compacted" => false, "reason" => Atom.to_string(outcome)})
+
+        {:error, :timeout} ->
+          jsonrpc_error(id, -32008, "Compaction timed out waiting for the running turn to end")
+      end
 
     {reply, client_state, []}
   end
@@ -912,20 +929,6 @@ defmodule SuperPi.RPC.Server do
   defp parse_submit_mode("write"), do: :write
   defp parse_submit_mode(_), do: :queue
 
-  defp safe_machine_submit(pid, text, opts) do
-    try do
-      Machine.submit(pid, text, opts)
-    catch
-      :exit, reason ->
-        {:error, reason}
-    end
-  end
-
-  defp ensure_machine_started!(conv_id, extensions) do
-    {:ok, pid} = SuperPi.Conversation.Locator.ensure_started(conv_id, extensions: extensions)
-    pid
-  end
-
   defp open_session(harness, params, id, client_state) do
     conv =
       case Map.get(params, "conversation_id") do
@@ -954,7 +957,7 @@ defmodule SuperPi.RPC.Server do
       end
 
     extensions = SuperPi.Harness.remote_extensions(harness)
-    ensure_machine_started!(conv.id, extensions)
+    SuperPi.Conversation.Locator.ensure_started!(conv.id, extensions)
 
     reply =
       jsonrpc_result(id, %{
