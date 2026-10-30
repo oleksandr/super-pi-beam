@@ -28,6 +28,8 @@ defmodule SuperPi.Harness do
     "super-pi-agent" => SuperPi.Harness.Default,
     "fast" => SuperPi.Harness.Fast,
     "super-pi-fast" => SuperPi.Harness.Fast,
+    "workspace" => SuperPi.Harness.Workspace,
+    "super-pi-workspace" => SuperPi.Harness.Workspace,
     "agy" => SuperPi.Harness.AGY,
     "antigravity" => SuperPi.Harness.AGY,
     "super-pi-agy" => SuperPi.Harness.AGY,
@@ -44,6 +46,7 @@ defmodule SuperPi.Harness do
     SuperPi.Harness.Fast,
     SuperPi.Harness.Autonomous,
     SuperPi.Harness.Interactive,
+    SuperPi.Harness.Workspace,
     SuperPi.Harness.AGY,
     SuperPi.Harness.Planner
   ]

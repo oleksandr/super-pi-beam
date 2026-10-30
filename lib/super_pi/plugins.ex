@@ -35,20 +35,14 @@ defmodule SuperPi.Plugins do
     CustomCompaction,
     GitCheckpoint,
     Handoff,
-    Hooks,
     InlineBash,
     JevRouter,
-    Permissions,
     PromptCustomizer,
     ProtectedPaths,
     Questionnaire,
-    Rules,
-    Skills,
-    SlashCommands,
     StructuredOutput,
     Subagent,
-    Todo,
-    TranscriptLogger
+    Todo
   ]
 
   @aliases %{

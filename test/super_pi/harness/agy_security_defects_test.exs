@@ -13,8 +13,10 @@ defmodule SuperPi.Harness.AgySecurityDefectsTest do
   use SuperPi.DataCase, async: false
 
   alias SuperPi.Durable.Storage
-  alias SuperPi.Harness.AGY.{Brain, Discovery}
-  alias SuperPi.Harness.AGY.Extensions.{HooksJson, Permissions}
+  alias SuperPi.Discovery
+  alias SuperPi.Plugins.TranscriptLogger, as: Brain
+  alias SuperPi.Plugins.Hooks, as: HooksJson
+  alias SuperPi.Plugins.Permissions
 
 
   # --- helpers ---

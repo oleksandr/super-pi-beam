@@ -12,7 +12,7 @@ defmodule SuperPi.Harness.AgyCliDefectsTest do
 
   alias SuperPi.Conversation.Machine
   alias SuperPi.Durable.{Doc, Storage}
-  alias SuperPi.Harness.AGY.CLI
+  alias SuperPi.CLI
   alias SuperPi.TestSupport.Faults
 
 

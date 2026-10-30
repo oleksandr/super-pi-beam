@@ -12,9 +12,12 @@ defmodule SuperPi.Harness.AgyMoreDefectsTest do
 
   alias SuperPi.Durable.{Doc, Storage}
   alias SuperPi.Conversation.Machine
-  alias SuperPi.Harness.AGY
-  alias SuperPi.Harness.AGY.{Brain, Discovery}
-  alias SuperPi.Harness.AGY.Extensions.{HooksJson, Permissions, SlashCommands}
+  alias SuperPi.Harness.Workspace, as: AGY
+  alias SuperPi.Discovery
+  alias SuperPi.Plugins.TranscriptLogger, as: Brain
+  alias SuperPi.Plugins.Hooks, as: HooksJson
+  alias SuperPi.Plugins.Permissions
+  alias SuperPi.Plugins.SlashCommands
   alias SuperPi.TestSupport.Faults
 
   # --- helpers ---
@@ -541,7 +544,7 @@ defmodule SuperPi.Harness.AgyMoreDefectsTest do
 
   describe "AGY harness module (agy.ex:21-29)" do
     test "extensions/0 matches CLI.default_extensions/0" do
-      assert AGY.extensions() == SuperPi.Harness.AGY.CLI.default_extensions()
+      assert AGY.extensions() == SuperPi.CLI.default_extensions()
     end
   end
 end

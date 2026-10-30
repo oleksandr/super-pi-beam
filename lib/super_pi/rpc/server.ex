@@ -697,11 +697,11 @@ defmodule SuperPi.RPC.Server do
      client_state, []}
   end
 
-  defp dispatch_method("agy.metadata", _params, id, client_state) do
+  defp dispatch_method(method, _params, id, client_state) when method in ["workspace.metadata", "agy.metadata", "metadata"] do
     reply =
       jsonrpc_result(id, %{
-        "models" => SuperPi.Harness.AGY.CLI.models_catalog(),
-        "agents" => SuperPi.Harness.AGY.CLI.agents_catalog(),
+        "models" => SuperPi.CLI.models_catalog(),
+        "agents" => SuperPi.CLI.agents_catalog(),
         "slash_commands" => [
           %{"name" => "/plan", "description" => "Switch to read-only architectural planning mode"},
           %{"name" => "/goal", "description" => "Run autonomous multi-step goal with verification"},

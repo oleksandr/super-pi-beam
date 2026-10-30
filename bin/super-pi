@@ -19,6 +19,13 @@ if [[ $# -eq 0 ]]; then
   CMD="gateway"
 elif [[ "$1" =~ ^[0-9]+$ || "$1" == "--verbose" || "$1" == "-v" ]]; then
   CMD="gateway"
+elif [[ "$1" =~ ^- ]]; then
+  # Direct flag invocation, e.g. super-pi -p "hello" or super-pi --harness fast
+  exec mise exec -- mix run -e '
+    {code, out} = SuperPi.CLI.run(System.argv())
+    if out != "", do: IO.puts(out)
+    System.halt(code)
+  ' -- "$@"
 else
   CMD="$1"
   shift || true
@@ -58,7 +65,15 @@ case "${CMD}" in
     ;;
 
   mcp)
-    exec mise exec -- mix run -e "SuperPi.MCP.Server.run_stdio()"
+    if [[ $# -eq 0 ]]; then
+      exec mise exec -- mix run -e "SuperPi.MCP.Server.run_stdio()"
+    else
+      exec mise exec -- mix run -e '
+        {code, out} = SuperPi.CLI.run(["mcp" | System.argv()])
+        if out != "", do: IO.puts(out)
+        System.halt(code)
+      ' -- "$@"
+    fi
     ;;
 
   rpc)
@@ -71,23 +86,14 @@ case "${CMD}" in
     exec mise exec -- mix run --no-halt -e "SuperPi.RPC.Server.start_link(port: ${PORT}); Process.sleep(:infinity)"
     ;;
 
-  harness|harnesses)
-    SUBCMD="${1:-list}"
-    case "${SUBCMD}" in
-      list)
-        exec mise exec -- mix run -e '
-          IO.puts(String.pad_trailing("HARNESS ID", 22) <> String.pad_trailing("NAME", 32) <> "DESCRIPTION")
-          IO.puts(String.duplicate("-", 80))
-          Enum.each(SuperPi.Harness.list(), fn mod ->
-            IO.puts(String.pad_trailing(mod.id(), 22) <> String.pad_trailing(mod.name(), 32) <> mod.description())
-          end)
-        '
-        ;;
-      *)
-        echo "Usage: super-pi harness list" >&2
-        exit 1
-        ;;
-    esac
+  harness|harnesses|models|agents|plugin|plugins|remote-control|run|chat)
+    export SUPER_PI_CMD="${CMD}"
+    exec mise exec -- mix run -e '
+      cmd = System.get_env("SUPER_PI_CMD")
+      {code, out} = SuperPi.CLI.run([cmd | System.argv()])
+      if out != "", do: IO.puts(out)
+      System.halt(code)
+    ' -- "$@"
     ;;
 
   session)
@@ -136,49 +142,18 @@ case "${CMD}" in
     ;;
 
   help|--help|-h)
-    cat <<EOF
-Usage: super-pi <command> [options]
-
-Commands:
-  gateway [port] Run OpenAI-compatible HTTP upstream inference gateway (default port: 4000)
-                 Connects OpenCode, Cursor, Aider, and LibreChat to Super-Pi
-                 (Default command if no arguments are provided)
-  mcp            Run standard Model Context Protocol (MCP) server over stdio
-                 Connects directly to OpenCode, Claude Desktop, Cursor, and Zed
-  rpc [port]     Run standalone JSON-RPC 2.0 server (default port: 4001)
-  harness list   List available agent harnesses (super-pi-agent, super-pi-fast, planner, etc.)
-  session list   List recent durable conversations
-  session show   Display conversation state and documents
-  help           Show this help text
-
-Examples:
-  # 1. Run upstream inference gateway for OpenCode:
-  bin/super-pi gateway 4000
-
-  # 2. Configure in ~/.config/opencode/opencode.json:
-  "provider": {
-    "super-pi": {
-      "npm": "@ai-sdk/openai-compatible",
-      "options": {
-        "baseURL": "http://127.0.0.1:4000/v1",
-        "apiKey": "local-key"
-      },
-      "models": {
-        "super-pi-agent": {
-          "name": "Super-Pi Autonomous Agent"
-        }
-      }
-    }
-  }
-
-  # 3. Connect as MCP Tool Server in OpenCode:
-  opencode mcp list
-EOF
+    exec mise exec -- mix run -e '
+      {_code, out} = SuperPi.CLI.run(["help"])
+      IO.puts(out)
+    '
     ;;
 
   *)
-    echo "Unknown command: ${CMD}" >&2
-    echo "Run 'super-pi help' for available commands." >&2
-    exit 1
+    exec mise exec -- mix run -e '
+      args = System.argv()
+      {code, out} = SuperPi.CLI.run(args)
+      if out != "", do: IO.puts(out)
+      System.halt(code)
+    ' -- "${CMD}" "$@"
     ;;
 esac

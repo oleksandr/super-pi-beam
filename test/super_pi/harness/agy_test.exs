@@ -2,8 +2,12 @@ defmodule SuperPi.Harness.AGYTest do
   use SuperPi.DataCase, async: false
   use ExUnitProperties
 
-  alias SuperPi.Harness.AGY.{Brain, CLI, Discovery}
-  alias SuperPi.Harness.AGY.Extensions.{HooksJson, Permissions, Rules}
+  alias SuperPi.Discovery
+  alias SuperPi.CLI
+  alias SuperPi.Plugins.Hooks, as: HooksJson
+  alias SuperPi.Plugins.Permissions
+  alias SuperPi.Plugins.Rules
+  alias SuperPi.Plugins.TranscriptLogger, as: Brain
   alias SuperPi.Durable.Context
 
   describe "Property-Based & Integration Tests: SuperPi.Harness.AGY Clone of Antigravity CLI" do

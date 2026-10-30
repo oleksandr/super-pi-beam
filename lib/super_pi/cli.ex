@@ -1,24 +1,24 @@
-defmodule SuperPi.Harness.AGY.CLI do
+defmodule SuperPi.CLI do
   @moduledoc """
-  Antigravity CLI (`agy`) Clone Entrypoint built on `Super-Pi-BEAM` (`12 - AGY Clone Specification and Gap Analysis.md`).
+  Unified Command-Line Interface for Super-Pi-BEAM.
 
-  Supports all `agy` flags and subcommands while executing every customization layer through
-  modular `SuperPi.Extension` behaviours:
-  - `SuperPi.Harness.AGY.Extensions.SlashCommands`
-  - `SuperPi.Harness.AGY.Extensions.Rules`
-  - `SuperPi.Harness.AGY.Extensions.Skills`
-  - `SuperPi.Harness.AGY.Extensions.HooksJson`
-  - `SuperPi.Harness.AGY.Extensions.Permissions`
+  Provides a single, standardized CLI for all agent harnesses:
+  - Supports `--harness <id>` (`workspace`, `default`, `fast`, `auto`, `interactive`, `planner`).
+  - Supports non-interactive `-p` / `--prompt` / `--print` and streaming turns (`--input-format stream-json`).
+  - Supports conversation continuation (`-c`, `--continue`) and resumption (`--conversation <id>`).
+  - Unified subcommands for `harnesses`, `models`, `agents`, `mcp`, `plugins`, `remote-control`, and `session`.
+  - Guarantees clean process lifecycle management with synchronous registry unregistration on shutdown.
   """
 
-  alias SuperPi.Harness.AGY.{Brain, Discovery}
-  alias SuperPi.Harness.AGY.Extensions.{HooksJson, Permissions, Rules, Skills, SlashCommands}
   alias SuperPi.Conversation.Machine
+  alias SuperPi.Discovery
   alias SuperPi.Durable.Storage
-  alias SuperPi.Tools
+  alias SuperPi.Harness
+  alias SuperPi.Plugins.TranscriptLogger
   alias SuperPi.TUI.Owl, as: OwlTUI
+  alias SuperPi.Tools
 
-  @agy_models [
+  @models [
     {"gemini-3-flash-preview", "Gemini 3 Flash Preview (Live)"},
     {"gemini-4-argon-medium", "Gemini 4 Argon (Medium)"},
     {"gemini-4-argon-high", "Gemini 4 Argon (High)"},
@@ -31,29 +31,11 @@ defmodule SuperPi.Harness.AGY.CLI do
     {"gpt-oss-120b-medium", "GPT-OSS 120B (Medium)"}
   ]
 
-  @agy_agents [
+  @agents [
     {"self", "Full-capability coding agent with read/write/bash/MCP tools"},
     {"research", "Read-only codebase and documentation research agent"},
     {"image-generator", "Image generation and editing specialist"}
   ]
-
-  def default_extensions do
-    [
-      SlashCommands,
-      Rules,
-      Skills,
-      HooksJson,
-      Permissions
-    ]
-  end
-
-  def models_catalog do
-    Enum.map(@agy_models, fn {id, label} -> %{"id" => id, "label" => label} end)
-  end
-
-  def agents_catalog do
-    Enum.map(@agy_agents, fn {id, desc} -> %{"id" => id, "description" => desc} end)
-  end
 
   @switches [
     add_dir: :keep,
@@ -63,8 +45,10 @@ defmodule SuperPi.Harness.AGY.CLI do
     dangerously_skip_permissions: :boolean,
     disable_slash_commands: :boolean,
     effort: :string,
+    harness: :string,
     help: :boolean,
     input_format: :string,
+    json: :boolean,
     json_schema: :string,
     log_file: :string,
     mode: :string,
@@ -79,11 +63,28 @@ defmodule SuperPi.Harness.AGY.CLI do
     remote_control: :boolean,
     sandbox: :boolean,
     settings: :string,
-    json: :boolean,
     strict: :boolean
   ]
 
-  @aliases [c: :continue, i: :prompt_interactive, p: :print, h: :help]
+  @aliases [
+    c: :continue,
+    H: :harness,
+    h: :help,
+    i: :prompt_interactive,
+    p: :print
+  ]
+
+  def default_extensions do
+    Harness.Workspace.extensions()
+  end
+
+  def models_catalog do
+    Enum.map(@models, fn {id, label} -> %{"id" => id, "label" => label} end)
+  end
+
+  def agents_catalog do
+    Enum.map(@agents, fn {id, desc} -> %{"id" => id, "description" => desc} end)
+  end
 
   @doc """
   Parses command-line arguments (`argv`) into `{:subcommand, cmd, args, flags}` or `{:run, flags, positional}`.
@@ -107,9 +108,6 @@ defmodule SuperPi.Harness.AGY.CLI do
     end
   end
 
-  # Splits argv into known flag tokens (with their values) and everything else.
-  # Unknown dash words stay in the positional list in their original order, so
-  # prompts such as `explain the --foo flag` and `mcp add fs npx -y pkg` survive.
   defp split_flags(argv), do: split_flags(argv, [], [])
 
   defp split_flags([], flags, pos), do: {Enum.reverse(flags), Enum.reverse(pos)}
@@ -153,13 +151,11 @@ defmodule SuperPi.Harness.AGY.CLI do
     Enum.find_value(Keyword.keys(@switches), fn k -> if Atom.to_string(k) == name, do: k end)
   end
 
-  @top_subcommands ["agent", "agents", "models", "changelog", "help"]
+  @top_subcommands ["agent", "agents", "models", "harness", "harnesses", "changelog", "help"]
   @mcp_actions ["list", "add", "remove", "enable", "disable"]
   @plugin_actions ["list", "enable", "disable", "validate"]
   @remote_actions ["start", "status", "stop"]
 
-  # A leading word is a subcommand only when the shape matches; otherwise the
-  # whole line is a prompt (`help me with this`).
   defp subcommand?([sub]) when sub in @top_subcommands, do: true
   defp subcommand?(["help", sub]) when sub in @top_subcommands or sub in ["mcp", "plugin", "plugins"], do: true
   defp subcommand?([sub]) when sub in ["mcp", "plugin", "plugins", "remote-control"], do: true
@@ -178,7 +174,7 @@ defmodule SuperPi.Harness.AGY.CLI do
 
       {:subcommand, sub, _rest, _flags} when sub in ["agent", "agents"] ->
         out =
-          @agy_agents
+          @agents
           |> Enum.map(fn {id, desc} -> String.pad_trailing(id, 20) <> desc end)
           |> Enum.join("\n")
 
@@ -186,11 +182,21 @@ defmodule SuperPi.Harness.AGY.CLI do
 
       {:subcommand, "models", _rest, _flags} ->
         out =
-          @agy_models
+          @models
           |> Enum.map(fn {id, label} -> String.pad_trailing(id, 26) <> label end)
           |> Enum.join("\n")
 
         {0, out}
+
+      {:subcommand, sub, _rest, _flags} when sub in ["harness", "harnesses"] ->
+        header = String.pad_trailing("HARNESS ID", 22) <> String.pad_trailing("NAME", 32) <> "DESCRIPTION"
+        sep = String.duplicate("-", 80)
+        rows =
+          Enum.map(Harness.list(), fn mod ->
+            String.pad_trailing(mod.id(), 22) <> String.pad_trailing(mod.name(), 32) <> mod.description()
+          end)
+
+        {0, Enum.join([header, sep | rows], "\n")}
 
       {:subcommand, "mcp", rest, _flags} ->
         run_mcp_subcommand(rest, opts)
@@ -202,7 +208,7 @@ defmodule SuperPi.Harness.AGY.CLI do
         run_remote_control_subcommand(rest)
 
       {:subcommand, "changelog", _rest, _flags} ->
-        {0, "SuperPi.Harness.AGY v0.1.0 (Built on Super-Pi-BEAM OTP 28 / Elixir 1.20)"}
+        {0, "Super-Pi-BEAM v0.1.0 (OTP 28 / Elixir 1.20)"}
 
       {:run, %{help: true}, _pos} ->
         {0, help_text()}
@@ -219,20 +225,36 @@ defmodule SuperPi.Harness.AGY.CLI do
     global_dir = Keyword.get(opts, :global_config_dir, Discovery.default_global_config_dir())
     app_dir = Keyword.get(opts, :app_data_dir, Discovery.default_app_data_dir())
 
-    agent_cfg = %{
-      "model" => flags.model || "gemini-3-flash-preview",
-      "effort" => flags.effort || "medium",
-      "executionMode" => flags.mode || "auto",
-      "dangerouslySkipPermissions" => flags.dangerously_skip_permissions,
-      "disableSlashCommands" => flags.disable_slash_commands,
-      "workspacePaths" => workspace_dirs,
-      "globalConfigDir" => global_dir,
-      "appDataDir" => app_dir,
-      "settingsOverride" => parse_settings_flag(flags.settings),
-      "jsonSchema" => parse_json_schema_flag(flags.json_schema),
-      "agent" => flags.agent,
-      "tools" => tools_for_agent(flags.agent)
-    }
+    harness_target = flags.harness || Keyword.get(opts, :harness, "super-pi-workspace")
+    harness_mod =
+      case Harness.resolve(harness_target) do
+        {:ok, mod} -> mod
+        _ -> Harness.Workspace
+      end
+
+    base_agent_defaults = harness_mod.agent_defaults(
+      model: flags.model || "gemini-3-flash-preview",
+      effort: flags.effort || "medium",
+      mode: flags.mode || "auto",
+      workspace_paths: workspace_dirs
+    )
+
+    agent_cfg =
+      base_agent_defaults
+      |> Map.merge(%{
+        "dangerouslySkipPermissions" => flags.dangerously_skip_permissions,
+        "disableSlashCommands" => flags.disable_slash_commands,
+        "workspacePaths" => workspace_dirs,
+        "globalConfigDir" => global_dir,
+        "appDataDir" => app_dir,
+        "settingsOverride" => parse_settings_flag(flags.settings),
+        "jsonSchema" => parse_json_schema_flag(flags.json_schema),
+        "agent" => flags.agent,
+        "tools" => tools_for_agent(flags.agent)
+      })
+      |> maybe_override("model", flags.model)
+      |> maybe_override("effort", flags.effort)
+      |> maybe_override("executionMode", flags.mode)
 
     conv =
       cond do
@@ -249,10 +271,12 @@ defmodule SuperPi.Harness.AGY.CLI do
           Storage.create_conversation!(agent: agent_cfg)
       end
 
+    active_extensions = Keyword.get(opts, :extensions, harness_mod.extensions())
+
     machine_opts =
       [
         conversation_id: conv.id,
-        extensions: Keyword.get(opts, :extensions, default_extensions())
+        extensions: active_extensions
       ]
       |> maybe_put(:llm_responder, Keyword.get(opts, :llm_responder))
       |> maybe_put(:tool_executor, Keyword.get(opts, :tool_executor))
@@ -266,8 +290,6 @@ defmodule SuperPi.Harness.AGY.CLI do
     end
   end
 
-  # Stops the machine and waits until its registry entry is gone, so callers never
-  # observe a half-dead machine.
   defp stop_machine(conv_id, pid) do
     GenServer.stop(pid)
     wait_unregistered(conv_id, 50)
@@ -303,11 +325,11 @@ defmodule SuperPi.Harness.AGY.CLI do
 
           case Machine.submit(pid, effective_prompt) do
             {:ok, :handled_by_extension} ->
-              Brain.sync_transcript!(conv.id, app_data_dir: app_dir)
+              TranscriptLogger.sync_transcript!(conv.id, app_data_dir: app_dir)
               {0, format_output(%{"status" => "handled"}, flags.output_format)}
 
             {:ok, assistant_msg} ->
-              Brain.sync_transcript!(conv.id, app_data_dir: app_dir)
+              TranscriptLogger.sync_transcript!(conv.id, app_data_dir: app_dir)
               {0, format_output(assistant_msg, flags.output_format)}
 
             {:error, reason} ->
@@ -323,8 +345,6 @@ defmodule SuperPi.Harness.AGY.CLI do
 
   @read_only_agent_tools ["read", "grep", "find", "ls", "tool_search"]
 
-  # The `research` agent is read-only: execution, not just the declared tool list, is
-  # gated by the Permissions extension in plan mode; here we restrict what is offered.
   defp tools_for_agent("research") do
     Enum.filter(Tools.active_llm_tools(), &(&1["name"] in @read_only_agent_tools))
   end
@@ -334,8 +354,7 @@ defmodule SuperPi.Harness.AGY.CLI do
   def launch_interactive_tui(conv_id, flags, workspace_dirs, opts \\ []) do
     {:ok, rpc_pid} = SuperPi.RPC.Server.start_link(port: 0)
     port = SuperPi.RPC.Server.port(rpc_pid)
-    # Never execute a binary found relative to the working directory (untrusted repos).
-    tui_bin = Keyword.get(opts, :tui_binary) || System.find_executable("agy-tui")
+    tui_bin = Keyword.get(opts, :tui_binary) || System.find_executable("super-pi-tui")
 
     res =
       if is_binary(tui_bin) and File.exists?(tui_bin) do
@@ -377,7 +396,7 @@ defmodule SuperPi.Harness.AGY.CLI do
   # --- Subcommands ---
 
   defp run_mcp_subcommand(["list" | _], opts) do
-    servers = Brain.mcp_list(opts)
+    servers = TranscriptLogger.mcp_list(opts)
     header = "NAME   TYPE   STATUS   COMMAND/URL"
 
     rows =
@@ -396,37 +415,37 @@ defmodule SuperPi.Harness.AGY.CLI do
         %{"command" => cmd_or_url, "args" => args}
       end
 
-    Brain.mcp_add(name, spec, opts)
+    TranscriptLogger.mcp_add(name, spec, opts)
     {0, "Added MCP server #{name}"}
   end
 
   defp run_mcp_subcommand(["remove", name | _], opts) do
-    case Brain.mcp_remove(name, opts) do
+    case TranscriptLogger.mcp_remove(name, opts) do
       :ok -> {0, "Removed MCP server #{name}"}
       {:error, :not_found} -> {1, "MCP server not found: #{name}"}
     end
   end
 
   defp run_mcp_subcommand(["enable", name | _], opts) do
-    case Brain.mcp_set_enabled(name, true, opts) do
+    case TranscriptLogger.mcp_set_enabled(name, true, opts) do
       :ok -> {0, "Enabled MCP server #{name}"}
       {:error, :not_found} -> {1, "MCP server not found: #{name}"}
     end
   end
 
   defp run_mcp_subcommand(["disable", name | _], opts) do
-    case Brain.mcp_set_enabled(name, false, opts) do
+    case TranscriptLogger.mcp_set_enabled(name, false, opts) do
       :ok -> {0, "Disabled MCP server #{name}"}
       {:error, :not_found} -> {1, "MCP server not found: #{name}"}
     end
   end
 
   defp run_mcp_subcommand(_, _opts) do
-    {0, "Usage: agy mcp <add|remove|list|enable|disable>"}
+    {0, "Usage: super-pi mcp <add|remove|list|enable|disable>"}
   end
 
   defp run_plugin_subcommand(["list" | _], flags, opts) do
-    plugins = Brain.plugin_list(opts)
+    plugins = TranscriptLogger.plugin_list(opts)
 
     if flags.json do
       {0, Jason.encode!(plugins)}
@@ -441,28 +460,28 @@ defmodule SuperPi.Harness.AGY.CLI do
   end
 
   defp run_plugin_subcommand(["enable", name | _], _flags, opts) do
-    case Brain.plugin_set_enabled(name, true, opts) do
+    case TranscriptLogger.plugin_set_enabled(name, true, opts) do
       :ok -> {0, "Enabled plugin #{name}"}
       {:error, :not_found} -> {1, "Plugin not found: #{name}"}
     end
   end
 
   defp run_plugin_subcommand(["disable", name | _], _flags, opts) do
-    case Brain.plugin_set_enabled(name, false, opts) do
+    case TranscriptLogger.plugin_set_enabled(name, false, opts) do
       :ok -> {0, "Disabled plugin #{name}"}
       {:error, :not_found} -> {1, "Plugin not found: #{name}"}
     end
   end
 
   defp run_plugin_subcommand(["validate", path | _], _flags, _opts) do
-    case Brain.plugin_validate(path) do
+    case TranscriptLogger.plugin_validate(path) do
       {:ok, info} -> {0, Jason.encode!(info)}
       {:error, info} -> {1, Jason.encode!(info)}
     end
   end
 
   defp run_plugin_subcommand(_, _flags, _opts) do
-    {0, "Usage: agy plugin <list|enable|disable|validate>"}
+    {0, "Usage: super-pi plugin <list|enable|disable|validate>"}
   end
 
   defp run_remote_control_subcommand(["status" | _]) do
@@ -479,7 +498,7 @@ defmodule SuperPi.Harness.AGY.CLI do
   end
 
   defp run_remote_control_subcommand(_) do
-    {0, "Usage: agy remote-control <start|status|stop>"}
+    {0, "Usage: super-pi remote-control <start|status|stop>"}
   end
 
   # --- Helpers ---
@@ -509,7 +528,7 @@ defmodule SuperPi.Harness.AGY.CLI do
         end
       end)
 
-    Brain.sync_transcript!(conv_id, app_data_dir: app_dir)
+    TranscriptLogger.sync_transcript!(conv_id, app_data_dir: app_dir)
     code = if Enum.any?(results, fn {c, _} -> c != 0 end), do: 1, else: 0
     {code, results |> Enum.map(&elem(&1, 1)) |> Enum.join("\n")}
   end
@@ -543,8 +562,10 @@ defmodule SuperPi.Harness.AGY.CLI do
       dangerously_skip_permissions: Keyword.get(parsed, :dangerously_skip_permissions, false),
       disable_slash_commands: Keyword.get(parsed, :disable_slash_commands, false),
       effort: Keyword.get(parsed, :effort, "medium"),
+      harness: Keyword.get(parsed, :harness),
       help: Keyword.get(parsed, :help, false),
       input_format: Keyword.get(parsed, :input_format, "text"),
+      json: Keyword.get(parsed, :json, false),
       json_schema: Keyword.get(parsed, :json_schema),
       mode: Keyword.get(parsed, :mode, "auto"),
       model: Keyword.get(parsed, :model),
@@ -553,8 +574,7 @@ defmodule SuperPi.Harness.AGY.CLI do
       prompt: Keyword.get(parsed, :prompt),
       prompt_interactive: Keyword.get(parsed, :prompt_interactive),
       sandbox: Keyword.get(parsed, :sandbox, false),
-      settings: Keyword.get(parsed, :settings),
-      json: Keyword.get(parsed, :json, false)
+      settings: Keyword.get(parsed, :settings)
     }
   end
 
@@ -613,34 +633,42 @@ defmodule SuperPi.Harness.AGY.CLI do
   defp maybe_put(kw, _k, nil), do: kw
   defp maybe_put(kw, k, v), do: Keyword.put(kw, k, v)
 
+  defp maybe_override(map, _key, nil), do: map
+  defp maybe_override(map, key, val), do: Map.put(map, key, val)
+
   def help_text do
     """
-    Usage of super-agy (SuperPi.Harness.AGY clone of Antigravity CLI):
-      --add-dir                       Add a directory to the workspace (repeatable)
-      --agent                         Agent for the current CLI session
-      -c, --continue                  Continue the most recent conversation
-      --conversation                  Resume a previous conversation by ID
-      --dangerously-skip-permissions  Auto-approve all tool permission requests without prompting
-      --disable-slash-commands        Disable slash command and skill expansion in print mode
-      --effort                        Reasoning effort (low|medium|high|xhigh|max)
-      -i, --prompt-interactive        Run an initial prompt interactively
-      --input-format                  Input format for print mode (text, stream-json)
-      --json-schema                   JSON schema string or file path to enforce structured output
-      --mode                          Agent execution mode (accept-edits, auto, plan)
-      --model                         Model for the current CLI session
-      --output-format                 Output format for print mode (text, json, stream-json)
-      -p, --print, --prompt           Run a single prompt non-interactively and print the response
-      --sandbox                       Run in a sandbox with terminal restrictions enabled
-      --settings                      Session settings override (inline JSON or file path)
+    Usage: super-pi [command] [options] [prompt]
 
-    Available subcommands:
-      agent, agents   List available agents
-      models          List available models
-      mcp             Manage MCP servers (add, remove, list, enable, disable)
-      plugin, plugins Manage plugins (list, enable, disable, validate)
-      remote-control  Manage the remote-control background daemon (start, status, stop)
-      changelog       Show changelog and release notes
-      help            Show help for subcommands
+    Options:
+      -H, --harness                   Agent harness (workspace, default, fast, auto, interactive, planner)
+      -p, --print, --prompt           Run a single prompt non-interactively and print the response
+      -i, --prompt-interactive        Run an initial prompt interactively
+      -c, --continue                  Continue the most recent conversation
+      --conversation <id>             Resume a previous conversation by numeric ID
+      --model <model>                 Active LLM model
+      --mode <mode>                   Execution mode (auto, accept-edits, plan)
+      --effort <level>                Reasoning effort (low, medium, high, xhigh, max)
+      --agent <profile>               Agent profile (self, research, image-generator)
+      --add-dir <path>                Add a directory to the workspace (repeatable)
+      --input-format <format>         Input format (text, stream-json)
+      --output-format <format>        Output format (text, json, stream-json)
+      --dangerously-skip-permissions  Auto-approve tool permissions without confirmation
+      --disable-slash-commands        Disable slash command preprocessing
+      --sandbox                       Run in an isolated execution sandbox
+      --settings <json|file>          Session settings overrides
+      --json-schema <json|file>       Enforce structured JSON output schema
+      -h, --help                      Show help
+
+    Commands:
+      harnesses                       List available agent harnesses
+      models                          List available LLM models
+      agents                          List available agent profiles
+      mcp <list|add|remove|enable|disable> Manage MCP server configurations
+      plugins <list|enable|disable|validate> Manage workspace plugins
+      remote-control <start|status|stop> Control RPC daemon
+      gateway [port]                  Start upstream inference HTTP gateway
+      session <list|show <id>>        Inspect durable conversation sessions
     """
   end
 end

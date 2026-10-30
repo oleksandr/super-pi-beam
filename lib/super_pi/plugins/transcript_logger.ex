@@ -23,7 +23,7 @@ defmodule SuperPi.Plugins.TranscriptLogger do
   @compact_limit_bytes 4_096
 
   @impl true
-  def after_run(ctx, _acc) do
+  def after_run(_summary, ctx) do
     if ctx[:conversation_id] do
       try do
         sync_transcript!(ctx.conversation_id)
@@ -31,7 +31,7 @@ defmodule SuperPi.Plugins.TranscriptLogger do
         _ -> :ok
       end
     end
-    :ok
+    :accept
   end
 
   @doc """
