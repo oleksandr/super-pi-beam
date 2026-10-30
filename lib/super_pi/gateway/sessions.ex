@@ -51,15 +51,18 @@ defmodule SuperPi.Gateway.Sessions do
     conv = create_fun.()
     now = DateTime.utc_now()
 
-    {count, _} =
+    # `returning` tells us whether this call inserted the row. The affected-row count is not
+    # reliable on SQLite when the connection is shared.
+    {_count, inserted} =
       Repo.insert_all(
         Row,
         [%{principal: principal, session_id: session_id, conversation_id: conv.id, last_used_at: now, inserted_at: now, updated_at: now}],
         on_conflict: :nothing,
-        conflict_target: [:principal, :session_id]
+        conflict_target: [:principal, :session_id],
+        returning: [:id]
       )
 
-    if count == 1 do
+    if inserted != [] do
       prune()
       {conv.id, true}
     else

@@ -319,6 +319,31 @@ The exporter is OTLP over HTTP. Other `OTEL_*` variables are read by the OpenTel
 
 **Logs.** Log lines from a conversation carry `conversation_id` and `task_id`. In `rpc --stdio` and `mcp` modes logs go to stderr.
 
+### Workspaces and Artifacts
+
+File and command tools act on a **workspace**. The workspace is configuration, set per conversation in `pi.agent["workspace"]` (for example through RPC `session.open` `agent`, or a harness default). Nothing assumes the local disk of the node.
+
+| Kind | Where tools act | Survives node loss | Offered tools |
+|---|---|---|---|
+| `local` (default) | The node's disk, as before. The permission policy confines paths. | No | file, command |
+| `shared` | A directory on storage that every node mounts (NFS, CephFS, a read-write-many volume). `{"kind": "shared", "root": "/mnt/shared/ws"}`. Paths are confined to `root`; writes take a PostgreSQL advisory lock, so two nodes cannot change one file at once. | Yes | file, command, artifacts |
+| `scratch` | A temporary directory on the node that runs the task, removed when the task ends (`"lifetime": "conversation"` keeps it until the sweep, `scratch_ttl_hours`, default 24). `"base"` or `config :super_pi, scratch_dir` sets the parent. Paths are confined. | No | file, command, artifacts |
+| `none` | No filesystem and no commands (API-style agents). | n/a | artifacts |
+
+A tool that the workspace cannot serve is not offered to the model, and is refused if called. A `shared` workspace without a `root` is an error, not a fall back to the local disk. A task that restarted (a crash or a failover) gets a new, empty scratch directory, and its first tool result says so.
+
+**Artifacts** are the explicit storage API. A scratch directory disappears with its task or node. An artifact does not: it is stored by name, per conversation, in the database (PostgreSQL, or SQLite on a single node).
+
+| Tool | Purpose |
+|---|---|
+| `artifact_put` | Save text (`content`) or a workspace file (`path`) under `name`. A second put replaces it. |
+| `artifact_get` | Return an artifact, or write it into the workspace (`to_path`). |
+| `artifact_list` | List the artifacts of the conversation. |
+
+Limits: `artifact_max_bytes` (10 MiB) per artifact and `artifact_max_count` (200) per conversation. The backend is `SuperPi.Artifacts.Store`; set `config :super_pi, artifact_store: MyStore` to use another one, for example an S3-compatible bucket.
+
+**Limits of confinement.** Confinement covers file tools and follows symlinks. A shell command runs with the workspace root as its working directory, but it is not sandboxed: a command can still reach other paths. Use an OS-level sandbox (container, VM) for untrusted commands. Placing a conversation on one node, so that a `scratch` or `local` workspace is where the turn runs, is part of the cluster work (Task 36).
+
 ### Production PostgreSQL
 
 "PostgreSQL" here means a separate instance reached over the network: your own server or a managed service (RDS, Cloud SQL, Azure Database, Neon). SQLite stays the default for a single local node.

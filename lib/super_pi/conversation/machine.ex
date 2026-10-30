@@ -35,6 +35,7 @@ defmodule SuperPi.Conversation.Machine do
     last_assistant_message: nil,
     reply_from: nil,
     turn_span: nil,
+    turn_task_id: nil,
     turn_status: :ok
   ]
 
@@ -173,6 +174,8 @@ defmodule SuperPi.Conversation.Machine do
     # a slow server would block every other machine start. The first request still waits for it.
     start_mcp_clients(data.conversation_id)
     _reconciled = TaskEngine.reconcile_on_open!(data.conversation_id)
+    # Scratch directories left by tasks that ended while no machine ran (a crash, a failover).
+    SuperPi.Env.Workspace.sweep()
     {:next_state, :idle, data}
   end
 
@@ -182,6 +185,8 @@ defmodule SuperPi.Conversation.Machine do
     publish_live_state(data.conversation_id, "idle")
     Logger.metadata(task_id: nil)
     SuperPi.Telemetry.turn_stop(data.turn_span, data.turn_status)
+    # The task ended, so its scratch workspace is no longer needed.
+    SuperPi.Env.Workspace.cleanup_scratch(data.conversation_id, data.turn_task_id)
 
     {:keep_state,
      %__MODULE__{
@@ -191,6 +196,7 @@ defmodule SuperPi.Conversation.Machine do
          pending_tool_calls: [],
          completed_tool_results: [],
          turn_span: nil,
+         turn_task_id: nil,
          turn_status: :ok
      }}
   end
@@ -280,6 +286,7 @@ defmodule SuperPi.Conversation.Machine do
         next_data = %__MODULE__{
           data
           | turn_span: turn_span,
+            turn_task_id: running_task.id,
             turn_status: :ok,
             active_task_id: running_task.id,
             reply_from: from,
@@ -375,7 +382,8 @@ defmodule SuperPi.Conversation.Machine do
         _ -> [%{"id" => "core", "content" => "You are Super-Pi-BEAM."}]
       end
 
-    tools = Map.get(mutated_agent, "tools", [])
+    # Only tools that the workspace can serve are offered (`SuperPi.Env.Workspace`).
+    tools = SuperPi.Env.Workspace.offered_tools(Map.get(mutated_agent, "tools", []), mutated_agent)
     Context.ensure_system_state!(data.conversation_id, sections, tools)
 
     derived = Context.derive(data.conversation_id)

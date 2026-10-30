@@ -109,4 +109,51 @@ defmodule SuperPi.Durable.PostgresConcurrencyTest do
   rescue
     e -> {:raised, e}
   end
+
+  test "a write to a shared-workspace file waits for the cross-node advisory lock" do
+    path = Path.join(System.tmp_dir!(), "shared_lock_#{System.unique_integer([:positive])}.txt")
+    on_exit(fn -> File.rm(path) end)
+    parent = self()
+
+    holder =
+      Task.async(fn ->
+        Repo.transaction(fn ->
+          Repo.query!("SELECT pg_advisory_xact_lock($1)", [SuperPi.Env.Shared.lock_key(path)])
+          send(parent, :locked)
+
+          receive do
+            :release -> :ok
+          end
+        end)
+      end)
+
+    assert_receive :locked, 5_000
+    writer = Task.async(fn -> SuperPi.Env.Shared.write_file(path, "x", []) end)
+
+    assert Task.yield(writer, 400) == nil, "the write did not wait for the lock"
+    refute File.exists?(path)
+
+    send(holder.pid, :release)
+    assert :ok = Task.await(writer, 10_000)
+    Task.await(holder)
+    assert File.read!(path) == "x"
+  end
+
+  test "concurrent edits of one shared file lose no update" do
+    path = Path.join(System.tmp_dir!(), "shared_edit_#{System.unique_integer([:positive])}.txt")
+    File.write!(path, Enum.map_join(1..20, "", &"line-#{&1}\n"))
+    on_exit(fn -> File.rm(path) end)
+
+    1..20
+    |> Task.async_stream(
+      fn i -> SuperPi.Env.Shared.edit_file(path, "line-#{i}\n", "done-#{i}\n", []) end,
+      max_concurrency: 10,
+      timeout: 30_000
+    )
+    |> Enum.each(fn {:ok, result} -> assert match?({:ok, _}, result), inspect(result) end)
+
+    lines = path |> File.read!() |> String.split("\n", trim: true)
+    assert length(lines) == 20
+    assert Enum.count(lines, &String.starts_with?(&1, "done-")) == 20, "updates were lost: #{inspect(lines)}"
+  end
 end

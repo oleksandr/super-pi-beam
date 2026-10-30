@@ -17,7 +17,7 @@ defmodule SuperPi.Tools do
   - `:hidden` — Internal/disabled tool.
   """
 
-  alias SuperPi.Env.Local
+  alias SuperPi.Env.Workspace
 
   @catalog_ets :super_pi_tool_catalog
 
@@ -137,12 +137,52 @@ defmodule SuperPi.Tools do
     error_result(to_string(tool_name), "Invalid tool execution arguments: tool_name must be a string and args must be a map")
   end
 
-  def execute(tool_name, args, _ctx) when is_binary(tool_name) and is_map(args) do
+  def execute(tool_name, args, ctx) when is_binary(tool_name) and is_map(args) do
     ensure_catalog_ets!()
 
+    if String.starts_with?(tool_name, "mcp__") do
+      SuperPi.MCP.Manager.call_tool(tool_name, args)
+    else
+      # The workspace (`SuperPi.Env.Workspace`) decides where file and command tools act, and
+      # which tools exist at all. A tool is never run against another place than the one configured.
+      case Workspace.resolve(ctx || %{}) do
+        {:ok, ws} ->
+          if Workspace.supports?(ws, tool_name) do
+            try do
+              ws |> then(&run(tool_name, args, &1, ctx || %{})) |> add_notice(ws)
+            catch
+              {:workspace_error, message} -> error_result(tool_name, message)
+            end
+          else
+            error_result(tool_name, "#{tool_name} is not available in a #{ws.kind} workspace")
+          end
+
+        {:error, message} ->
+          error_result(tool_name, message)
+      end
+    end
+  end
+
+  defp add_notice(%{"output" => out} = result, %{notice: notice}) when is_binary(notice) and is_binary(out) do
+    Map.put(result, "output", notice <> "\n" <> out)
+  end
+
+  defp add_notice(result, _ws), do: result
+
+  defp default_dir(%{root: root}) when is_binary(root), do: root
+  defp default_dir(_ws), do: File.cwd!()
+
+  # A directory argument. In a confined workspace it must lie inside the root.
+  defp ws_dir(%{confined?: true} = ws, value), do: Workspace.contain!(ws, value || ".")
+  defp ws_dir(ws, value), do: value || default_dir(ws)
+
+  defp ws_path(%{confined?: true} = ws, path, args), do: Workspace.contain!(ws, path, fetch_arg(args, [:cd, "cd", :dir, "dir", :cwd, "cwd"]))
+  defp ws_path(_ws, path, args), do: resolve_path(path, args)
+
+  defp run(tool_name, args, ws, ctx) do
+    env = ws.env
+
     case tool_name do
-      "mcp__" <> _ ->
-        SuperPi.MCP.Manager.call_tool(tool_name, args)
 
       name when name in ["read", "read_file"] ->
         case fetch_arg(args, [:path, "path", :file_path, "file_path"]) do
@@ -153,11 +193,11 @@ defmodule SuperPi.Tools do
             error_result(name, "Argument 'path' must be a string")
 
           path ->
-            path = resolve_path(path, args)
+            path = ws_path(ws, path, args)
             offset = fetch_arg(args, [:offset, "offset", :start_line, "start_line"], 1)
             limit = fetch_arg(args, [:limit, "limit", :end_line, "end_line"])
 
-            case Local.read_file(path, offset: offset, limit: limit) do
+            case env.read_file(path, offset: offset, limit: limit) do
               {:ok, content} ->
                 line_count = length(String.split(content, "\n"))
 
@@ -184,9 +224,9 @@ defmodule SuperPi.Tools do
             error_result(name, "Missing required argument 'content'")
 
           true ->
-            resolved_path = resolve_path(path, args)
+            resolved_path = ws_path(ws, path, args)
 
-            case Local.write_file(resolved_path, content) do
+            case env.write_file(resolved_path, content) do
               :ok ->
                 bytes = byte_size(content)
 
@@ -217,9 +257,9 @@ defmodule SuperPi.Tools do
             error_result(name, "Missing required argument 'new_text'")
 
           true ->
-            resolved_path = resolve_path(path, args)
+            resolved_path = ws_path(ws, path, args)
 
-            case Local.edit_file(resolved_path, old_text, new_text) do
+            case env.edit_file(resolved_path, old_text, new_text) do
               {:ok, %{replacements: count}} ->
                 %{
                   "output" => "Replaced #{count} occurrence(s) in #{path}",
@@ -234,14 +274,14 @@ defmodule SuperPi.Tools do
 
       name when name in ["bash", "sh", "terminal", "run_command", "exec"] ->
         command = fetch_arg(args, [:command, "command", :cmd, "cmd", :script, "script"])
-        cd = fetch_arg(args, [:cd, "cd", :dir, "dir", :cwd, "cwd"], File.cwd!())
+        cd = ws_dir(ws, fetch_arg(args, [:cd, "cd", :dir, "dir", :cwd, "cwd"]))
 
         case command do
           nil ->
             error_result(name, "Missing required argument 'command'")
 
           cmd ->
-            case Local.exec_command("sh", ["-c", cmd], cd: cd) do
+            case env.exec_command("sh", ["-c", cmd], cd: cd) do
               {:ok, %{exit_code: code, output: out, spilled_path: spilled}} ->
                 %{
                   "is_error" => code != 0,
@@ -256,7 +296,7 @@ defmodule SuperPi.Tools do
         end
 
       name when name in ["grep", "search_files"] ->
-        root = fetch_arg(args, [:path, "path", :dir, "dir"], File.cwd!())
+        root = ws_dir(ws, fetch_arg(args, [:path, "path", :dir, "dir"]))
         pattern = fetch_arg(args, [:pattern, "pattern", :query, "query"])
 
         case pattern do
@@ -264,7 +304,7 @@ defmodule SuperPi.Tools do
             error_result(name, "Missing required argument 'pattern'")
 
           pat ->
-            case Local.scan_lines(root, pat) do
+            case env.scan_lines(root, pat) do
               {:ok, matches} ->
                 formatted =
                   matches
@@ -283,10 +323,10 @@ defmodule SuperPi.Tools do
         end
 
       name when name in ["find", "find_files"] ->
-        root = fetch_arg(args, [:path, "path", :dir, "dir"], File.cwd!())
+        root = ws_dir(ws, fetch_arg(args, [:path, "path", :dir, "dir"]))
         pattern = fetch_arg(args, [:pattern, "pattern", :glob, "glob"])
 
-        case Local.list_files(root) do
+        case env.list_files(root) do
           {:ok, files} ->
             filtered = filter_files_by_pattern(files, pattern)
 
@@ -301,7 +341,7 @@ defmodule SuperPi.Tools do
         end
 
       name when name in ["ls", "list_dir", "list_directory"] ->
-        dir = fetch_arg(args, [:path, "path", :dir, "dir"], File.cwd!())
+        dir = ws_dir(ws, fetch_arg(args, [:path, "path", :dir, "dir"]))
 
         case File.ls(Path.expand(dir)) do
           {:ok, entries} ->
@@ -320,6 +360,9 @@ defmodule SuperPi.Tools do
       "tool_search" ->
         query = fetch_arg(args, [:query, "query"], "")
         tool_search(query)
+
+      "artifact_" <> _ ->
+        SuperPi.Artifacts.Tools.run(tool_name, args, ws, ctx)
 
       other ->
         error_result(other, :unknown_tool)

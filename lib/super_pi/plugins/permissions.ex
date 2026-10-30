@@ -309,6 +309,17 @@ defmodule SuperPi.Plugins.Permissions do
   # Resolves a path the way the operating system does: one component at a time, following each
   # symlink before a later `..` is applied. Collapsing `..` first (as `Path.expand/1` does) would
   # treat `<workspace>/link/..` as `<workspace>` when `link` leads outside the workspace.
+  @doc """
+  True when `path` is `root` or inside it, after following symlinks component by component.
+  Both must be absolute. A link inside `root` that points outside it is not inside.
+  """
+  @spec within?(String.t(), String.t()) :: boolean()
+  def within?(path, root) when is_binary(path) and is_binary(root) do
+    real_target = real_path(path)
+    real_root = real_path(root)
+    real_root == "/" or real_target == real_root or String.starts_with?(real_target, real_root <> "/")
+  end
+
   defp real_path(path) when is_binary(path) do
     path = if String.starts_with?(path, "~"), do: Path.expand(path), else: path
     absolute = if Path.type(path) == :absolute, do: path, else: Path.join(File.cwd!(), path)
