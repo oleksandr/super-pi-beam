@@ -44,6 +44,6 @@ defmodule SuperPi.AI.Providers.Gemini do
   def generate(payload, opts), do: GeminiClient.generate(payload, opts)
 
   defp alias?(model) do
-    model == "default" or String.starts_with?(model, "super-pi-") or SuperPi.Harness.harness?(model)
+    model == "default" or SuperPi.Harness.harness?(model)
   end
 end

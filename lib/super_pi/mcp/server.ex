@@ -131,19 +131,30 @@ defmodule SuperPi.MCP.Server do
 
       {:reply, reply, state}
     else
-      result =
+      {result, state} =
         case name do
           "harness_task" ->
-            case Map.get(args, "prompt") || Map.get(args, :prompt) do
-              prompt when is_binary(prompt) and byte_size(prompt) > 0 ->
-                execute_harness_task(prompt)
+            result =
+              case Map.get(args, "prompt") || Map.get(args, :prompt) do
+                prompt when is_binary(prompt) and byte_size(prompt) > 0 ->
+                  execute_harness_task(prompt)
 
-              _ ->
-                %{"output" => "Missing required argument 'prompt'", "is_error" => true}
-            end
+                _ ->
+                  %{"output" => "Missing required argument 'prompt'", "is_error" => true}
+              end
+
+            {result, state}
 
           other ->
-            Tools.execute(other, args)
+            # Tools run through the default harness's `before_tool` pipeline (permissions,
+            # protected paths), the same as a model-issued call.
+            case authorize_tool(other, args, state) do
+              {{:ok, final_args}, state} ->
+                {Tools.execute(other, final_args), state}
+
+              {{:blocked, reason}, state} ->
+                {%{"output" => "Blocked: #{reason}", "is_error" => true}, state}
+            end
         end
 
       content_text = sanitize_utf8(Map.get(result, "output", ""))
@@ -401,6 +412,34 @@ defmodule SuperPi.MCP.Server do
         }
       }
     ]
+  end
+
+  defp authorize_tool(name, args, state) do
+    {session, state} = tool_session(state)
+    ctx = %{conversation_id: session.conversation_id, workspace_root: session.workspace_root}
+
+    case SuperPi.Extension.run_before_tool(session.extensions, name, args, ctx) do
+      {:allow, final_args} -> {{:ok, final_args}, state}
+      {:allow_overwritten, final_args, _keys} -> {{:ok, final_args}, state}
+      {:block, reason} -> {{:blocked, reason}, state}
+    end
+  end
+
+  # One conversation per MCP connection holds the permission policy for direct tool calls.
+  defp tool_session(%{tool_session: session} = state), do: {session, state}
+
+  defp tool_session(state) do
+    harness = SuperPi.Harness.default()
+    agent = SuperPi.Plugins.Permissions.apply_remote_mode(harness.agent_defaults(), nil)
+    conv = Storage.create_conversation!(agent: agent)
+
+    session = %{
+      conversation_id: conv.id,
+      workspace_root: File.cwd!(),
+      extensions: harness.extensions([])
+    }
+
+    {session, Map.put(state, :tool_session, session)}
   end
 
   defp execute_harness_task(prompt) do

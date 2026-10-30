@@ -271,6 +271,27 @@ config :super_pi, :permissions,
 
 A caller may request any mode up to `remote_max_mode`. Gateway callers send the `x-super-pi-mode` header or an `execution_mode` body field. RPC callers set `agent.executionMode`. RPC callers cannot set `dangerouslySkipPermissions`, `settingsOverride` or workspace paths. Without config, a request can only tighten the mode. An unknown harness name is an error. Set `config :super_pi, fallback_harness: "<id>"` for a fallback, and `default_harness` to change the default.
 
+### Authentication and Ownership
+
+The Gateway and the RPC server are open on loopback by default. To require a key, set tokens in config or the environment:
+
+```elixir
+config :super_pi, gateway_tokens: [alice: "key-for-alice", bob: "key-for-bob"]   # or plain strings
+```
+
+```bash
+export SUPER_PI_GATEWAY_TOKEN="key-one,key-two"
+```
+
+- **Gateway.** Send `Authorization: Bearer <key>`. A missing or wrong key gets `401` with the OpenAI error code `invalid_api_key`. `/` and `/health` stay open. The gateway refuses to bind a non-loopback address unless a token is configured.
+- **RPC.** With tokens configured, call `auth.login` with `{"token": "..."}` before any other method. Without a valid login the server answers `-32001`.
+- **Ownership.** The principal that creates a conversation owns it. Another principal asking for it gets the same answer as for a conversation that does not exist (`-32004` over RPC; a new conversation over the Gateway). Gateway session ids are per principal. A conversation without an owner (created by the CLI) belongs to `anonymous`, so it is reachable only when authentication is off.
+- **MCP.** The MCP server runs over stdio for the process that started it. Its `tools/call` goes through the default harness's `before_tool` pipeline (permissions, protected paths), in the remote mode (`accept-edits` unless configured).
+
+### Gateway Model Names
+
+`model` in `/v1/chat/completions` is either a harness id (`super-pi-planner`, a virtual model that picks an agent persona) or a model that a registered provider serves, which is passed through to that provider. Anything else returns `404 model_not_found`. A model whose provider has no key returns `503 provider_not_configured`. `GET /v1/models` lists what the gateway serves.
+
 ### Paths
 
 No path is hardcoded. Global config, app data and extra discovery roots resolve from app config, then the environment (`SUPER_PI_CONFIG_DIR`, `SUPER_PI_DATA_DIR`, `SUPER_PI_DISCOVERY_ROOTS`), then the operating system default (`:filename.basedir/2`). See `SuperPi.Discovery`.

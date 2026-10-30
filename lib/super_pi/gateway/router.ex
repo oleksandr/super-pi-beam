@@ -11,6 +11,7 @@ defmodule SuperPi.Gateway.Router do
   require Logger
 
   alias SuperPi.Conversation.Machine
+  alias SuperPi.Auth
   alias SuperPi.Durable.Storage
   alias SuperPi.Durable.Schemas.Conversation
   alias SuperPi.Harness
@@ -18,6 +19,7 @@ defmodule SuperPi.Gateway.Router do
 
   plug Plug.Logger, log: :debug
   plug :match
+  plug :authenticate
   plug Plug.Parsers,
     parsers: [:json],
     pass: ["application/json"],
@@ -96,7 +98,8 @@ defmodule SuperPi.Gateway.Router do
   post "/v1/chat/completions" do
     params = conn.body_params
 
-    with :ok <- validate_chat_params(params) do
+    with :ok <- validate_chat_params(params),
+         :ok <- validate_model(params) do
       model = Map.get(params, "model")
       messages = Map.get(params, "messages")
       stream? = Map.get(params, "stream") == true
@@ -172,6 +175,11 @@ defmodule SuperPi.Gateway.Router do
         end
       end
     else
+      {:error, status, code, msg} ->
+        send_json(conn, status, %{
+          "error" => %{"message" => msg, "type" => "invalid_request_error", "code" => code}
+        })
+
       {:error, status, msg} ->
         send_json(conn, status, %{
           "error" => %{
@@ -393,8 +401,77 @@ defmodule SuperPi.Gateway.Router do
     end
   end
 
+  # A model is a harness id (a virtual model that selects an agent persona) or a name that
+  # a registered provider serves (passed through to that provider). Anything else is a
+  # client error, as in other OpenAI-compatible gateways, so a typo never silently runs
+  # some other model. Auxiliary title requests are not checked.
+  defp validate_model(%{"model" => model, "messages" => messages}) when is_binary(model) and is_list(messages) do
+    cond do
+      title_request?(messages) ->
+        :ok
+
+      Harness.harness?(model) ->
+        :ok
+
+      true ->
+        case SuperPi.AI.Providers.resolve(model) do
+          {:ok, _provider, _model} ->
+            :ok
+
+          {:error, {:no_provider, _}} ->
+            {:error, 404, "model_not_found",
+             "The model `#{model}` does not exist or no provider serves it. List models with GET /v1/models."}
+
+          {:error, {:not_configured, provider}} ->
+            {:error, 503, "provider_not_configured",
+             "Provider `#{provider}` is not configured for model `#{model}` (missing API key or settings)."}
+        end
+    end
+  end
+
+  defp validate_model(_params), do: :ok
+
+  # `/` and `/health` stay open so probes work. Everything else needs a configured token
+  # (`SuperPi.Auth`). With no tokens configured the gateway is open, which is safe only on
+  # loopback; `SuperPi.Gateway.Server` refuses a non-loopback bind without a token.
+  defp authenticate(%Plug.Conn{request_path: path} = conn, _opts) when path in ["/", "/health"] do
+    assign(conn, :principal, Auth.anonymous())
+  end
+
+  defp authenticate(conn, _opts) do
+    token =
+      case get_req_header(conn, "authorization") do
+        [header | _] -> Auth.bearer_token(header)
+        _ -> nil
+      end
+
+    case Auth.authenticate(token) do
+      {:ok, principal} ->
+        assign(conn, :principal, principal)
+
+      :error ->
+        conn
+        |> put_resp_header("www-authenticate", "Bearer")
+        |> send_json(401, %{
+          "error" => %{
+            "message" => "Invalid or missing API key. Send `Authorization: Bearer <key>`.",
+            "type" => "invalid_request_error",
+            "code" => "invalid_api_key"
+          }
+        })
+        |> halt()
+    end
+  end
+
+  defp new_conversation(principal) do
+    conv = Storage.create_conversation!(agent: %{})
+    Auth.claim!(conv.id, principal)
+    conv
+  end
+
   defp resolve_conversation(conn, params) do
     ensure_session_cache!()
+    principal = conn.assigns[:principal] || Auth.anonymous()
 
     session_id =
       case get_req_header(conn, "x-session-id") do
@@ -414,15 +491,18 @@ defmodule SuperPi.Gateway.Router do
 
     cond do
       session_id != nil ->
-        SuperPi.Env.FileLock.with_lock("gateway_session", session_id, fn ->
-          case :ets.lookup(:super_pi_gateway_sessions, session_id) do
-            [{^session_id, conv_id}] ->
+        # Sessions are per principal: two clients that pick the same id do not share a conversation.
+        session_key = {principal, session_id}
+
+        SuperPi.Env.FileLock.with_lock("gateway_session", "#{principal}:#{session_id}", fn ->
+          case :ets.lookup(:super_pi_gateway_sessions, session_key) do
+            [{^session_key, conv_id}] ->
               Logger.info("[Gateway] 🔗 Mapped session '#{session_id}' to existing conversation ##{conv_id}")
               {conv_id, false}
 
             [] ->
-              conv = Storage.create_conversation!(agent: %{})
-              :ets.insert(:super_pi_gateway_sessions, {session_id, conv.id})
+              conv = new_conversation(principal)
+              :ets.insert(:super_pi_gateway_sessions, {session_key, conv.id})
               Logger.info("[Gateway] 🆕 Mapped new session '#{session_id}' to conversation ##{conv.id}")
               {conv.id, true}
           end
@@ -431,24 +511,31 @@ defmodule SuperPi.Gateway.Router do
       header_conv_id != nil ->
         case Integer.parse(to_string(header_conv_id)) do
           {int_id, ""} ->
+            # A conversation owned by another principal is answered like a missing one.
             case Repo.get(Conversation, int_id) do
               %Conversation{} ->
-                Logger.info("[Gateway] 🔗 Attached to existing conversation ##{int_id}")
-                {int_id, false}
+                if Auth.authorized?(int_id, principal) do
+                  Logger.info("[Gateway] 🔗 Attached to existing conversation ##{int_id}")
+                  {int_id, false}
+                else
+                  conv = new_conversation(principal)
+                  Logger.info("[Gateway] 🆕 Created conversation ##{conv.id} (requested ##{int_id} not available)")
+                  {conv.id, true}
+                end
 
               nil ->
-                conv = Storage.create_conversation!(agent: %{})
+                conv = new_conversation(principal)
                 Logger.info("[Gateway] 🆕 Created conversation ##{conv.id} (requested ##{int_id} not found)")
                 {conv.id, true}
             end
 
           _ ->
-            conv = Storage.create_conversation!(agent: %{})
+            conv = new_conversation(principal)
             {conv.id, true}
         end
 
       true ->
-        conv = Storage.create_conversation!(agent: %{})
+        conv = new_conversation(principal)
         Logger.info("[Gateway] 🆕 Created new conversation ##{conv.id}")
         {conv.id, true}
     end

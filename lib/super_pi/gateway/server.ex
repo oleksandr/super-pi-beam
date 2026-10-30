@@ -7,7 +7,8 @@ defmodule SuperPi.Gateway.Server do
   def child_spec(opts) do
     port = Keyword.get(opts, :port) || Application.get_env(:super_pi, :gateway_port, 4000)
     ip = Keyword.get(opts, :ip, {127, 0, 0, 1})
-    token = Keyword.get(opts, :auth_token) || Application.get_env(:super_pi, :gateway_token)
+    token = Keyword.get(opts, :auth_token)
+    authenticated? = SuperPi.Auth.required?() or (is_binary(token) and token != "")
 
     loopback? =
       case ip do
@@ -16,8 +17,15 @@ defmodule SuperPi.Gateway.Server do
         _ -> false
       end
 
-    if not loopback? and (is_nil(token) or token == "") do
-      raise ArgumentError, "Binding gateway to a non-loopback address requires a configured auth token"
+    if not loopback? and not authenticated? do
+      raise ArgumentError,
+            "Binding gateway to a non-loopback address requires a token " <>
+              "(config :super_pi, gateway_tokens: [...] or SUPER_PI_GATEWAY_TOKEN)"
+    end
+
+    # An explicit `auth_token:` option joins the configured tokens.
+    if is_binary(token) and token != "" do
+      Application.put_env(:super_pi, :gateway_token, token)
     end
 
     Bandit.child_spec(

@@ -144,7 +144,7 @@ defmodule SuperPi.GatewayTest do
 
     # Ensure this title generation did NOT map test-session-123 in ETS to a corrupted conversation
     sessions = :ets.tab2list(:super_pi_gateway_sessions)
-    assert Enum.find(sessions, fn {sid, _cid} -> sid == "test-session-123" end) == nil
+    assert Enum.find(sessions, fn {{_principal, sid}, _cid} -> sid == "test-session-123" end) == nil
   end
 
   test "POST /v1/chat/completions preserves multi-turn conversational context" do

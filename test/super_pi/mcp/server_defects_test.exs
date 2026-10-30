@@ -7,13 +7,26 @@ defmodule SuperPi.MCP.ServerDefectsTest do
   Run only these:  mix test --only known_bug
   Skip these:      mix test --exclude known_bug
   """
-  use ExUnit.Case, async: false
+  use SuperPi.DataCase, async: false
 
   alias SuperPi.MCP.Server
 
 
   setup do
     SuperPi.Tools.ensure_catalog_ets!()
+
+    # These tests read and write files in the system temp dir, outside the workspace.
+    # Direct tool calls now pass the permission policy, so they lift the confinement.
+    saved = Application.fetch_env(:super_pi, :permissions)
+    Application.put_env(:super_pi, :permissions, allowNonWorkspaceAccess: true)
+
+    on_exit(fn ->
+      case saved do
+        {:ok, v} -> Application.put_env(:super_pi, :permissions, v)
+        :error -> Application.delete_env(:super_pi, :permissions)
+      end
+    end)
+
     :ok
   end
 

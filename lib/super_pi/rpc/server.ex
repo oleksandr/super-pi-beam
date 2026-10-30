@@ -25,6 +25,7 @@ defmodule SuperPi.RPC.Server do
   alias SuperPi.Durable.{Context, Doc, Storage}
   alias SuperPi.Durable.Schemas.Conversation
   alias SuperPi.Plugins.Permissions
+  alias SuperPi.Auth
   alias SuperPi.Repo
 
   @max_in_flight_batches 2
@@ -61,9 +62,17 @@ defmodule SuperPi.RPC.Server do
         case validate_params(method, params) do
           :ok ->
             safe_params = if is_map(params), do: params, else: %{}
-            {reply, next_state, notifs} = dispatch_method(method, safe_params, id, client_state)
-            reply = if has_id?, do: reply, else: nil
-            {reply, next_state, notifs}
+
+            case authorize(method, safe_params, client_state) do
+              :ok ->
+                {reply, next_state, notifs} = dispatch_method(method, safe_params, id, client_state)
+                reply = if has_id?, do: reply, else: nil
+                {reply, next_state, notifs}
+
+              {:error, code, msg} ->
+                reply = if has_id?, do: jsonrpc_error(id, code, msg), else: nil
+                {reply, client_state, []}
+            end
 
           {:error, code, msg} ->
             reply = if has_id?, do: jsonrpc_error(id, code, msg), else: nil
@@ -156,6 +165,8 @@ defmodule SuperPi.RPC.Server do
 
   def new_client_state do
     %{
+      # nil until `auth.login` succeeds when tokens are configured (`SuperPi.Auth`).
+      principal: if(Auth.required?(), do: nil, else: Auth.anonymous()),
       watched_conversations: MapSet.new(),
       in_flight: %{},
       coalesced_queue: [],
@@ -470,7 +481,48 @@ defmodule SuperPi.RPC.Server do
 
   defp validate_params(_other, _params), do: :ok
 
+  # --- Authentication and ownership ---
+
+  # A client that has no `:principal` key (a hand-built state) is open only when no token is
+  # configured. A conversation owned by another principal answers like a missing one.
+  defp principal(client_state) do
+    case Map.fetch(client_state, :principal) do
+      {:ok, principal} -> principal
+      :error -> if Auth.required?(), do: nil, else: Auth.anonymous()
+    end
+  end
+
+  defp authorize("auth.login", _params, _client_state), do: :ok
+
+  defp authorize(_method, params, client_state) do
+    case principal(client_state) do
+      nil ->
+        {:error, -32001, "Unauthorized: call auth.login with a valid token first"}
+
+      principal ->
+        case Map.get(params, "conversation_id") do
+          conv_id when is_integer(conv_id) ->
+            if Auth.authorized?(conv_id, principal),
+              do: :ok,
+              else: {:error, -32004, "Conversation not found: #{conv_id}"}
+
+          _ ->
+            :ok
+        end
+    end
+  end
+
   # --- Method Dispatch ---
+
+  defp dispatch_method("auth.login", params, id, client_state) do
+    case Auth.authenticate(Map.get(params, "token")) do
+      {:ok, principal} ->
+        {jsonrpc_result(id, %{"principal" => principal}), Map.put(client_state, :principal, principal), []}
+
+      :error ->
+        {jsonrpc_error(id, -32001, "Unauthorized: invalid token"), client_state, []}
+    end
+  end
 
   defp dispatch_method("session.open", params, id, client_state) do
     case fetch_harness(params) do
@@ -550,6 +602,7 @@ defmodule SuperPi.RPC.Server do
     parent_id = Map.fetch!(params, "conversation_id")
     at_entry_id = Map.fetch!(params, "at_entry_id")
     fork_conv = Storage.fork_conversation!(parent_id, at_entry_id)
+    Auth.claim!(fork_conv.id, principal(client_state) || Auth.anonymous())
 
     reply =
       jsonrpc_result(id, %{
@@ -736,7 +789,9 @@ defmodule SuperPi.RPC.Server do
             |> Permissions.apply_remote_mode(Map.get(base_agent, "executionMode"))
 
           agent_cfg = Map.merge(defaults, base_agent)
-          Storage.create_conversation!(agent: agent_cfg)
+          conv = Storage.create_conversation!(agent: agent_cfg)
+          Auth.claim!(conv.id, principal(client_state) || Auth.anonymous())
+          conv
 
         conv_id ->
           if Map.has_key?(params, "agent") do

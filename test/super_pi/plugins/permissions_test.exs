@@ -165,7 +165,7 @@ defmodule SuperPi.Plugins.PermissionsTest do
     end
 
     defp conv_id_for(session) do
-      [{^session, conv_id}] = :ets.lookup(:super_pi_gateway_sessions, session)
+      [{_key, conv_id}] = :ets.lookup(:super_pi_gateway_sessions, {SuperPi.Auth.anonymous(), session})
       conv_id
     end
 
