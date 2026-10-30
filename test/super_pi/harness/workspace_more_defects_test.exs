@@ -1,6 +1,6 @@
-defmodule SuperPi.Harness.AgyMoreDefectsTest do
+defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
   @moduledoc """
-  Regression tests that reproduce further AGY harness defects found in the code
+  Regression tests that reproduce further Workspace harness defects found in the code
   review (hooks_json, discovery, brain, permissions, slash commands, harness
   module). Every test is expected to FAIL on the current code and pass once the
   matching finding is fixed.
@@ -12,7 +12,7 @@ defmodule SuperPi.Harness.AgyMoreDefectsTest do
 
   alias SuperPi.Durable.{Doc, Storage}
   alias SuperPi.Conversation.Machine
-  alias SuperPi.Harness.Workspace, as: AGY
+  alias SuperPi.Harness.Workspace
   alias SuperPi.Discovery
   alias SuperPi.Plugins.TranscriptLogger, as: Brain
   alias SuperPi.Plugins.Hooks, as: HooksJson
@@ -23,7 +23,7 @@ defmodule SuperPi.Harness.AgyMoreDefectsTest do
   # --- helpers ---
 
   defp tmp_dir!(label, suffix \\ "") do
-    dir = Path.join(System.tmp_dir!(), "agy_more_#{label}_#{System.unique_integer([:positive])}#{suffix}")
+    dir = Path.join(System.tmp_dir!(), "ws_more_#{label}_#{System.unique_integer([:positive])}#{suffix}")
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf(dir) end)
     dir
@@ -87,7 +87,7 @@ defmodule SuperPi.Harness.AgyMoreDefectsTest do
       put_tmpdir!(tdir)
       out = Path.join(tmp_dir!("modeout"), "ls.txt")
 
-      cmd = "for f in #{tdir}/agy_hook_in_*.json; do ls -l \"$f\" > #{out}; done; echo '{}'"
+      cmd = "for f in #{tdir}/hook_in_*.json; do ls -l \"$f\" > #{out}; done; echo '{}'"
       script = Path.join(tdir, "hook.sh")
       File.write!(script, cmd <> "\n")
 
@@ -120,7 +120,7 @@ defmodule SuperPi.Harness.AgyMoreDefectsTest do
     end
 
     test "the stdin temp file is removed after the timeout", %{tdir: tdir} do
-      assert Path.wildcard(Path.join(tdir, "agy_hook_in_*.json")) == []
+      assert Path.wildcard(Path.join(tdir, "hook_in_*.json")) == []
     end
   end
 
@@ -542,9 +542,9 @@ defmodule SuperPi.Harness.AgyMoreDefectsTest do
 
   # --- Finding 8: harness module drift ---
 
-  describe "AGY harness module (agy.ex:21-29)" do
+  describe "Workspace harness module" do
     test "extensions/0 matches CLI.default_extensions/0" do
-      assert AGY.extensions() == SuperPi.CLI.default_extensions()
+      assert Workspace.extensions() == SuperPi.CLI.default_extensions()
     end
   end
 end

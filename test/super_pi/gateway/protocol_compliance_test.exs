@@ -252,7 +252,7 @@ defmodule SuperPi.Gateway.ProtocolComplianceTest do
         "super-pi-fast",
         "super-pi-auto",
         "super-pi-interactive",
-        "super-pi-agy",
+        "super-pi-workspace",
         "super-pi-planner"
       ]
 

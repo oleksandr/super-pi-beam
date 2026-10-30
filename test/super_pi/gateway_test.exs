@@ -45,15 +45,16 @@ defmodule SuperPi.GatewayTest do
     model_ids = Enum.map(body["data"], & &1["id"])
     assert "super-pi-agent" in model_ids
     assert "super-pi-fast" in model_ids
-    assert "super-pi-agy" in model_ids
+    assert "super-pi-workspace" in model_ids
+    refute "super-pi-agy" in model_ids
     assert "super-pi-planner" in model_ids
   end
 
-  test "POST /v1/chat/completions with super-pi-agy loads AGY extensions" do
+  test "POST /v1/chat/completions with super-pi-workspace loads workspace extensions" do
     payload = %{
-      "model" => "super-pi-agy",
+      "model" => "super-pi-workspace",
       "messages" => [
-        %{"role" => "user", "content" => "Hello AGY"}
+        %{"role" => "user", "content" => "Hello Workspace"}
       ],
       "stream" => false
     }

@@ -1,6 +1,6 @@
-defmodule SuperPi.Harness.AgySecurityDefectsTest do
+defmodule SuperPi.Harness.WorkspaceSecurityDefectsTest do
   @moduledoc """
-  Regression tests that reproduce AGY harness defects found in the code review
+  Regression tests that reproduce Workspace harness defects found in the code review
   (see vault note "20 - Codebase Review Findings"). Every test is expected to
   FAIL on the current code and pass once the matching finding is fixed.
 
@@ -22,7 +22,7 @@ defmodule SuperPi.Harness.AgySecurityDefectsTest do
   # --- helpers ---
 
   defp tmp_dir!(label) do
-    dir = Path.join(System.tmp_dir!(), "agy_sec_#{label}_#{System.unique_integer([:positive])}")
+    dir = Path.join(System.tmp_dir!(), "ws_sec_#{label}_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf(dir) end)
     dir
@@ -194,7 +194,7 @@ defmodule SuperPi.Harness.AgySecurityDefectsTest do
       {:ok, cfg2} = HooksJson.before_agent_start(cfg1, ctx)
       {:ok, cfg3} = HooksJson.before_agent_start(cfg2, ctx)
 
-      sections = Enum.filter(Map.get(cfg3, "systemSections", []), &(&1["id"] == "agy_session_start_hooks"))
+      sections = Enum.filter(Map.get(cfg3, "systemSections", []), &(&1["id"] == "session_start_hooks"))
       assert length(sections) == 1, "#{length(sections)} duplicate sections after 3 requests"
     end
   end

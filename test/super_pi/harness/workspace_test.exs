@@ -1,4 +1,4 @@
-defmodule SuperPi.Harness.AGYTest do
+defmodule SuperPi.Harness.WorkspaceTest do
   use SuperPi.DataCase, async: false
   use ExUnitProperties
 
@@ -10,7 +10,7 @@ defmodule SuperPi.Harness.AGYTest do
   alias SuperPi.Plugins.TranscriptLogger, as: Brain
   alias SuperPi.Durable.Context
 
-  describe "Property-Based & Integration Tests: SuperPi.Harness.AGY Clone of Antigravity CLI" do
+  describe "Property-Based & Integration Tests: SuperPi.Harness.Workspace" do
     property "Rules extension enforces 24,000-byte per-file cap on line boundaries and 20,000-token aggregate budget" do
       check all(
               line_len <- integer(40..120),
@@ -32,7 +32,7 @@ defmodule SuperPi.Harness.AGYTest do
           assert byte_size(prefix) <= 24_000
         end
 
-        tmp_rule = Path.join(System.tmp_dir!(), "agy_rule_#{System.unique_integer([:positive])}.md")
+        tmp_rule = Path.join(System.tmp_dir!(), "ws_rule_#{System.unique_integer([:positive])}.md")
         File.write!(tmp_rule, raw_content)
 
         rendered = Rules.build_rules_section([tmp_rule], token_budget)
@@ -85,7 +85,7 @@ defmodule SuperPi.Harness.AGYTest do
     end
 
     test "discovers skills and rules from workspace directories" do
-      tmp_ws = Path.join(System.tmp_dir!(), "agy_ws_discovery_#{System.unique_integer([:positive])}")
+      tmp_ws = Path.join(System.tmp_dir!(), "ws_ws_discovery_#{System.unique_integer([:positive])}")
       File.mkdir_p!(Path.join(tmp_ws, ".agents/skills/custom-skill"))
       File.write!(Path.join(tmp_ws, ".agents/skills/custom-skill/SKILL.md"), """
       ---
@@ -105,7 +105,7 @@ defmodule SuperPi.Harness.AGYTest do
     end
 
     test "end-to-end HooksJson PreToolUse overwrite, SessionStart injection, Stop continuation, and Permissions enforcement" do
-      tmp_ws = Path.join(System.tmp_dir!(), "agy_ws_#{System.unique_integer([:positive])}")
+      tmp_ws = Path.join(System.tmp_dir!(), "ws_ws_#{System.unique_integer([:positive])}")
       dot_agents = Path.join(tmp_ws, ".agents")
       File.mkdir_p!(dot_agents)
 
@@ -196,13 +196,13 @@ defmodule SuperPi.Harness.AGYTest do
       File.rm_rf!(tmp_ws)
     end
 
-    test "CLI subcommands (models, agents, mcp, plugin) and stream-json mode work identically to agy" do
-      tmp_cfg = Path.join(System.tmp_dir!(), "agy_cfg_#{System.unique_integer([:positive])}")
+    test "CLI subcommands (models, agents, mcp, plugin) and stream-json mode work " do
+      tmp_cfg = Path.join(System.tmp_dir!(), "ws_cfg_#{System.unique_integer([:positive])}")
       File.mkdir_p!(tmp_cfg)
 
       {0, models_out} = CLI.run(["models"])
       assert String.contains?(models_out, "gemini-4-argon-medium")
-      assert String.contains?(models_out, "claude-sonnet-5-5-medium")
+      refute String.contains?(models_out, "claude-sonnet-5-5-medium")
 
       {0, agents_out} = CLI.run(["agents"])
       assert String.contains?(agents_out, "research")

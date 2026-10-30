@@ -1,6 +1,6 @@
-defmodule SuperPi.Harness.AgyCliDefectsTest do
+defmodule SuperPi.Harness.WorkspaceCliDefectsTest do
   @moduledoc """
-  Regression tests that reproduce defects in `SuperPi.Harness.AGY.CLI` found in
+  Regression tests that reproduce defects in `SuperPi.CLI` found in
   the code review. Every test is expected to FAIL on the current code and pass
   once the matching finding is fixed. The CLI is driven in-process through
   `CLI.run/2` with temp `global_config_dir` and `app_data_dir` options.
@@ -24,7 +24,7 @@ defmodule SuperPi.Harness.AgyCliDefectsTest do
   end
 
   defp tmp_dir!(label) do
-    dir = Path.join(System.tmp_dir!(), "agy_cli_#{label}_#{System.unique_integer([:positive])}")
+    dir = Path.join(System.tmp_dir!(), "ws_cli_#{label}_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
     on_exit(fn -> File.rm_rf(dir) end)
     dir

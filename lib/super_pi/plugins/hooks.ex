@@ -46,12 +46,20 @@ defmodule SuperPi.Plugins.Hooks do
       end)
 
     if injected_texts == [] do
-      {:ok, agent_cfg}
+      # Sections that older versions stored under the `agy_` name are dropped even when no hook
+      # produces output now. They are never refreshed again, so they would stay stale.
+      sections = Map.get(agent_cfg, "systemSections")
+
+      if is_list(sections) and Enum.any?(sections, &(is_map(&1) and &1["id"] == "agy_session_start_hooks")) do
+        {:ok, Map.put(agent_cfg, "systemSections", Enum.reject(sections, &(is_map(&1) and &1["id"] == "agy_session_start_hooks")))}
+      else
+        {:ok, agent_cfg}
+      end
     else
       sections = Map.get(agent_cfg, "systemSections", [])
-      clean_sections = Enum.reject(sections, &(&1["id"] == "agy_session_start_hooks"))
+      clean_sections = Enum.reject(sections, &(&1["id"] in ["session_start_hooks", "agy_session_start_hooks"]))
       joined = Enum.join(injected_texts, "\n")
-      {:ok, Map.put(agent_cfg, "systemSections", clean_sections ++ [%{"id" => "agy_session_start_hooks", "content" => joined}])}
+      {:ok, Map.put(agent_cfg, "systemSections", clean_sections ++ [%{"id" => "session_start_hooks", "content" => joined}])}
     end
   end
 
@@ -225,7 +233,7 @@ defmodule SuperPi.Plugins.Hooks do
     end
   end
 
-  @state_kind "pi.agy_hooks"
+  @state_kind "pi.hooks"
 
   defp stop_count(ctx) do
     doc = Doc.snapshot("conversation", ctx.conversation_id, @state_kind) || %{}
@@ -328,7 +336,7 @@ defmodule SuperPi.Plugins.Hooks do
   # environment so spaces in TMPDIR are safe, and on timeout the whole process
   # tree is killed and the file removed.
   defp run_with_stdin_file(cmd, json_in, working_dir, timeout_ms) do
-    tmp_in = Path.join(System.tmp_dir!(), "agy_hook_in_#{System.unique_integer([:positive])}.json")
+    tmp_in = Path.join(System.tmp_dir!(), "hook_in_#{System.unique_integer([:positive])}.json")
     File.touch!(tmp_in)
     File.chmod!(tmp_in, 0o600)
     File.write!(tmp_in, json_in)
@@ -342,8 +350,8 @@ defmodule SuperPi.Plugins.Hooks do
           :exit_status,
           :hide,
           {:cd, working_dir},
-          {:env, [{~c"AGY_HOOK_IN", String.to_charlist(tmp_in)}]},
-          {:args, ["-c", "exec 0< \"$AGY_HOOK_IN\"\n" <> cmd]}
+          {:env, [{~c"SUPER_PI_HOOK_IN", String.to_charlist(tmp_in)}]},
+          {:args, ["-c", "exec 0< \"$SUPER_PI_HOOK_IN\"\n" <> cmd]}
         ])
 
       os_pid =
