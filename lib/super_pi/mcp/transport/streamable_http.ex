@@ -201,7 +201,10 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
     # Requests run side by side, but a request waits for the notifications sent before it:
     # `notifications/initialized` must reach the server before the first `tools/list`.
     earlier = Map.values(state.acks)
-    {pid, ref} = spawn_monitor(fn -> await_exit(earlier) && run_post(owner, ctx, message) end)
+    {pid, ref} = spawn_monitor(fn ->
+        await_exit(earlier)
+        run_post(owner, ctx, message)
+      end)
     acks = if request?(message), do: state.acks, else: Map.put(state.acks, ref, pid)
     %{state | tasks: Map.put(state.tasks, ref, pid), acks: acks}
   end
@@ -216,8 +219,6 @@ defmodule SuperPi.MCP.Transport.StreamableHTTP do
         10_000 -> Process.demonitor(ref, [:flush])
       end
     end)
-
-    true
   end
 
   # The first POST failed the way an HTTP+SSE server does. Open the event stream and hold the

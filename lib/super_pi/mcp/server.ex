@@ -1,20 +1,54 @@
 defmodule SuperPi.MCP.Server do
   @moduledoc """
-  Model Context Protocol (MCP) Standard Server over `stdio` (`REQ-MCP-01`..`REQ-MCP-04`).
+  Model Context Protocol (MCP) server (`REQ-MCP-01`..`REQ-MCP-04`), over `stdio` here and over
+  Streamable HTTP in `SuperPi.MCP.HTTPPlug`.
 
   Allows any MCP-compliant host (OpenCode, Claude Desktop, Cursor, Zed, Continue.dev)
   to connect to Super-Pi-BEAM as a standard tool and context provider.
 
+  `handle_mcp_line/2` is pure: it takes one JSON-RPC message and the connection state and returns
+  the reply and the next state. The transports only move lines (stdio) or request bodies (HTTP).
+
+  ## Protocol versions
+
+  `initialize` answers the client's `protocolVersion` when the server speaks it (`2025-06-18`,
+  `2025-03-26`, `2024-11-05`), else the newest. The requested version is logged at debug level,
+  which is how to find out what a host asks for. `2026-07-28` is not supported: it replaces
+  elicitation, sampling and roots with a different round trip.
+
   ## Supported Methods
-  - `initialize` — Handshake declaring tool, resource, and prompt capabilities.
-  - `notifications/initialized` — Post-handshake acknowledgment.
-  - `ping` — Heartbeat check.
-  - `tools/list` — Enumerates all active Super-Pi tools with JSON Schema definitions.
-  - `tools/call` — Executes tools within the 4-layer safe sandbox runner.
-  - `resources/list` & `resources/read` — Inspects durable conversation documents and transcripts.
+  - `initialize` - Handshake declaring tool, resource, and prompt capabilities.
+  - `notifications/initialized` - Post-handshake acknowledgment.
+  - `ping` - Heartbeat check.
+  - `tools/list` - The eight tools with JSON Schema and annotations (`readOnlyHint`,
+    `destructiveHint`, `idempotentHint`, `openWorldHint`), which hosts use to decide what to
+    approve without asking.
+  - `tools/call` - Runs a tool through the permission policy of the connection's harness. The
+    result carries `content` (text) and, when the tool returns structured data, `structuredContent`.
+  - `prompts/list` & `prompts/get` - One prompt per harness (`SuperPi.Harness.list/0`), plus the
+    `plan_architecture` alias.
+  - `resources/list`, `resources/read` - The workspace context, the tool loadout and the
+    conversations that this connection started.
+  - `resources/templates/list` - `superpi://conversation/{id}/transcript`, which `resources/read`
+    answers with the conversation transcript as JSON lines (the compact form that
+    `SuperPi.Plugins.TranscriptLogger` writes). A conversation of another principal is not found.
+
+  ## Choosing a harness
+
+  `harness_task` takes a `harness` argument (an id from `Harness.list/0`) and runs the task in
+  that harness. Direct tool calls (`read`, `bash` ...) run under the connection's harness: the
+  state key `:harness`, else `config :super_pi, :mcp_harness`, else `Harness.default/0`. The
+  workspace is the first of `SuperPi.Discovery.default_workspace_paths/0`.
+
+  Tools run in the mode that `SuperPi.Plugins.Permissions.apply_remote_mode/2` allows a remote
+  caller. State keys: `:harness`, `:principal` (an `SuperPi.Auth` principal, default anonymous).
   """
 
+  alias SuperPi.Auth
+  alias SuperPi.Discovery
   alias SuperPi.Durable.Storage
+  alias SuperPi.Harness
+  alias SuperPi.Plugins.TranscriptLogger
   alias SuperPi.Tools
 
   require Logger
@@ -22,6 +56,7 @@ defmodule SuperPi.MCP.Server do
   # Newest first. The ceiling is 2025-06-18: 2026-07-28 replaces elicitation, sampling and roots
   # with a different round trip, so no mainstream host negotiates it yet.
   @supported_versions ["2025-06-18", "2025-03-26", "2024-11-05"]
+  @transcript_mime "application/x-ndjson"
   @server_name "super-pi-beam"
   @server_version "1.0.0"
 
@@ -143,19 +178,10 @@ defmodule SuperPi.MCP.Server do
       {result, state} =
         case name do
           "harness_task" ->
-            result =
-              case Map.get(args, "prompt") || Map.get(args, :prompt) do
-                prompt when is_binary(prompt) and byte_size(prompt) > 0 ->
-                  execute_harness_task(prompt)
-
-                _ ->
-                  %{"output" => "Missing required argument 'prompt'", "is_error" => true}
-              end
-
-            {result, state}
+            harness_task(args, state)
 
           other ->
-            # Tools run through the default harness's `before_tool` pipeline (permissions,
+            # Tools run through the connection harness's `before_tool` pipeline (permissions,
             # protected paths), the same as a model-issued call.
             case authorize_tool(other, args, state) do
               {{:ok, final_args}, state} ->
@@ -166,18 +192,7 @@ defmodule SuperPi.MCP.Server do
             end
         end
 
-      content_text = sanitize_utf8(Map.get(result, "output", ""))
-      is_err = Map.get(result, "is_error", false)
-
-      reply =
-        jsonrpc_result(id, %{
-          "content" => [
-            %{"type" => "text", "text" => to_string(content_text)}
-          ],
-          "isError" => is_err
-        })
-
-      {:reply, reply, state}
+      {:reply, jsonrpc_result(id, call_result(result)), state}
     end
   end
 
@@ -216,7 +231,35 @@ defmodule SuperPi.MCP.Server do
         }
       ]
 
-      {:reply, jsonrpc_result(id, %{"resources" => resources}), state}
+      # The conversations this connection started, so a host finds their transcripts.
+      conversations =
+        for conv_id <- Map.get(state, :conversations, []) do
+          %{
+            "uri" => transcript_uri(conv_id),
+            "name" => "Conversation #{conv_id} transcript",
+            "description" => "Transcript of a harness_task conversation, as JSON lines",
+            "mimeType" => @transcript_mime
+          }
+        end
+
+      {:reply, jsonrpc_result(id, %{"resources" => resources ++ conversations}), state}
+    end
+  end
+
+  defp dispatch("resources/templates/list", params, id, state) do
+    if is_map(params) and Map.get(params, "cursor") != nil do
+      {:reply, jsonrpc_error(id, -32602, "Invalid cursor"), state}
+    else
+      templates = [
+        %{
+          "uriTemplate" => "superpi://conversation/{id}/transcript",
+          "name" => "Conversation transcript",
+          "description" => "The transcript of a conversation as JSON lines, one step per line. The id is the conversation_id that harness_task returns.",
+          "mimeType" => @transcript_mime
+        }
+      ]
+
+      {:reply, jsonrpc_result(id, %{"resourceTemplates" => templates}), state}
     end
   end
 
@@ -230,7 +273,9 @@ defmodule SuperPi.MCP.Server do
         content =
           Jason.encode!(%{
             "status" => "ready",
-            "working_directory" => File.cwd!(),
+            "working_directory" => workspace_root(),
+            "workspace_paths" => Discovery.default_workspace_paths(),
+            "harness" => state |> connection_harness() |> then(& &1.id()),
             "tools" => Tools.active_llm_tools()
           })
 
@@ -264,7 +309,14 @@ defmodule SuperPi.MCP.Server do
         {:reply, reply, state}
 
       _other ->
-        {:reply, jsonrpc_error(id, -32002, "Resource not found: #{uri}"), state}
+        case read_transcript(uri, state) do
+          {:ok, text} ->
+            reply = jsonrpc_result(id, %{"contents" => [%{"uri" => uri, "mimeType" => @transcript_mime, "text" => text}]})
+            {:reply, reply, state}
+
+          :error ->
+            {:reply, jsonrpc_error(id, -32002, "Resource not found: #{uri}"), state}
+        end
     end
   end
 
@@ -276,17 +328,27 @@ defmodule SuperPi.MCP.Server do
     if is_map(params) and Map.get(params, "cursor") != nil do
       {:reply, jsonrpc_error(id, -32602, "Invalid cursor"), state}
     else
-      prompts = [
-        %{
-          "name" => "plan_architecture",
-          "description" => "Creates an architectural implementation plan before executing code changes",
-          "arguments" => [
-            %{"name" => "goal", "description" => "Engineering task description", "required" => true}
-          ]
-        }
-      ]
+      # Each harness is a prompt, so a host offers it as a command. `plan_architecture` stays as an
+      # alias, because hosts that saved it would break without it.
+      harness_prompts =
+        for harness <- Harness.list() do
+          %{
+            "name" => harness.id(),
+            "title" => harness.name(),
+            "description" => harness.description(),
+            "arguments" => [%{"name" => "goal", "description" => "What the harness should do", "required" => true}]
+          }
+        end
 
-      {:reply, jsonrpc_result(id, %{"prompts" => prompts}), state}
+      alias_prompt = %{
+        "name" => "plan_architecture",
+        "description" => "Creates an architectural implementation plan before executing code changes",
+        "arguments" => [
+          %{"name" => "goal", "description" => "Engineering task description", "required" => true}
+        ]
+      }
+
+      {:reply, jsonrpc_result(id, %{"prompts" => harness_prompts ++ [alias_prompt]}), state}
     end
   end
 
@@ -311,8 +373,31 @@ defmodule SuperPi.MCP.Server do
     {:reply, reply, state}
   end
 
+  defp dispatch("prompts/get", %{"name" => name} = params, id, state) when is_binary(name) do
+    args = Map.get(params, "arguments")
+    goal = if is_map(args), do: Map.get(args, "goal"), else: nil
+
+    with {:ok, harness} <- fetch_listed_harness(name),
+         true <- is_binary(goal) and String.trim(goal) != "" do
+      text =
+        "Delegate this goal to the Super-Pi `#{harness.id()}` harness with the `harness_task` tool " <>
+          "(harness: \"#{harness.id()}\"):\n\n#{goal}"
+
+      reply =
+        jsonrpc_result(id, %{
+          "description" => "#{harness.name()}: #{harness.description()}",
+          "messages" => [%{"role" => "user", "content" => %{"type" => "text", "text" => text}}]
+        })
+
+      {:reply, reply, state}
+    else
+      :error -> {:reply, jsonrpc_error(id, -32602, "Unknown prompt: #{name}"), state}
+      false -> {:reply, jsonrpc_error(id, -32602, "Missing required argument 'goal'"), state}
+    end
+  end
+
   defp dispatch("prompts/get", %{"name" => unknown}, id, state) do
-    {:reply, jsonrpc_error(id, -32602, "Unknown prompt: #{unknown}"), state}
+    {:reply, jsonrpc_error(id, -32602, "Unknown prompt: #{inspect(unknown)}"), state}
   end
 
   defp dispatch("prompts/get", _params, id, state) do
@@ -336,7 +421,36 @@ defmodule SuperPi.MCP.Server do
 
   # --- Tool Schema Definitions ---
 
+  # Hosts decide what to run without asking from these hints, so each tool states all four. A hint is
+  # a claim for the host's UI, not an enforcement: the permission policy decides what runs.
+  # `bash` and `harness_task` can reach anything the process can, hence `openWorldHint`.
+  @annotations %{
+    "read" => %{"readOnlyHint" => true, "destructiveHint" => false, "idempotentHint" => true, "openWorldHint" => false},
+    "write" => %{"readOnlyHint" => false, "destructiveHint" => true, "idempotentHint" => true, "openWorldHint" => false},
+    "edit" => %{"readOnlyHint" => false, "destructiveHint" => true, "idempotentHint" => false, "openWorldHint" => false},
+    "bash" => %{"readOnlyHint" => false, "destructiveHint" => true, "idempotentHint" => false, "openWorldHint" => true},
+    "grep" => %{"readOnlyHint" => true, "destructiveHint" => false, "idempotentHint" => true, "openWorldHint" => false},
+    "find" => %{"readOnlyHint" => true, "destructiveHint" => false, "idempotentHint" => true, "openWorldHint" => false},
+    "ls" => %{"readOnlyHint" => true, "destructiveHint" => false, "idempotentHint" => true, "openWorldHint" => false},
+    "harness_task" => %{"readOnlyHint" => false, "destructiveHint" => true, "idempotentHint" => false, "openWorldHint" => true}
+  }
+
+  @doc "The eight tools with their input schema and annotations. `harness_task` lists the harness ids."
   def tool_definitions do
+    Enum.map(base_tool_definitions(), fn %{"name" => name} = tool ->
+      tool
+      |> Map.put("annotations", Map.fetch!(@annotations, name))
+      |> put_harness_choices()
+    end)
+  end
+
+  defp put_harness_choices(%{"name" => "harness_task"} = tool) do
+    put_in(tool, ["inputSchema", "properties", "harness", "enum"], Enum.map(Harness.list(), & &1.id()))
+  end
+
+  defp put_harness_choices(tool), do: tool
+
+  defp base_tool_definitions do
     [
       %{
         "name" => "read",
@@ -426,7 +540,11 @@ defmodule SuperPi.MCP.Server do
         "inputSchema" => %{
           "type" => "object",
           "properties" => %{
-            "prompt" => %{"type" => "string", "description" => "Task prompt for the durable agent"}
+            "prompt" => %{"type" => "string", "description" => "Task prompt for the durable agent"},
+            "harness" => %{
+              "type" => "string",
+              "description" => "Harness that runs the task (see prompts/list). Default: the connection's harness"
+            }
           },
           "required" => ["prompt"]
         }
@@ -449,34 +567,115 @@ defmodule SuperPi.MCP.Server do
   defp tool_session(%{tool_session: session} = state), do: {session, state}
 
   defp tool_session(state) do
-    harness = SuperPi.Harness.default()
+    harness = connection_harness(state)
     agent = SuperPi.Plugins.Permissions.apply_remote_mode(harness.agent_defaults(), nil)
-    conv = Storage.create_conversation!(agent: agent)
+    conv = Storage.create_conversation!(agent: agent, owner: principal(state))
 
     session = %{
       conversation_id: conv.id,
-      workspace_root: File.cwd!(),
-      extensions: SuperPi.Harness.remote_extensions(harness)
+      workspace_root: agent |> Map.get("workspacePaths") |> List.wrap() |> List.first() || workspace_root(),
+      extensions: Harness.remote_extensions(harness)
     }
 
     {session, Map.put(state, :tool_session, session)}
   end
 
-  defp execute_harness_task(prompt) do
-    harness = SuperPi.Harness.default()
-    extensions = SuperPi.Harness.remote_extensions(harness)
+  # The harness of direct tool calls, chosen on purpose: the connection's own (`:harness` in the
+  # state), else `config :super_pi, :mcp_harness`, else the application default.
+  defp connection_harness(state) do
+    case Map.get(state, :harness) || Application.get_env(:super_pi, :mcp_harness) do
+      nil ->
+        Harness.default()
+
+      name ->
+        case Harness.fetch(name) do
+          {:ok, harness} -> harness
+          {:error, _} -> Harness.default()
+        end
+    end
+  end
+
+  defp principal(state), do: Map.get(state, :principal) || Auth.anonymous()
+
+  # Where tools work. The conversation's own `workspacePaths` come from the same source.
+  defp workspace_root, do: hd(Discovery.default_workspace_paths())
+
+  defp fetch_listed_harness(name) do
+    case Enum.find(Harness.list(), &(&1.id() == name)) do
+      nil -> :error
+      harness -> {:ok, harness}
+    end
+  end
+
+  defp harness_task(args, state) do
+    prompt = Map.get(args, "prompt") || Map.get(args, :prompt)
+    requested = Map.get(args, "harness") || Map.get(args, :harness)
+
+    with {:prompt, true} <- {:prompt, is_binary(prompt) and byte_size(prompt) > 0},
+         {:ok, harness} <- select_harness(requested, state) do
+      {result, conv_id} = execute_harness_task(prompt, harness, principal(state))
+      {result, remember_conversation(state, conv_id)}
+    else
+      {:prompt, false} -> {%{"output" => "Missing required argument 'prompt'", "is_error" => true}, state}
+      {:error, message} -> {%{"output" => message, "is_error" => true}, state}
+    end
+  end
+
+  # No `harness` argument means the connection's harness. A name that is not a harness is an
+  # error: `Harness.resolve/1` would run the default one in its place.
+  defp select_harness(nil, state), do: {:ok, connection_harness(state)}
+
+  defp select_harness(name, _state) when is_binary(name) do
+    case Harness.fetch(name) do
+      {:ok, harness} ->
+        {:ok, harness}
+
+      {:error, _} ->
+        known = Enum.map_join(Harness.list(), ", ", & &1.id())
+        {:error, "Unknown harness #{inspect(name)}. Available: #{known}"}
+    end
+  end
+
+  defp select_harness(_other, _state), do: {:error, "Argument 'harness' must be a string"}
+
+  defp remember_conversation(state, nil), do: state
+  defp remember_conversation(state, conv_id), do: Map.update(state, :conversations, [conv_id], &Enum.take([conv_id | &1], 50))
+
+  defp execute_harness_task(prompt, harness, principal) do
+    extensions = Harness.remote_extensions(harness)
     agent = SuperPi.Plugins.Permissions.apply_remote_mode(harness.agent_defaults(), nil)
-    conv = Storage.create_conversation!(agent: agent)
+    conv = Storage.create_conversation!(agent: agent, owner: principal)
     timeout = Application.get_env(:super_pi, :mcp_harness_task_timeout_ms, 60_000)
 
     # Supervised, not linked: a crashed machine must not take the MCP stdio server down.
     machine_opts = [extensions: extensions] ++ Application.get_env(:super_pi, :mcp_harness_task_opts, [])
 
-    case SuperPi.Conversation.Locator.ensure_started(conv.id, machine_opts, restart: :temporary, supervision: :local) do
-      {:ok, machine_pid} -> run_harness_task(machine_pid, conv.id, prompt, timeout)
-      {:error, reason} -> %{"output" => "Harness task error: could not start: #{inspect(reason)}", "is_error" => true}
+    result =
+      case SuperPi.Conversation.Locator.ensure_started(conv.id, machine_opts, restart: :temporary, supervision: :local) do
+        {:ok, machine_pid} -> run_harness_task(machine_pid, conv.id, prompt, timeout)
+        {:error, reason} -> %{"output" => "Harness task error: could not start: #{inspect(reason)}", "is_error" => true}
+      end
+
+    # The id lets a host read the transcript (`superpi://conversation/{id}/transcript`).
+    {Map.put(result, "structured_output", %{"harness" => harness.id(), "conversation_id" => conv.id}), conv.id}
+  end
+
+  defp transcript_uri(conv_id), do: "superpi://conversation/#{conv_id}/transcript"
+
+  # A conversation of another principal is reported as not found, so its existence does not leak.
+  defp read_transcript("superpi://conversation/" <> rest, state) do
+    with [raw_id, "transcript"] <- String.split(rest, "/"),
+         {conv_id, ""} <- Integer.parse(raw_id),
+         true <- conv_id > 0,
+         %SuperPi.Durable.Schemas.Conversation{} <- SuperPi.Repo.get(SuperPi.Durable.Schemas.Conversation, conv_id),
+         true <- Auth.authorized?(conv_id, principal(state)) do
+      {:ok, conv_id |> TranscriptLogger.transcript_steps() |> Enum.map_join("", &(Jason.encode!(&1) <> "\n"))}
+    else
+      _ -> :error
     end
   end
+
+  defp read_transcript(_uri, _state), do: :error
 
   defp run_harness_task(machine_pid, conv_id, prompt, timeout) do
     try do
@@ -526,6 +725,22 @@ defmodule SuperPi.MCP.Server do
       # The registry drops its entry when it sees the process exit, a moment after `stop`
       # returns. Wait so that no caller can find a dead machine.
       SuperPi.Conversation.Locator.await_gone(conv_id)
+    end
+  end
+
+  # `structuredContent` is the tool's own structured output, when it has one that JSON can carry.
+  defp call_result(result) do
+    base = %{
+      "content" => [%{"type" => "text", "text" => result |> Map.get("output", "") |> sanitize_utf8() |> to_string()}],
+      "isError" => Map.get(result, "is_error", false)
+    }
+
+    case Map.get(result, "structured_output") do
+      %{} = structured when map_size(structured) > 0 ->
+        if match?({:ok, _}, Jason.encode(structured)), do: Map.put(base, "structuredContent", structured), else: base
+
+      _ ->
+        base
     end
   end
 

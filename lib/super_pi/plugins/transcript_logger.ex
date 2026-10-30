@@ -67,6 +67,19 @@ defmodule SuperPi.Plugins.TranscriptLogger do
     %{compact_path: compact_path, full_path: full_path, step_count: length(visible)}
   end
 
+  @doc """
+  The steps of a conversation as `sync_transcript!/2` writes them to `transcript.jsonl`: in order,
+  each field cut at #{@compact_limit_bytes} bytes. Served as the MCP `superpi://conversation/{id}/transcript` resource.
+  """
+  @spec transcript_steps(integer()) :: [map()]
+  def transcript_steps(conversation_id) do
+    {visible, _} = Context.visible_entries_with_graph(conversation_id)
+
+    visible
+    |> Enum.with_index(1)
+    |> Enum.map(fn {entry, idx} -> entry |> entry_to_transcript_step(idx) |> truncate_step_for_compact() end)
+  end
+
   # --- MCP Server Management (`mcp ...`) ---
 
   def mcp_list(opts \\ []) do
