@@ -315,6 +315,5 @@ defmodule SuperPi.Event do
     }
   end
 
-  defp format_error(error) when is_binary(error), do: error
-  defp format_error(error), do: inspect(error)
+  defp format_error(error), do: SuperPi.AI.Provider.format_error(error)
 end

@@ -196,7 +196,7 @@ defmodule SuperPi.Telemetry do
   defp status_tag(_), do: "error"
 
   defp format(reason) when is_binary(reason), do: String.slice(reason, 0, 200)
-  defp format(reason), do: reason |> inspect() |> String.slice(0, 200)
+  defp format(reason), do: reason |> SuperPi.AI.Provider.format_error() |> String.slice(0, 200)
 
   # --- Metrics ---
 

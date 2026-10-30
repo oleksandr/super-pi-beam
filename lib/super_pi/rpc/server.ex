@@ -737,7 +737,7 @@ defmodule SuperPi.RPC.Server do
 
         {:error, reason} ->
           publish_machine_death(conv_id, reason)
-          {jsonrpc_error(id, -32000, inspect(reason)), client_state, []}
+          {jsonrpc_error(id, -32000, SuperPi.AI.Provider.format_error(reason)), client_state, []}
       end
     end
   end

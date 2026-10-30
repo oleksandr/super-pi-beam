@@ -300,9 +300,8 @@ defmodule SuperPi.Workers.SubagentWorker do
 
   def final_text(_), do: ""
 
-  defp format_reason(reason) when is_binary(reason), do: reason
   defp format_reason(:cancelled), do: "cancelled"
-  defp format_reason(reason), do: inspect(reason)
+  defp format_reason(reason), do: SuperPi.AI.Provider.format_error(reason)
 
   defp truncate(text) when byte_size(text) > @max_summary_chars,
     do: binary_part(text, 0, @max_summary_chars) <> "\n[truncated]"

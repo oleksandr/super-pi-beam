@@ -833,8 +833,7 @@ defmodule SuperPi.CLI do
     end
   end
 
-  defp format_reason(reason) when is_binary(reason), do: reason
-  defp format_reason(reason), do: inspect(reason)
+  defp format_reason(reason), do: SuperPi.AI.Provider.format_error(reason)
 
   defp msg_json(msg) when is_atom(msg), do: Atom.to_string(msg)
   defp msg_json(msg), do: msg

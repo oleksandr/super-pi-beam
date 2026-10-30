@@ -803,7 +803,10 @@ defmodule SuperPi.MCP.Server do
           %{"output" => output, "is_error" => false}
 
         {:error, reason} ->
-          %{"output" => "Harness task error: #{inspect(reason)}", "is_error" => true}
+          %{
+            "output" => "Harness task error: #{SuperPi.AI.Provider.format_error(reason)}",
+            "is_error" => true
+          }
       end
     catch
       :exit, {:timeout, _} ->

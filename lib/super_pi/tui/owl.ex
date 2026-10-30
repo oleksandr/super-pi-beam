@@ -116,7 +116,7 @@ defmodule SuperPi.TUI.Owl do
             "Compaction finished: #{inspect(other)}"
 
           {:error, reason} ->
-            "Compaction failed: #{inspect(reason)}"
+            "Compaction failed: #{SuperPi.AI.Provider.format_error(reason)}"
         end
 
       trimmed == "/context" ->
@@ -130,7 +130,7 @@ defmodule SuperPi.TUI.Owl do
             render_assistant_message(msg)
 
           {:error, reason} ->
-            "Error: #{inspect(reason)}"
+            "Error: #{SuperPi.AI.Provider.format_error(reason)}"
         end
     end
   end

@@ -168,7 +168,12 @@ defmodule SuperPi.Gateway.AGUI do
         # A machine that died publishes nothing. If the turn already ended there is nothing to add.
         if turn_over?(conv_id),
           do: conn,
-          else: finish_with_error(conn, rstate, "Run failed: #{inspect(reason)}")
+          else:
+            finish_with_error(
+              conn,
+              rstate,
+              "Run failed: #{SuperPi.AI.Provider.format_error(reason)}"
+            )
 
       {^ref, {:ok, _}} ->
         Process.demonitor(ref, [:flush])

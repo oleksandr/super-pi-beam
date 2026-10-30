@@ -37,4 +37,37 @@ defmodule SuperPi.AI.Provider do
               {:ok, map()} | {:error, term()}
 
   @optional_callbacks normalize_model: 1
+
+  @doc """
+  Readable text for a `generate/2` error reason. Strings pass through unchanged, so text
+  formatted once is not escaped again.
+  """
+  @spec format_error(term()) :: String.t()
+  def format_error(reason) when is_binary(reason), do: reason
+  def format_error({:http_error, status, message}), do: "HTTP #{status}: #{format_error(message)}"
+  def format_error({:request_failed, message}), do: "Request failed: #{format_error(message)}"
+
+  def format_error({:stream_error, %{reason: reason}}),
+    do: "Stream error: #{format_error(reason)}"
+
+  def format_error({:gemini_http_error, status, body, raw}),
+    do: "HTTP #{status}: #{body_message(body) || body_message(raw) || inspect(body)}"
+
+  def format_error(reason) when is_exception(reason), do: Exception.message(reason)
+  # A stream error event, as `SuperPi.AI.StreamNormalizer` emits it.
+  def format_error(%{reason: reason}), do: format_error(reason)
+  def format_error(reason), do: inspect(reason)
+
+  defp body_message(%{"error" => %{"message" => message}}) when is_binary(message), do: message
+  defp body_message(%{"error" => message}) when is_binary(message), do: message
+  defp body_message([first | _]), do: body_message(first)
+
+  defp body_message(raw) when is_binary(raw) and raw != "" do
+    case Jason.decode(raw) do
+      {:ok, decoded} -> body_message(decoded)
+      _ -> String.slice(raw, 0, 500)
+    end
+  end
+
+  defp body_message(_), do: nil
 end

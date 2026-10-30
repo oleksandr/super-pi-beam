@@ -12,6 +12,7 @@ defmodule SuperPi.Gateway.Router do
 
   alias SuperPi.Conversation.Machine
   alias SuperPi.Auth
+  alias SuperPi.AI.Provider
   alias SuperPi.Durable.Storage
   alias SuperPi.Event
   alias SuperPi.Event.Renderer
@@ -906,7 +907,7 @@ defmodule SuperPi.Gateway.Router do
       {:error, reason} ->
         send_json(conn, 500, %{
           "error" => %{
-            "message" => "Agent execution failed: #{inspect(reason)}",
+            "message" => "Agent execution failed: #{Provider.format_error(reason)}",
             "type" => "server_error",
             "code" => "execution_error"
           }
@@ -998,7 +999,7 @@ defmodule SuperPi.Gateway.Router do
 
         err_chunk =
           Map.put(Renderer.OpenAI.finish_chunk(rstate, "error"), "error", %{
-            "message" => "Turn error: #{inspect(reason)}",
+            "message" => "Turn error: #{Provider.format_error(reason)}",
             "type" => "turn_error"
           })
 

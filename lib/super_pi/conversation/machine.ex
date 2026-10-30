@@ -806,7 +806,7 @@ defmodule SuperPi.Conversation.Machine do
           case reason do
             {:raised, %{message: msg}} -> msg
             {:raised, e} when is_exception(e) -> Exception.message(e)
-            other -> inspect(other)
+            other -> SuperPi.AI.Provider.format_error(other)
           end
 
         if next_data.active_task_id do

@@ -597,6 +597,5 @@ defmodule SuperPi.ACP.Server do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  defp format_reason(reason) when is_binary(reason), do: reason
-  defp format_reason(reason), do: inspect(reason)
+  defp format_reason(reason), do: SuperPi.AI.Provider.format_error(reason)
 end
