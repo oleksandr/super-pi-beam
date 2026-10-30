@@ -63,7 +63,7 @@ defmodule SuperPi.RPC.Server do
           :ok ->
             safe_params = if is_map(params), do: params, else: %{}
 
-            case authorize(method, safe_params, client_state) do
+            case with(:ok <- accepting(method), do: authorize(method, safe_params, client_state)) do
               :ok ->
                 {reply, next_state, notifs} = dispatch_method(method, safe_params, id, client_state)
                 reply = if has_id?, do: reply, else: nil
@@ -588,6 +588,13 @@ defmodule SuperPi.RPC.Server do
   end
 
   defp validate_params(_other, _params), do: :ok
+
+  # A draining node takes no new sessions or turns (see SuperPi.Drain).
+  defp accepting(method) when method in ["session.open", "session.submit"] do
+    if SuperPi.Drain.accepting?(), do: :ok, else: {:error, -32005, "Server is shutting down; retry on another node"}
+  end
+
+  defp accepting(_method), do: :ok
 
   # --- Authentication and ownership ---
 

@@ -134,3 +134,66 @@ case System.get_env("SUPER_PI_AUTO_MIGRATE") do
   value when value in ["0", "false"] -> config :super_pi, auto_migrate: false
   _ -> :ok
 end
+
+# --- Cluster ---------------------------------------------------------------------------------
+#
+# A distributed BEAM cluster needs PostgreSQL (SQLite is single-node) and a node name and cookie
+# (`RELEASE_NODE`, `RELEASE_COOKIE` with a release). SUPER_PI_CLUSTER_STRATEGY picks how nodes find
+# each other. See `SuperPi.Cluster` for the variables of each strategy.
+cluster_strategy = System.get_env("SUPER_PI_CLUSTER_STRATEGY") || "none"
+cluster_basename = System.get_env("SUPER_PI_CLUSTER_NODE_BASENAME") || "super_pi"
+cluster_poll = String.to_integer(System.get_env("SUPER_PI_CLUSTER_POLL_MS") || "5000")
+
+cluster_required = fn var ->
+  System.get_env(var) || raise "#{var} is required when SUPER_PI_CLUSTER_STRATEGY=#{cluster_strategy}"
+end
+
+cluster_topologies =
+  case cluster_strategy do
+    "none" ->
+      []
+
+    "epmd" ->
+      hosts =
+        cluster_required.("SUPER_PI_CLUSTER_HOSTS")
+        |> String.split(",", trim: true)
+        |> Enum.map(&(&1 |> String.trim() |> String.to_atom()))
+
+      [super_pi: [strategy: Cluster.Strategy.Epmd, config: [hosts: hosts]]]
+
+    "dnspoll" ->
+      [
+        super_pi: [
+          strategy: Cluster.Strategy.DNSPoll,
+          config: [polling_interval: cluster_poll, query: cluster_required.("SUPER_PI_CLUSTER_DNS_QUERY"), node_basename: cluster_basename]
+        ]
+      ]
+
+    "kubernetes_dns" ->
+      [
+        super_pi: [
+          strategy: Cluster.Strategy.Kubernetes.DNS,
+          config: [service: cluster_required.("SUPER_PI_CLUSTER_K8S_SERVICE"), application_name: cluster_basename, polling_interval: cluster_poll]
+        ]
+      ]
+
+    "gossip" ->
+      [
+        super_pi: [
+          strategy: Cluster.Strategy.Gossip,
+          config: [
+            port: String.to_integer(System.get_env("SUPER_PI_CLUSTER_GOSSIP_PORT") || "45892"),
+            secret: cluster_required.("SUPER_PI_CLUSTER_GOSSIP_SECRET")
+          ]
+        ]
+      ]
+
+    other ->
+      raise "SUPER_PI_CLUSTER_STRATEGY must be none, epmd, dnspoll, kubernetes_dns or gossip, got: #{inspect(other)}"
+  end
+
+config :super_pi, :cluster, strategy: String.to_atom(cluster_strategy), topologies: cluster_topologies
+
+if cluster_topologies != [] and System.get_env("SUPER_PI_STORAGE_BACKEND") != "postgres" do
+  raise "SUPER_PI_CLUSTER_STRATEGY=#{cluster_strategy} needs SUPER_PI_STORAGE_BACKEND=postgres (SQLite is a single-node store)"
+end

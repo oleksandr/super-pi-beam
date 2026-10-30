@@ -22,6 +22,7 @@ defmodule SuperPi.Gateway.Router do
   plug :match
   plug :trace_request
   plug :authenticate
+  plug :reject_when_draining
   plug Plug.Parsers,
     parsers: [:json],
     pass: ["application/json"],
@@ -77,6 +78,13 @@ defmodule SuperPi.Gateway.Router do
     conn
     |> put_resp_content_type("text/plain; version=0.0.4")
     |> send_resp(200, SuperPi.Telemetry.scrape())
+  end
+
+  # Readiness: 503 while the node drains (SIGTERM), so a load balancer stops sending it traffic.
+  get "/ready" do
+    if SuperPi.Drain.accepting?(),
+      do: send_json(conn, 200, %{"status" => "ready"}),
+      else: send_json(conn, 503, %{"status" => "shutting_down"})
   end
 
   get "/health" do
@@ -403,6 +411,26 @@ defmodule SuperPi.Gateway.Router do
     end
   end
 
+  # A draining node takes no new turns. The client retries and reaches another node.
+  defp reject_when_draining(%Plug.Conn{method: "POST", request_path: "/v1/chat/completions"} = conn, _opts) do
+    if SuperPi.Drain.accepting?() do
+      conn
+    else
+      conn
+      |> put_resp_header("retry-after", "1")
+      |> send_json(503, %{
+        "error" => %{
+          "message" => "This node is shutting down. Retry the request.",
+          "type" => "server_error",
+          "code" => "shutting_down"
+        }
+      })
+      |> halt()
+    end
+  end
+
+  defp reject_when_draining(conn, _opts), do: conn
+
   # One span per request. A streamed response ends the span when the headers are sent.
   defp trace_request(conn, _opts) do
     handle =
@@ -452,7 +480,7 @@ defmodule SuperPi.Gateway.Router do
   # `/` and `/health` stay open so probes work. Everything else needs a configured token
   # (`SuperPi.Auth`). With no tokens configured the gateway is open, which is safe only on
   # loopback; `SuperPi.Gateway.Server` refuses a non-loopback bind without a token.
-  defp authenticate(%Plug.Conn{request_path: path} = conn, _opts) when path in ["/", "/health"] do
+  defp authenticate(%Plug.Conn{request_path: path} = conn, _opts) when path in ["/", "/health", "/ready"] do
     assign(conn, :principal, Auth.anonymous())
   end
 

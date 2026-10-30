@@ -67,6 +67,8 @@ defmodule SuperPi.Durable.Storage do
             end
           end)
 
+          # The commit is done, so other nodes may now drop their cached copies.
+          SuperPi.Durable.DocCache.broadcast(Process.get(:super_pi_tx_doc_keys, []))
           Process.delete(:super_pi_tx_doc_keys)
           res
 
@@ -268,7 +270,8 @@ defmodule SuperPi.Durable.Storage do
   """
   def configure_agent!(conversation_id, changes) when is_map(changes) do
     commit(fn seq ->
-      current = Doc.snapshot("conversation", conversation_id, "pi.agent") || %{}
+      # Read the database, not the cache: another node may have written the document.
+      current = Doc.snapshot_for_update("conversation", conversation_id, "pi.agent") || %{}
 
       updated =
         Enum.reduce(changes, current, fn

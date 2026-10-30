@@ -43,6 +43,7 @@ defmodule SuperPi.Durable.Schemas.Task do
     field :waiting_on_task_ids, :map, default: %{"ids" => []}
     field :sleep_until, :utc_datetime_usec
     field :attempt, :integer, default: 0
+    field :owner_node, :string
     field :restart_limit, :integer, default: 5
     field :abandon_on_restart, :boolean, default: false
     field :abort_requested, :boolean, default: false
@@ -73,6 +74,7 @@ defmodule SuperPi.Durable.Schemas.Task do
       :waiting_on_task_ids,
       :sleep_until,
       :attempt,
+      :owner_node,
       :restart_limit,
       :abandon_on_restart,
       :abort_requested,

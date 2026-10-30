@@ -128,7 +128,7 @@ defmodule SuperPi.Durable.Doc do
       Process.put(:super_pi_tx_doc_keys, [cache_key | keys])
     end
 
-    :ets.insert(@ets_table, {cache_key, new_value, seq})
+    cache_put(cache_key, new_value, seq)
     {:ok, new_value}
   end
 
@@ -137,8 +137,84 @@ defmodule SuperPi.Durable.Doc do
   """
   def put_ets_overlay(scope_kind, scope_id, kind, value, seq, key \\ "") do
     ensure_ets!()
-    :ets.insert(@ets_table, {{scope_kind, scope_id, kind, key}, value, seq})
+    # Staged value: authoritative on this node until it is flushed, so it never expires.
+    cache_put({scope_kind, scope_id, kind, key}, value, seq, :pinned)
     :ok
+  end
+
+  # --- Cache ---
+  #
+  # Entries are `{key, value, seq, cached_at}`. Another node can write a document, so on a
+  # cluster the cache is also invalidated by message (`SuperPi.Durable.DocCache`) and an entry
+  # expires after `doc_cache_ttl_ms` (default 5 s when nodes are connected, never on one node). The
+  # TTL bounds the damage of a read that races an invalidation.
+
+  defp cache_put(key, value, seq, cached_at \\ nil) do
+    :ets.insert(@ets_table, {key, value, seq, cached_at || System.monotonic_time(:millisecond)})
+  end
+
+  defp cache_get(key) do
+    case :ets.lookup(@ets_table, key) do
+      [{_, value, _seq, :pinned}] ->
+        {:ok, value}
+
+      [{_, value, _seq, cached_at}] ->
+        case ttl() do
+          :infinity ->
+            {:ok, value}
+
+          ttl_ms ->
+            if System.monotonic_time(:millisecond) - cached_at < ttl_ms do
+              {:ok, value}
+            else
+              :ets.delete(@ets_table, key)
+              :miss
+            end
+        end
+
+      [] ->
+        :miss
+    end
+  end
+
+  defp ttl do
+    case Application.get_env(:super_pi, :doc_cache_ttl_ms, :auto) do
+      :auto -> if Node.list() == [], do: :infinity, else: 5_000
+      other -> other
+    end
+  end
+
+  @doc "Removes cache entries (another node wrote these documents)."
+  def cache_invalidate(keys) when is_list(keys) do
+    ensure_ets!()
+    Enum.each(keys, &:ets.delete(@ets_table, &1))
+    :ok
+  end
+
+  @doc """
+  Reads the latest value of a document from the database, never from the cache, and (on
+  PostgreSQL) locks its row until the transaction ends. Use it for a read-modify-write inside
+  `SuperPi.Durable.Storage.commit/1`: a cached copy may be older than what another node wrote.
+  """
+  def snapshot_for_update(scope_kind, scope_id, kind, key \\ "") do
+    query =
+      from d in Document,
+        where:
+          d.scope_kind == ^scope_kind and d.scope_id == ^scope_id and d.kind == ^kind and d.key == ^key and
+            is_nil(d.retired_seq),
+        order_by: [desc: d.id],
+        limit: 1
+
+    query = if SuperPi.Durable.Storage.row_locks?(), do: lock(query, "FOR UPDATE"), else: query
+
+    case Repo.one(query) do
+      nil ->
+        nil
+
+      doc ->
+        {val, _} = reconstruct_doc_value(doc.id, nil)
+        val
+    end
   end
 
   @doc """
@@ -147,18 +223,18 @@ defmodule SuperPi.Durable.Doc do
   def snapshot(scope_kind, scope_id, kind, key \\ "") do
     ensure_ets!()
 
-    case :ets.lookup(@ets_table, {scope_kind, scope_id, kind, key}) do
-      [{_, value, _seq}] ->
+    case cache_get({scope_kind, scope_id, kind, key}) do
+      {:ok, value} ->
         value
 
-      [] ->
+      :miss ->
         case find_active_doc(scope_kind, scope_id, kind, key) do
           nil ->
             nil
 
           doc ->
             {val, _count} = reconstruct_doc_value(doc.id, nil)
-            if val != nil, do: :ets.insert(@ets_table, {{scope_kind, scope_id, kind, key}, val, doc.created_seq})
+            if val != nil, do: cache_put({scope_kind, scope_id, kind, key}, val, doc.created_seq)
             val
         end
     end

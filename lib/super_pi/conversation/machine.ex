@@ -17,6 +17,8 @@ defmodule SuperPi.Conversation.Machine do
 
   @behaviour :gen_statem
 
+  require Logger
+
   alias SuperPi.Durable.{Context, DeferredFlusher, Doc, Storage, TaskEngine}
   alias SuperPi.Env.SandboxRunner
   alias SuperPi.Extension
@@ -150,6 +152,27 @@ defmodule SuperPi.Conversation.Machine do
     {:ok, :recovering, data, [{:next_event, :internal, :reconcile}]}
   end
 
+  # A task that was running when the machine's node stopped is pending again after the reconcile.
+  # Resume it from the durable state: the user message is already stored, and nobody waits for a
+  # reply. `config :super_pi, resume_pending_turns: false` leaves such tasks alone.
+  defp resume_or_idle(%__MODULE__{} = data) do
+    pending =
+      if Application.get_env(:super_pi, :resume_pending_turns, true),
+        do: TaskEngine.next_pending_generation(data.conversation_id)
+
+    with %{id: task_id} <- pending,
+         {:ok, running} <- TaskEngine.start_task(task_id) do
+      Logger.info("[Machine] resuming pending turn, task #{running.id}, attempt #{running.attempt}")
+      Logger.metadata(task_id: running.id)
+      turn_span = SuperPi.Telemetry.turn_start(data.conversation_id, running.id)
+
+      next_data = %__MODULE__{data | active_task_id: running.id, turn_task_id: running.id, turn_span: turn_span, turn_status: :ok}
+      {:next_state, :preparing_request, next_data, [{:next_event, :internal, :prepare}]}
+    else
+      _ -> {:next_state, :idle, data}
+    end
+  end
+
   # Starts the configured MCP servers (once per server) so their tools are in the catalog
   # before the first request. A failure is logged by the manager and never stops the conversation.
   defp start_mcp_clients(conv_id) do
@@ -198,7 +221,7 @@ defmodule SuperPi.Conversation.Machine do
     _reconciled = TaskEngine.reconcile_on_open!(data.conversation_id)
     # Scratch directories left by tasks that ended while no machine ran (a crash, a failover).
     SuperPi.Env.Workspace.sweep()
-    {:next_state, :idle, data}
+    resume_or_idle(data)
   end
 
   # --- State: :idle ---
@@ -1078,19 +1101,20 @@ defmodule SuperPi.Conversation.Machine do
     in_tok = Map.get(usage, "input_tokens", 0) || Map.get(usage, :input_tokens, 0) || 0
     out_tok = Map.get(usage, "output_tokens", 0) || Map.get(usage, :output_tokens, 0) || 0
 
-    current = SuperPi.Durable.Doc.snapshot("conversation", conversation_id, "pi.usage") || %{}
-    cur_in = Map.get(current, "inputTokens", 0)
-    cur_out = Map.get(current, "outputTokens", 0)
-
-    updated = %{
-      "inputTokens" => cur_in + in_tok,
-      "outputTokens" => cur_out + out_tok,
-      "lastTurnInputTokens" => in_tok,
-      "lastTurnOutputTokens" => out_tok,
-      "updatedAt" => System.system_time(:millisecond)
-    }
-
     Storage.commit(fn seq ->
+      # Read inside the transaction, from the database, so concurrent writers add up.
+      current = SuperPi.Durable.Doc.snapshot_for_update("conversation", conversation_id, "pi.usage") || %{}
+      cur_in = Map.get(current, "inputTokens", 0)
+      cur_out = Map.get(current, "outputTokens", 0)
+
+      updated = %{
+        "inputTokens" => cur_in + in_tok,
+        "outputTokens" => cur_out + out_tok,
+        "lastTurnInputTokens" => in_tok,
+        "lastTurnOutputTokens" => out_tok,
+        "updatedAt" => System.system_time(:millisecond)
+      }
+
       SuperPi.Durable.Doc.put_doc("conversation", conversation_id, "pi.usage", updated, seq)
     end)
   rescue

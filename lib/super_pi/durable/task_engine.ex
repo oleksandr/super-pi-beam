@@ -80,8 +80,21 @@ defmodule SuperPi.Durable.TaskEngine do
   def start_task(task_id) do
     locked(task_id, fn
       %TaskSchema{status: "running"}, _seq -> Repo.active_repo().rollback(:already_running)
-      task, seq -> transition!(task, "running", %{}, seq)
+      task, seq -> transition!(task, "running", %{owner_node: Atom.to_string(node())}, seq)
     end)
+  end
+
+  @doc """
+  The oldest pending `pi.generation` task of the conversation, or `nil`. A machine that starts
+  after a crash or a failover resumes it (see `Machine`, `:reconcile`).
+  """
+  def next_pending_generation(conversation_id) do
+    Repo.one(
+      from t in TaskSchema,
+        where: t.conversation_id == ^conversation_id and t.kind == "pi.generation" and t.status == "pending" and is_nil(t.owner_task_id),
+        order_by: [asc: t.id],
+        limit: 1
+    )
   end
 
   @doc """
@@ -282,12 +295,16 @@ defmodule SuperPi.Durable.TaskEngine do
   def reconcile_on_open!(conversation_id) do
     {:ok, reconciled} =
       tx(fn seq ->
+        # A running task whose owner is another live node is not ours to reset: that node's
+        # machine is still working on it. Tasks of this node (a crashed machine), of a node that is
+        # gone, or with no recorded owner are reset.
         running_tasks =
           Repo.all(
             from t in TaskSchema,
               where: t.conversation_id == ^conversation_id and t.status == "running",
               order_by: [asc: t.id]
           )
+          |> Enum.reject(&owned_by_other_live_node?/1)
 
         reconciled_running =
           Enum.map(running_tasks, fn %TaskSchema{} = task ->
@@ -372,6 +389,12 @@ defmodule SuperPi.Durable.TaskEngine do
       end)
 
     reconciled
+  end
+
+  defp owned_by_other_live_node?(%TaskSchema{owner_node: nil}), do: false
+
+  defp owned_by_other_live_node?(%TaskSchema{owner_node: owner}) do
+    owner != Atom.to_string(node()) and owner in Enum.map(Node.list(), &Atom.to_string/1)
   end
 
   @doc """
