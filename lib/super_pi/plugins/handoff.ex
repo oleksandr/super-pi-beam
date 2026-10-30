@@ -2,9 +2,9 @@ defmodule SuperPi.Plugins.Handoff do
   @moduledoc """
   Handoff & Context Distillation Plugin (migrated from Pi ecosystem `handoff.ts`).
 
-  Provides the `handoff` tool to distill long-running conversations into a focused,
-  self-contained child session with zero context bloat. Instead of carrying thousands
-  of expired turn tokens, extracts decisions, touched files, and next goals.
+  Provides the `handoff` tool. It stores a child conversation that starts with the summary
+  and goal that the model supplies, and then ends the current turn. It does not run the
+  child conversation, and it does not summarize the parent itself.
   """
 
   use SuperPi.Extension
@@ -13,7 +13,7 @@ defmodule SuperPi.Plugins.Handoff do
 
   def id, do: "handoff"
   def name, do: "Handoff & Session Distillation"
-  def description, do: "Distills conversation context into a focused new thread with zero bloat"
+  def description, do: "Stores a child conversation seeded with a model-supplied summary and goal"
 
   @tool_spec %{
     "name" => "handoff",

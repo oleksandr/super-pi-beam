@@ -179,26 +179,35 @@ defmodule SuperPi.PluginsTest do
   end
 
   describe "Questionnaire Plugin" do
-    test "returns answers using recommended option or context overrides" do
+    @questions [
+      %{
+        "question" => "Select storage backend",
+        "options" => ["(Recommended) SQLite", "PostgreSQL"]
+      }
+    ]
+
+    test "does not advertise the ask_question tool" do
       {:ok, cfg} = Questionnaire.before_agent_start(%{"tools" => []}, %{})
-      assert Enum.any?(cfg["tools"], &(&1["name"] == "ask_question"))
+      refute Enum.any?(cfg["tools"], &(&1["name"] == "ask_question"))
+    end
 
-      questions = [
-        %{
-          "question" => "Select storage backend",
-          "options" => ["(Recommended) SQLite", "PostgreSQL"]
-        }
-      ]
+    test "returns a not_implemented error and never picks an answer itself" do
+      res = Questionnaire.wrap_tool("ask_question", %{"questions" => @questions}, fn _ -> %{} end, %{})
 
-      # Default: picks first/recommended option
-      res = Questionnaire.wrap_tool("ask_question", %{"questions" => questions}, fn _ -> %{} end, %{})
-      assert res["output"] =~ "User Answer: (Recommended) SQLite"
+      assert res["is_error"] == true
+      assert res["structured_output"]["status"] == "not_implemented"
+      refute res["output"] =~ "SQLite"
+    end
 
-      # Override: picks injected user answer
-      res_override = Questionnaire.wrap_tool("ask_question", %{"questions" => questions}, fn _ -> %{} end, %{
-        questionnaire_answers: %{"Select storage backend" => "PostgreSQL"}
-      })
-      assert res_override["output"] =~ "User Answer: PostgreSQL"
+    test "uses preset answers only when every question has one, and labels them" do
+      res =
+        Questionnaire.wrap_tool("ask_question", %{"questions" => @questions}, fn _ -> %{} end, %{
+          questionnaire_answers: %{"Select storage backend" => "PostgreSQL"}
+        })
+
+      refute res["is_error"]
+      assert res["structured_output"]["source"] == "override"
+      assert res["output"] =~ "preset override, not asked): PostgreSQL"
     end
   end
 
@@ -262,15 +271,18 @@ defmodule SuperPi.PluginsTest do
   end
 
   describe "Subagent Plugin" do
-    test "spawns isolated scout subagent and returns concise summary" do
-      res = Subagent.wrap_tool("delegate_subagent", %{
-        "role" => "scout",
-        "prompt" => "Scan project dependencies"
-      }, fn _ -> %{} end, %{})
+    test "does not advertise the delegate_subagent tool" do
+      {:ok, cfg} = Subagent.before_agent_start(%{"tools" => []}, %{})
+      refute Enum.any?(cfg["tools"], &(&1["name"] == "delegate_subagent"))
+    end
 
-      assert res["structured_output"]["status"] == "completed"
-      assert res["output"] =~ "Subagent [scout] finished successfully"
-      assert res["output"] =~ "Fast exploratory reconnaissance"
+    test "returns a not_implemented error instead of a fabricated success" do
+      res =
+        Subagent.wrap_tool("delegate_subagent", %{"role" => "scout", "prompt" => "Scan project dependencies"}, fn _ -> %{} end, %{})
+
+      assert res["is_error"] == true
+      assert res["structured_output"]["status"] == "not_implemented"
+      refute res["output"] =~ "finished successfully"
     end
   end
 

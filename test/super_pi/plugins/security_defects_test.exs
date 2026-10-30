@@ -279,8 +279,8 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
           config: []
         })
 
-      refute inspect(res) =~ "Analysis completed with 0 errors",
-             "the stub reports a successful audit that never ran"
+      assert res["is_error"] == true, "the stub reports success for work that never ran"
+      assert res["structured_output"]["status"] == "not_implemented"
     end
   end
 

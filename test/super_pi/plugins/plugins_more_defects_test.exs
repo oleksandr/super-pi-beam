@@ -15,9 +15,8 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
   alias SuperPi.CodeMode.Journal
   alias SuperPi.Conversation.Machine
   alias SuperPi.Durable.{Doc, Storage}
-  alias SuperPi.Env.SandboxRunner
   alias SuperPi.Gateway.Router
-  alias SuperPi.Plugins.{ConfirmDestructive, CustomCompaction, Handoff, JevRouter, Subagent, Todo}
+  alias SuperPi.Plugins.{ConfirmDestructive, CustomCompaction, Handoff, JevRouter, Todo}
   alias SuperPi.TUI.Owl, as: OwlTUI
 
 
@@ -246,38 +245,6 @@ defmodule SuperPi.Plugins.PluginsMoreDefectsTest do
       res = Todo.wrap_tool("todo", %{"action" => "add", "text" => <<255, 254>>}, fn _ -> %{} end, %{conversation_id: conv.id})
 
       assert res["is_error"] == true, "tool reported success although nothing was persisted"
-    end
-  end
-
-  describe "plugins/subagent.ex (:67)" do
-    test "passes the timeout under the :timeout_ms key that SandboxRunner reads" do
-      me = self()
-
-      spy =
-        spawn_link(fn ->
-          loop = fn loop ->
-            receive do
-              msg -> send(me, {:spy, msg})
-            end
-
-            loop.(loop)
-          end
-
-          loop.(loop)
-        end)
-
-      Code.ensure_loaded!(SandboxRunner)
-      :erlang.trace_pattern({SandboxRunner, :run_isolated, 2}, [{:_, [], []}], [:global])
-      :erlang.trace(self(), true, [:call, {:tracer, spy}])
-
-      on_exit(fn -> :erlang.trace_pattern({SandboxRunner, :run_isolated, 2}, false, [:global]) end)
-
-      Subagent.wrap_tool("delegate_subagent", %{"role" => "scout", "prompt" => "p", "timeout_ms" => 50}, fn _ -> %{} end, %{
-        config: []
-      })
-
-      assert_receive {:spy, {:trace, _, :call, {SandboxRunner, :run_isolated, [_fun, opts]}}}, 1_000
-      assert Keyword.get(opts, :timeout_ms) == 50, "run_isolated got #{inspect(opts)}"
     end
   end
 end

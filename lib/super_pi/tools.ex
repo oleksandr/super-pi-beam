@@ -374,6 +374,21 @@ defmodule SuperPi.Tools do
     end)
   end
 
+  @doc """
+  Builds the error result for a tool that is registered but has no implementation.
+
+  A tool that cannot do its job must report an error. It must never report success.
+  """
+  @spec not_implemented_result(String.t()) :: map()
+  def not_implemented_result(tool) do
+    %{
+      "is_error" => true,
+      "output" => "Tool #{tool} is not implemented",
+      "structured_output" => %{"status" => "not_implemented", "error" => "not_implemented"},
+      "details" => %{"error" => "not_implemented"}
+    }
+  end
+
   defp error_result(tool, reason) do
     %{
       "is_error" => true,

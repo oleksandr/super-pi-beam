@@ -2,16 +2,18 @@ defmodule SuperPi.Plugins.Questionnaire do
   @moduledoc """
   Questionnaire Plugin (migrated from Pi ecosystem `questionnaire.ts` & `question.ts`).
 
-  Registers the `ask_question` tool allowing agents to request structured clarifications
-  from the user (multiple choice with recommended default or free-form options),
-  preventing hallucinated assumptions during complex workflows.
+  Not implemented. No client channel asks a real user yet, so the plugin does not advertise
+  `ask_question`. A call returns a `not_implemented` error, unless the caller sets
+  `ctx[:questionnaire_answers]` with an answer for every question. That override is for
+  headless runs and tests, and the output says the answers were preset.
   """
 
   use SuperPi.Extension
+  alias SuperPi.Tools
 
   def id, do: "questionnaire"
   def name, do: "Questionnaire & Human Clarification"
-  def description, do: "Structured human-in-the-loop clarification tool with recommended options"
+  def description, do: "Human clarification tool (not implemented: calls return a not_implemented error)"
 
   @tool_spec %{
     "name" => "ask_question",
@@ -45,75 +47,34 @@ defmodule SuperPi.Plugins.Questionnaire do
     }
   }
 
+  # The tool is not advertised: nothing asks a real user yet. Register `tool_spec/0` here
+  # again when a client channel can answer (Task 34 on the project board).
   @impl true
-  def before_agent_start(agent_cfg, _ctx) do
-    existing_tools = Map.get(agent_cfg, "tools") || Map.get(agent_cfg, :tools) || []
-
-    updated_tools =
-      if Enum.any?(existing_tools, &(&1["name"] == "ask_question")) do
-        existing_tools
-      else
-        existing_tools ++ [@tool_spec]
-      end
-
-    {:ok, Map.put(agent_cfg, "tools", updated_tools)}
-  end
+  def before_agent_start(agent_cfg, _ctx), do: {:ok, agent_cfg}
 
   @impl true
   def wrap_tool("ask_question", args, _next, ctx) do
-    args = if is_map(args), do: args, else: %{}
+    questions = normalize_questions(args)
+    overrides = Map.get(ctx, :questionnaire_answers) || %{}
 
-    questions =
-      case Map.get(args, "questions") || Map.get(args, :questions) do
-        list when is_list(list) -> list
-        item when is_map(item) -> [item]
-        str when is_binary(str) -> [%{"question" => str}]
-        _ -> []
-      end
+    texts = Enum.map(questions, &question_text/1)
 
-    answers_override = Map.get(ctx, :questionnaire_answers) || %{}
+    if texts != [] and Enum.all?(texts, &Map.has_key?(overrides, &1)) do
+      answers = Enum.map(texts, &%{"question" => &1, "selected" => Map.fetch!(overrides, &1)})
 
-    answers =
-      Enum.map(questions, fn
-        q when is_map(q) ->
-          q_text = Map.get(q, "question") || Map.get(q, :question) || ""
+      rendered =
+        Enum.map_join(answers, "\n\n", fn a ->
+          "Question: #{a["question"]}\nAnswer (preset override, not asked): #{a["selected"]}"
+        end)
 
-          options =
-            case Map.get(q, "options") || Map.get(q, :options) do
-              list when is_list(list) -> list
-              str when is_binary(str) -> [str]
-              _ -> []
-            end
-
-          selected =
-            case Map.get(answers_override, q_text) do
-              val when not is_nil(val) -> val
-              _ -> List.first(options) || "No answer provided"
-            end
-
-          %{
-            "question" => q_text,
-            "selected" => selected
-          }
-
-        other ->
-          q_text = to_string(other)
-          %{
-            "question" => q_text,
-            "selected" => Map.get(answers_override, q_text, "No answer provided")
-          }
-      end)
-
-    rendered =
-      Enum.map_join(answers, "\n\n", fn a ->
-        "Question: #{a["question"]}\nUser Answer: #{a["selected"]}"
-      end)
-
-    %{
-      "output" => "Clarification received:\n" <> rendered,
-      "structured_output" => %{"answers" => answers},
-      "details" => %{"question_count" => length(questions)}
-    }
+      %{
+        "output" => "Preset answers used:\n" <> rendered,
+        "structured_output" => %{"answers" => answers, "source" => "override"},
+        "details" => %{"question_count" => length(questions), "source" => "override"}
+      }
+    else
+      Tools.not_implemented_result("ask_question")
+    end
   end
 
   def wrap_tool(_name, args, next, _ctx) do
@@ -124,4 +85,18 @@ defmodule SuperPi.Plugins.Questionnaire do
   Returns the tool specification map for direct registration.
   """
   def tool_spec, do: @tool_spec
+
+  defp normalize_questions(args) when is_map(args) do
+    case Map.get(args, "questions") || Map.get(args, :questions) do
+      list when is_list(list) -> list
+      item when is_map(item) -> [item]
+      str when is_binary(str) -> [%{"question" => str}]
+      _ -> []
+    end
+  end
+
+  defp normalize_questions(_), do: []
+
+  defp question_text(q) when is_map(q), do: Map.get(q, "question") || Map.get(q, :question) || ""
+  defp question_text(other), do: to_string(other)
 end

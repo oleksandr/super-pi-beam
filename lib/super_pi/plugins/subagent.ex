@@ -2,18 +2,18 @@ defmodule SuperPi.Plugins.Subagent do
   @moduledoc """
   Subagent Orchestration Plugin (migrated from Pi ecosystem `subagent/`).
 
-  Registers the `delegate_subagent` tool to delegate focused recon, planning, or auditing
-  tasks to isolated concurrent worker processes under OTP supervision without polluting
-  the parent conversation's context window.
+  Not implemented. The plugin does not advertise `delegate_subagent`, and a call to it returns
+  a `not_implemented` error. A real subagent needs a child conversation that runs its own
+  model loop (Task 35 on the project board).
   """
 
   use SuperPi.Extension
-  alias SuperPi.Env.SandboxRunner
+  alias SuperPi.Tools
   require Logger
 
   def id, do: "subagent"
   def name, do: "Subagent Delegation"
-  def description, do: "Spawns concurrent subagent tasks with isolated context windows under OTP supervision"
+  def description, do: "Subagent delegation (not implemented: calls return a not_implemented error)"
 
   @tool_spec %{
     "name" => "delegate_subagent",
@@ -34,99 +34,23 @@ defmodule SuperPi.Plugins.Subagent do
     }
   }
 
+  # The tool is not advertised: it has no implementation, so the model must not be offered it.
+  # Register `tool_spec/0` here again when a child conversation can run a real model loop.
   @impl true
-  def before_agent_start(agent_cfg, _ctx) do
-    existing_tools = Map.get(agent_cfg, "tools") || Map.get(agent_cfg, :tools) || []
-
-    updated_tools =
-      if Enum.any?(existing_tools, &(&1["name"] == "delegate_subagent")) do
-        existing_tools
-      else
-        existing_tools ++ [@tool_spec]
-      end
-
-    {:ok, Map.put(agent_cfg, "tools", updated_tools)}
-  end
+  def before_agent_start(agent_cfg, _ctx), do: {:ok, agent_cfg}
 
   @impl true
-  def wrap_tool("delegate_subagent", args, _next, ctx) do
-    config = Map.get(ctx, :config, [])
-    default_timeout = get_config(config, :timeout_ms, 30_000)
-
-    role = to_string(Map.get(args, "role") || Map.get(args, :role) || "worker")
-    prompt = Map.get(args, "prompt") || Map.get(args, :prompt) || ""
-    timeout = Map.get(args, "timeout_ms") || Map.get(args, :timeout_ms) || default_timeout
-
-    Logger.info("[Subagent] Spawning #{role} subagent for prompt: #{String.slice(prompt, 0, 60)}...")
-
-    result =
-      SandboxRunner.run_isolated(
-        fn ->
-          execute_subagent_run(role, prompt, ctx)
-        end,
-        timeout_ms: timeout
-      )
-
-    case result do
-      {:ok, summary} ->
-        %{
-          "output" => "Subagent [#{role}] finished successfully:\n#{summary}",
-          "structured_output" => %{"role" => role, "summary" => summary, "status" => "completed"},
-          "details" => %{"role" => role, "timeout_ms" => timeout}
-        }
-
-      {:error, err} ->
-        %{
-          "output" => "Subagent [#{role}] failed or timed out: #{inspect(err)}",
-          "structured_output" => %{"role" => role, "error" => inspect(err), "status" => "failed"},
-          "details" => %{"error" => err},
-          "is_error" => true
-        }
-    end
+  def wrap_tool("delegate_subagent", _args, _next, _ctx) do
+    Logger.warning("[Subagent] delegate_subagent called but subagents are not implemented")
+    Tools.not_implemented_result("delegate_subagent")
   end
 
   def wrap_tool(_name, args, next, _ctx) do
     next.(args)
   end
 
-  defp execute_subagent_run(role, prompt, ctx) do
-    role_instruction =
-      case role do
-        "scout" -> "Fast exploratory reconnaissance. Summarize key findings concisely."
-        "planner" -> "Architectural design and step breakdown. Produce concrete plan steps."
-        "reviewer" -> "Security and quality audit. Identify regressions or vulnerabilities."
-        _ -> "General purpose task execution."
-      end
-
-    ws = Map.get(ctx, :workspace_root, File.cwd!())
-
-    """
-    [Subagent Role: #{role}] #{role_instruction}
-    Workspace: #{ws}
-    Task Goal: #{prompt}
-    Status: Completed.
-    """ |> String.trim()
-  end
-
   @doc """
   Returns the tool specification map for direct registration.
   """
   def tool_spec, do: @tool_spec
-
-  defp get_config(config, key, default) when is_map(config) do
-    case Map.fetch(config, key) do
-      {:ok, val} -> val
-      :error ->
-        case Map.fetch(config, to_string(key)) do
-          {:ok, val} -> val
-          :error -> default
-        end
-    end
-  end
-
-  defp get_config(config, key, default) when is_list(config) do
-    Keyword.get(config, key, default)
-  end
-
-  defp get_config(_config, _key, default), do: default
 end

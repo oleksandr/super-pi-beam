@@ -3,11 +3,11 @@ defmodule SuperPi.Harness.Interactive do
   Human-Collaborative Interactive Harness (`super-pi-interactive`).
 
   Declaratively composed of clarification and distillation plugins with concrete configurations:
-  - `Questionnaire`: Human-in-the-loop clarification tool with recommended options.
+  - `Questionnaire`: Human-in-the-loop clarification. Not implemented: calls return a `not_implemented` error.
   - `InlineBash`: Zero-turn prompt shell expansion (`!{cmd}`) with 10s execution bound.
   - `StructuredOutput`: Terminating tool for emitting machine-readable results without extra turn cost.
-  - `Handoff`: Context transfer to clean child sessions with zero token bloat.
-  - `Subagent`: Delegated concurrent background tasks under OTP supervision with 30s timeout.
+  - `Handoff`: Stores a child session seeded with a model-supplied summary. Does not run it.
+  - `Subagent`: Not implemented: calls return a `not_implemented` error.
   """
 
   @behaviour SuperPi.Harness
