@@ -274,8 +274,6 @@ defmodule SuperPi.Gateway.Router do
   end
 
   defp title_request?(messages) when is_list(messages) do
-    has_system? = Enum.any?(messages, fn m -> Map.get(m, "role") == "system" end)
-
     system_title? =
       Enum.any?(messages, fn m ->
         Map.get(m, "role") == "system" and
@@ -287,14 +285,7 @@ defmodule SuperPi.Gateway.Router do
           |> String.starts_with?("you are a title generator")
       end)
 
-    user_title? =
-      not has_system? and
-        Enum.any?(messages, fn m ->
-          Map.get(m, "role") == "user" and
-            String.starts_with?(String.downcase(String.trim(extract_content_text(Map.get(m, "content", "")))), "generate a title")
-        end)
-
-    system_title? or user_title?
+    system_title?
   end
 
   defp title_request?(_), do: false
@@ -528,9 +519,7 @@ defmodule SuperPi.Gateway.Router do
   end
 
   defp new_conversation(principal) do
-    conv = Storage.create_conversation!(agent: %{})
-    Auth.claim!(conv.id, principal)
-    conv
+    Storage.create_conversation!(agent: %{}, owner: principal)
   end
 
   defp resolve_conversation(conn, params) do
@@ -830,6 +819,10 @@ defmodule SuperPi.Gateway.Router do
     flush_stale_mailbox(conv_id)
     Phoenix.PubSub.subscribe(SuperPi.PubSub, "conversation:#{conv_id}")
 
+    # The request span ends when the headers are sent, so capture its context first: the turn
+    # span must be its child.
+    otel_ctx = SuperPi.Telemetry.current_ctx()
+
     # Set SSE headers and initiate chunked response
     conn =
       conn
@@ -860,8 +853,6 @@ defmodule SuperPi.Gateway.Router do
       end
 
     # Launch turn asynchronously
-    otel_ctx = SuperPi.Telemetry.current_ctx()
-
     task =
       Task.Supervisor.async_nolink(SuperPi.ToolTaskSupervisor, fn ->
         safe_machine_submit(pid, user_prompt, mode: :queue, timeout: 300_000, otel_ctx: otel_ctx)

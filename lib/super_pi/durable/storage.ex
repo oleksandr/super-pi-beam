@@ -178,8 +178,18 @@ defmodule SuperPi.Durable.Storage do
         |> Repo.insert!()
 
       init_builtin_docs!(conv.id, agent_override, seq)
+      put_owner(conv.id, Keyword.get(opts, :owner), seq)
       conv
     end)
+  end
+
+  # `pi.owner` is written in the commit that creates the conversation, so a crash cannot leave an
+  # unowned conversation that `"anonymous"` could claim.
+  defp put_owner(_conv_id, nil, _seq), do: :ok
+
+  defp put_owner(conv_id, owner, seq) when is_binary(owner) do
+    Doc.put_doc("conversation", conv_id, "pi.owner", %{"principal" => owner}, seq)
+    :ok
   end
 
   @doc """
@@ -217,6 +227,7 @@ defmodule SuperPi.Durable.Storage do
         |> Repo.insert!()
 
       init_builtin_docs!(conv.id, merged_agent, seq)
+      put_owner(conv.id, Keyword.get(opts, :owner), seq)
       conv
     end)
   end

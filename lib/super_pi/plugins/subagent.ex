@@ -228,10 +228,10 @@ defmodule SuperPi.Plugins.Subagent do
       Storage.create_conversation!(
         owner_kind: if(parent_task_id, do: "task", else: "ownerless"),
         owner_task_id: parent_task_id,
-        agent: child_agent
+        agent: child_agent,
+        owner: Auth.owner(ctx.conversation_id)
       )
 
-    Auth.claim!(child.id, Auth.owner(ctx.conversation_id))
     task_id = start_child_task(ctx.conversation_id, parent_task_id, role, prompt, child.id)
     :ets.insert(started, {idx, child.id, task_id})
 

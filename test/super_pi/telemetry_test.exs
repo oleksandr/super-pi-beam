@@ -184,8 +184,8 @@ defmodule SuperPi.TelemetryTest do
 
       text = SuperPi.Telemetry.scrape()
       assert text =~ ~r/super_pi_turn_total\{status="ok"\} \d+/
-      assert text =~ ~r/super_pi_llm_requests_total\{model="test-model",status="ok"\} \d+/
-      assert text =~ ~r/super_pi_llm_input_tokens\{model="test-model"\} \d+/
+      assert text =~ ~r/super_pi_llm_requests_total\{model="other",status="ok"\} \d+/
+      assert text =~ ~r/super_pi_llm_input_tokens\{model="other"\} \d+/
       assert text =~ "super_pi_llm_duration_milliseconds_bucket"
     end
 

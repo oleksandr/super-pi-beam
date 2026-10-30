@@ -41,6 +41,14 @@ defmodule SuperPi.Conversation.Machine do
   @impl :gen_statem
   def callback_mode, do: [:handle_event_function, :state_enter]
 
+  # A machine that stops mid-turn still ends its turn span, so the span is exported.
+  @impl :gen_statem
+  def terminate(reason, _state, %__MODULE__{turn_span: span}) when not is_nil(span) do
+    SuperPi.Telemetry.turn_stop(span, {:error, {:machine_stopped, reason}})
+  end
+
+  def terminate(_reason, _state, _data), do: :ok
+
   # --- Public Client API ---
 
   def child_spec(opts) do

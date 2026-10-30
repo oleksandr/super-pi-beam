@@ -6,6 +6,9 @@ defmodule SuperPi.ReviewDefectsTest do
   use SuperPi.DataCase, async: false
 
   import Ecto.Query
+  require Record
+
+  Record.defrecord(:span, Record.extract(:span, from_lib: "opentelemetry/include/otel_span.hrl"))
 
   alias SuperPi.Auth
   alias SuperPi.Durable.{Doc, Storage, TaskEngine}
@@ -359,6 +362,97 @@ defmodule SuperPi.ReviewDefectsTest do
       {:ok, _} = TaskEngine.complete_task(owner.id, %{})
 
       assert {:error, :invalid_owner_state} = TaskEngine.create_task(conv.id, "c", %{}, owner_task_id: owner.id)
+    end
+  end
+
+  describe "low-severity findings" do
+    test "the token name anonymous is reserved" do
+      put_env(:gateway_tokens, anonymous: "tok")
+      assert_raise ArgumentError, ~r/reserved/, fn -> Auth.tokens() end
+    end
+
+    test "a conversation is created owned, in one commit" do
+      conv = Storage.create_conversation!(owner: "alice")
+      assert Auth.owner(conv.id) == "alice"
+
+      entry = Storage.append_entry!(conv.id, "pi.message", %{"role" => "user", "content" => "x"})
+      fork = Storage.fork_conversation!(conv.id, entry.id, owner: "bob")
+      assert Auth.owner(fork.id) == "bob"
+    end
+
+    test "metric labels are bounded" do
+      SuperPi.Tools.ensure_catalog_ets!()
+      before = SuperPi.Telemetry.scrape()
+
+      SuperPi.Telemetry.tool_span("made-up-tool-#{System.unique_integer([:positive])}", fn -> %{"output" => "x"} end)
+      SuperPi.Telemetry.tool_span("read", fn -> %{"output" => "x"} end)
+      SuperPi.Telemetry.llm_span("invented-model-#{System.unique_integer([:positive])}", fn -> {:ok, %{"usage" => %{}}} end)
+
+      text = SuperPi.Telemetry.scrape()
+      assert text =~ ~s(tool="other")
+      assert text =~ ~s(tool="read")
+      assert text =~ ~s(model="other")
+      refute text =~ "made-up-tool"
+      refute text =~ "invented-model"
+      assert is_binary(before)
+    end
+
+    test "a machine that stops mid-turn ends its turn span" do
+      :otel_simple_processor.set_exporter(:otel_exporter_pid, self())
+      conv = Storage.create_conversation!()
+      parent = self()
+
+      responder = fn _p, _c ->
+        send(parent, :in_turn)
+        Process.sleep(5_000)
+        {:ok, Faults.text_msg("late")}
+      end
+
+      {:ok, pid} = SuperPi.Conversation.Machine.start_link(conversation_id: conv.id, extensions: [], llm_responder: responder)
+      Process.unlink(pid)
+      Task.start(fn -> catch_exit(SuperPi.Conversation.Machine.submit(pid, "hi", timeout: 10_000)) end)
+      assert_receive :in_turn, 5_000
+
+      :gen_statem.stop(pid)
+      assert_receive {:span, s}, 2_000
+      assert span(s, :name) == "super_pi.turn"
+      assert span(s, :status) != :undefined
+    end
+
+    test "a regular file at the socket path is not deleted" do
+      path = Path.join(System.tmp_dir!(), "rd_notsock_#{System.unique_integer([:positive])}")
+      File.write!(path, "precious")
+      on_exit(fn -> File.rm(path) end)
+
+      Process.flag(:trap_exit, true)
+      assert {:error, _} = RPC.start_link(socket_path: path)
+      assert File.read!(path) == "precious"
+    end
+
+    test "the socket is private to the owner and replaces an old socket" do
+      path = Path.join("/tmp", "rd_#{System.unique_integer([:positive])}.sock")
+      {:ok, first} = RPC.start_link(socket_path: path)
+      Process.unlink(first)
+      Process.exit(first, :kill)
+      Process.sleep(50)
+
+      {:ok, second} = RPC.start_link(socket_path: path)
+      assert File.stat!(path).mode |> Bitwise.band(0o777) == 0o600
+      GenServer.stop(second)
+      File.rm(path)
+    end
+
+    test "a plain user message that starts with 'generate a title' runs the agent" do
+      body = %{"model" => "super-pi-workspace", "messages" => [%{"role" => "user", "content" => "Generate a title for my blog post"}]}
+
+      conn =
+        Plug.Test.conn(:post, "/v1/chat/completions", Jason.encode!(body))
+        |> Plug.Conn.put_req_header("content-type", "application/json")
+        |> Plug.Conn.put_req_header("x-session-id", "title-#{System.unique_integer([:positive])}")
+        |> SuperPi.Gateway.Router.call(SuperPi.Gateway.Router.init([]))
+
+      assert conn.status == 200
+      refute Jason.decode!(conn.resp_body)["id"] =~ "title"
     end
   end
 end

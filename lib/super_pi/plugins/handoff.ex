@@ -107,10 +107,9 @@ defmodule SuperPi.Plugins.Handoff do
     child_conv =
       Storage.create_conversation!(
         parent_conversation_id: parent_conv_id,
-        agent: child_agent
+        agent: child_agent,
+        owner: if(parent_conv_id, do: SuperPi.Auth.owner(parent_conv_id))
       )
-
-    if parent_conv_id, do: SuperPi.Auth.claim!(child_conv.id, SuperPi.Auth.owner(parent_conv_id))
 
     Storage.append_entry!(child_conv.id, "pi.message", %{
       "role" => "user",

@@ -113,7 +113,7 @@ defmodule SuperPi.Telemetry do
       :telemetry.execute(
         [:super_pi, :llm, :stop],
         %{duration: System.monotonic_time() - started, input_tokens: in_tok, output_tokens: out_tok},
-        %{model: model, status: status_tag(status)}
+        %{model: model_label(model), status: status_tag(status)}
       )
 
       result
@@ -134,11 +134,24 @@ defmodule SuperPi.Telemetry do
       :telemetry.execute(
         [:super_pi, :tool, :stop],
         %{duration: System.monotonic_time() - started},
-        %{tool: tool, status: if(error?, do: "error", else: "ok")}
+        %{tool: tool_label(tool), status: if(error?, do: "error", else: "ok")}
       )
 
       result
     end
+  end
+
+  # Metric labels come from fixed sets, so a client or a model cannot create new series by
+  # inventing names. The span attributes keep the real value.
+  defp tool_label(tool) do
+    if :ets.whereis(:super_pi_tool_catalog) != :undefined and :ets.member(:super_pi_tool_catalog, tool),
+      do: tool,
+      else: "other"
+  end
+
+  defp model_label(model) do
+    known = Enum.map(SuperPi.AI.Providers.catalog(), & &1["id"])
+    if model in known or SuperPi.Harness.harness?(model), do: model, else: "other"
   end
 
   defp describe_llm({:ok, message}) when is_map(message) do

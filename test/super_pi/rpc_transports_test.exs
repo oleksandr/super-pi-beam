@@ -36,7 +36,13 @@ defmodule SuperPi.RPCTransportsTest do
 
     test "the socket file is removed on stop, and a stale file from an earlier run is replaced" do
       path = tmp_socket()
-      File.write!(path, "stale")
+
+      # A server that dies without cleanup leaves its socket file behind.
+      {:ok, dead} = Server.start_link(socket_path: path)
+      Process.unlink(dead)
+      Process.exit(dead, :kill)
+      Process.sleep(50)
+      assert File.exists?(path)
 
       {:ok, server} = Server.start_link(socket_path: path)
       {:ok, sock} = :gen_tcp.connect({:local, to_charlist(path)}, 0, [:binary, packet: :line, active: false])

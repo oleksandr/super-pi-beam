@@ -40,7 +40,15 @@ defmodule SuperPi.Auth do
 
     configured
     |> Enum.flat_map(fn
-      {name, token} when is_binary(token) and token != "" -> [{token, to_string(name)}]
+      # `anonymous` is the principal of an open endpoint and of conversations with no owner.
+      # A token that carried the name would own every one of those.
+      {name, token} when is_binary(token) and token != "" ->
+        if to_string(name) == @anonymous do
+          raise ArgumentError, "the token name \"anonymous\" is reserved"
+        else
+          [{token, to_string(name)}]
+        end
+
       token when is_binary(token) and token != "" -> [{token, "token:" <> fingerprint(token)}]
       _ -> []
     end)

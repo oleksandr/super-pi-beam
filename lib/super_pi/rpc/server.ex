@@ -191,11 +191,7 @@ defmodule SuperPi.RPC.Server do
           {sock, actual_port, nil}
 
         path ->
-          # A Unix socket is reachable only by processes that can open the file.
-          # Remove a stale file from an earlier run, and restrict the new one to the owner.
-          File.rm(path)
-          {:ok, sock} = :gen_tcp.listen(0, base ++ [ifaddr: {:local, to_charlist(path)}])
-          File.chmod!(path, 0o600)
+          {sock, path} = listen_unix(path, base)
           {sock, nil, path}
       end
 
@@ -208,6 +204,31 @@ defmodule SuperPi.RPC.Server do
   @impl true
   def handle_call(:port, _from, %__MODULE__{} = state) do
     {:reply, state.port, state}
+  end
+
+  # The socket is bound inside a private (0700) directory and then moved into place, so there is
+  # no moment when another user can connect. Only an existing socket is replaced: a regular file
+  # at `path` is an error, not something to delete.
+  defp listen_unix(path, base) do
+    case File.lstat(path) do
+      {:ok, %File.Stat{type: :other}} -> File.rm!(path)
+      {:ok, _} -> raise ArgumentError, "#{path} exists and is not a socket"
+      {:error, :enoent} -> :ok
+    end
+
+    tmp_dir = path <> ".d#{System.unique_integer([:positive])}"
+    File.mkdir!(tmp_dir)
+    File.chmod!(tmp_dir, 0o700)
+    tmp_sock = Path.join(tmp_dir, "s")
+
+    try do
+      {:ok, sock} = :gen_tcp.listen(0, base ++ [ifaddr: {:local, to_charlist(tmp_sock)}])
+      File.chmod!(tmp_sock, 0o600)
+      File.rename!(tmp_sock, path)
+      {sock, path}
+    after
+      File.rm_rf(tmp_dir)
+    end
   end
 
   @impl true
@@ -721,7 +742,7 @@ defmodule SuperPi.RPC.Server do
     at_entry_id = Map.fetch!(params, "at_entry_id")
     forked =
       try do
-        Storage.fork_conversation!(parent_id, at_entry_id)
+        Storage.fork_conversation!(parent_id, at_entry_id, owner: principal(client_state) || Auth.anonymous())
       rescue
         Ecto.NoResultsError -> {:error, :entry_not_found}
       end
@@ -731,8 +752,6 @@ defmodule SuperPi.RPC.Server do
         {jsonrpc_error(id, -32602, "Cannot fork: #{inspect(reason)}"), client_state, []}
 
       fork_conv ->
-        Auth.claim!(fork_conv.id, principal(client_state) || Auth.anonymous())
-
         reply =
           jsonrpc_result(id, %{
             "conversation_id" => fork_conv.id,
@@ -928,9 +947,7 @@ defmodule SuperPi.RPC.Server do
             |> Permissions.apply_remote_mode(Map.get(base_agent, "executionMode"))
 
           agent_cfg = Map.merge(defaults, base_agent)
-          conv = Storage.create_conversation!(agent: agent_cfg)
-          Auth.claim!(conv.id, principal(client_state) || Auth.anonymous())
-          conv
+          Storage.create_conversation!(agent: agent_cfg, owner: principal(client_state) || Auth.anonymous())
 
         conv_id ->
           if Map.has_key?(params, "agent") do
