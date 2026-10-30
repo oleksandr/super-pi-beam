@@ -11,6 +11,8 @@ config :super_pi, Oban, testing: :manual
 config :super_pi, :mock_llm, true
 # The test alias migrates before the suite; the sandbox must not race a second run.
 config :super_pi, auto_migrate: false
+# Tests that need MCP servers start them explicitly.
+config :super_pi, mcp_clients: false
 
 config :logger, level: :warning
 

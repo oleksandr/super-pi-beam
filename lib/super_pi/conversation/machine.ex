@@ -105,6 +105,7 @@ defmodule SuperPi.Conversation.Machine do
     extensions = Keyword.get(opts, :extensions, [])
     llm_responder = Keyword.get(opts, :llm_responder, &default_llm_responder/2)
     tool_executor = Keyword.get(opts, :tool_executor, &default_tool_executor/3)
+    start_mcp_clients(conv_id)
 
     data = %__MODULE__{
       conversation_id: conv_id,
@@ -114,6 +115,39 @@ defmodule SuperPi.Conversation.Machine do
     }
 
     {:ok, :recovering, data, [{:next_event, :internal, :reconcile}]}
+  end
+
+  # Starts the configured MCP servers (once per server) so their tools are in the catalog
+  # before the first request. A failure is logged by the manager and never stops the conversation.
+  defp start_mcp_clients(conv_id) do
+    if Application.get_env(:super_pi, :mcp_clients, true) do
+      agent = Doc.snapshot("conversation", conv_id, "pi.agent") || %{}
+
+      opts =
+        case Map.get(agent, "globalConfigDir") do
+          dir when is_binary(dir) -> [global_config_dir: dir]
+          _ -> []
+        end
+
+      SuperPi.MCP.Manager.ensure_started(opts)
+      declare_mcp_tools(conv_id, agent)
+    end
+
+    :ok
+  end
+
+  # The agent document holds the tool list sent to the model, captured when the conversation was
+  # configured. Add the MCP tools that were registered after that.
+  defp declare_mcp_tools(conv_id, agent) do
+    declared = agent |> Map.get("tools", []) |> Enum.map(& &1["name"]) |> MapSet.new()
+
+    new_tools =
+      SuperPi.Tools.active_llm_tools()
+      |> Enum.filter(&(String.starts_with?(&1["name"], "mcp__") and not MapSet.member?(declared, &1["name"])))
+
+    if new_tools != [] do
+      Storage.configure_agent!(conv_id, %{"tools" => Map.get(agent, "tools", []) ++ new_tools})
+    end
   end
 
   # --- State: :recovering ---

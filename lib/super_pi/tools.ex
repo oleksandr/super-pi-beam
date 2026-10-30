@@ -141,6 +141,9 @@ defmodule SuperPi.Tools do
     ensure_catalog_ets!()
 
     case tool_name do
+      "mcp__" <> _ ->
+        SuperPi.MCP.Manager.call_tool(tool_name, args)
+
       name when name in ["read", "read_file"] ->
         case fetch_arg(args, [:path, "path", :file_path, "file_path"]) do
           nil ->

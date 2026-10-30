@@ -8,6 +8,7 @@ defmodule SuperPi.Application do
     SuperPi.Durable.Doc.ensure_ets!()
     SuperPi.Durable.DeferredFlusher.ensure_pending_ets!()
     SuperPi.Gateway.Router.ensure_session_cache!()
+    SuperPi.MCP.Manager.create_tables()
 
     gateway_children =
       if Application.get_env(:super_pi, :start_gateway, false) do
@@ -23,6 +24,7 @@ defmodule SuperPi.Application do
       {Registry, keys: :unique, name: SuperPi.Registry},
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.FileLockSupervisor},
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MachineSupervisor},
+      {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MCPClientSupervisor},
       {Task.Supervisor, name: SuperPi.ToolTaskSupervisor},
       SuperPi.Durable.DeferredFlusher,
       {Oban, Application.fetch_env!(:super_pi, Oban)}

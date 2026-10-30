@@ -99,6 +99,19 @@ defmodule SuperPi.Plugins.TranscriptLogger do
     |> Enum.sort_by(& &1.name)
   end
 
+  @doc "Enabled MCP servers from `mcp_config.json` as `%{name => spec}`. Disabled entries are left out."
+  def mcp_specs(opts \\ []) do
+    case read_json_map(mcp_config_path(opts))["mcpServers"] do
+      servers when is_map(servers) ->
+        servers
+        |> Enum.filter(fn {_name, spec} -> is_map(spec) and Map.get(spec, "disabled", false) != true end)
+        |> Map.new()
+
+      _ ->
+        %{}
+    end
+  end
+
   def mcp_add(name, spec, opts \\ []) when is_binary(name) and is_map(spec) do
     cfg_path = mcp_config_path(opts)
     root = read_json_map(cfg_path)

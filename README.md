@@ -157,6 +157,26 @@ opencode mcp list
 
 ---
 
+### MCP Client: Using Other MCP Servers as Tools
+
+Super-Pi also connects to MCP servers as a client. Servers come from `mcp_config.json` in the global config dir, the file that `super-pi mcp add|remove|enable|disable|list` edits:
+
+```bash
+bin/super-pi mcp add files npx -y @modelcontextprotocol/server-filesystem /tmp
+```
+
+When a conversation starts, each enabled `command` server is started once (stdio transport), and its tools join the tool list as `mcp__<server>__<tool>`. HTTP transports (`url` entries) are not supported and are skipped with a warning.
+
+MCP tools pass the same permission pipeline as built-in tools. Under the default `accept-edits` mode they are blocked, because they are neither read-only nor file edits. A session must opt in with mode `auto` (or `dangerouslySkipPermissions`) before the model can call them.
+
+```elixir
+config :super_pi,
+  mcp_clients: true,             # set false to never start servers
+  mcp_tool_exposure: :direct,    # :deferred lists them only through `tool_search`
+  mcp_startup_timeout_ms: 10_000,
+  mcp_call_timeout_ms: 60_000
+```
+
 ## Pluggable Harness Architecture (`SuperPi.Harness`)
 
 Super-Pi-BEAM features a modular, pluggable harness system. Instead of hardcoding persona behaviors into the core engine or coupling them to specific UI clients, all personas implement the `@behaviour SuperPi.Harness` contract:
