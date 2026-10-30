@@ -13,14 +13,20 @@ defmodule SuperPi.Plugins do
     CustomCompaction,
     GitCheckpoint,
     Handoff,
+    Hooks,
     InlineBash,
     JevRouter,
+    Permissions,
     PromptCustomizer,
     ProtectedPaths,
     Questionnaire,
+    Rules,
+    Skills,
+    SlashCommands,
     StructuredOutput,
     Subagent,
-    Todo
+    Todo,
+    TranscriptLogger
   }
 
   @built_in_plugins [
@@ -29,14 +35,20 @@ defmodule SuperPi.Plugins do
     CustomCompaction,
     GitCheckpoint,
     Handoff,
+    Hooks,
     InlineBash,
     JevRouter,
+    Permissions,
     PromptCustomizer,
     ProtectedPaths,
     Questionnaire,
+    Rules,
+    Skills,
+    SlashCommands,
     StructuredOutput,
     Subagent,
-    Todo
+    Todo,
+    TranscriptLogger
   ]
 
   @aliases %{
@@ -49,19 +61,27 @@ defmodule SuperPi.Plugins do
     "git_checkpoint" => GitCheckpoint,
     "git-checkpoint" => GitCheckpoint,
     "handoff" => Handoff,
+    "hooks" => Hooks,
     "inline_bash" => InlineBash,
     "inline-bash" => InlineBash,
     "jev_router" => JevRouter,
     "jev-router" => JevRouter,
+    "permissions" => Permissions,
     "prompt_customizer" => PromptCustomizer,
     "prompt-customizer" => PromptCustomizer,
     "protected_paths" => ProtectedPaths,
     "protected-paths" => ProtectedPaths,
     "questionnaire" => Questionnaire,
+    "rules" => Rules,
+    "skills" => Skills,
+    "slash_commands" => SlashCommands,
+    "slash-commands" => SlashCommands,
     "structured_output" => StructuredOutput,
     "structured-output" => StructuredOutput,
     "subagent" => Subagent,
-    "todo" => Todo
+    "todo" => Todo,
+    "transcript_logger" => TranscriptLogger,
+    "transcript-logger" => TranscriptLogger
   }
 
   @doc """
