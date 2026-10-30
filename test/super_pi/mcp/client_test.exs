@@ -75,18 +75,18 @@ defmodule SuperPi.MCP.ClientTest do
   end
 
   describe "Manager" do
-    test "starts enabled stdio servers, skips disabled and HTTP ones, and exposes namespaced tools", %{dir: dir} do
+    test "starts enabled stdio servers, skips disabled ones and entries with no command or url, and exposes namespaced tools", %{dir: dir} do
       write_config(dir, %{
         "fake srv" => %{"command" => "elixir", "args" => [@script]},
         "off" => %{"command" => "elixir", "args" => [@script], "disabled" => true},
-        "remote" => %{"url" => "https://example.com/mcp"}
+        "empty" => %{"disabled" => false}
       })
 
       results = Manager.ensure_started(global_config_dir: dir)
       by_name = Map.new(results, &{&1.server, &1})
 
       assert %{status: :started, tools: 4} = by_name["fake srv"]
-      assert %{status: {:error, :unsupported_transport}} = by_name["remote"]
+      assert %{status: {:error, :no_command_or_url}} = by_name["empty"]
       refute Map.has_key?(by_name, "off")
 
       assert Manager.tool_names() == [

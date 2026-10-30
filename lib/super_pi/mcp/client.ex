@@ -1,30 +1,30 @@
 defmodule SuperPi.MCP.Client do
   @moduledoc """
-  Client for one Model Context Protocol server over stdio.
+  Client for one Model Context Protocol server, over stdio or Streamable HTTP.
 
-  The client starts the server as an OS process, runs the `initialize` handshake, lists
-  the server's tools (following `nextCursor`), and then forwards `tools/call` requests.
-  Messages are one JSON-RPC 2.0 object per line.
+  The client runs the `initialize` handshake, lists the server's tools (following
+  `nextCursor`), and then forwards `tools/call` requests. It owns the protocol: request ids,
+  timeouts and the handshake. A `SuperPi.MCP.Transport` moves the messages:
+
+    * `command` starts the server as an OS process (`SuperPi.MCP.Transport.Stdio`).
+    * `url` talks to a hosted server (`SuperPi.MCP.Transport.StreamableHTTP`).
 
   Use `SuperPi.MCP.Manager` to start every configured server and expose its tools to the
-  agent. This module only speaks the protocol. The HTTP transports are not implemented.
-
-  A server writes logs to stderr. The port does not capture stderr, so those logs go to
-  the stderr of the Super-Pi process, never into the JSON stream.
+  agent. This module only speaks the protocol. It declares no client capabilities, so a server
+  cannot ask for sampling, roots or elicitation; it may still send `ping`.
   """
 
   use GenServer
   require Logger
 
-  @protocol_version "2024-11-05"
-  @max_line 4 * 1024 * 1024
+  alias SuperPi.MCP.Transport.{Stdio, StreamableHTTP}
 
   defstruct [
     :name,
-    :port,
+    :transport,
+    :tstate,
     :server_info,
     status: :starting,
-    buf: "",
     next_id: 1,
     pending: %{},
     tools: [],
@@ -34,8 +34,12 @@ defmodule SuperPi.MCP.Client do
   # --- Public API ---
 
   @doc """
-  Starts a client. Options: `:name` (server name), `:command`, `:args`, `:env` (map), `:cwd`.
-  Returns `{:error, {:command_not_found, command}}` when the executable does not exist.
+  Starts a client. Options: `:name` (server name) and either `:command`, `:args`, `:env` (map), `:cwd`
+  (stdio) or `:url`, `:headers` (map, `${ENV_VAR}` is expanded) for Streamable HTTP. `:transport`
+  names a `SuperPi.MCP.Transport` module explicitly.
+
+  Returns `{:error, {:command_not_found, command}}` when the executable does not exist, and
+  `{:error, {:invalid_url, url}}` or `{:error, {:missing_env, names}}` for a bad `url` entry.
   """
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
@@ -65,27 +69,23 @@ defmodule SuperPi.MCP.Client do
 
   @impl true
   def init(opts) do
-    command = Keyword.fetch!(opts, :command)
+    # So `terminate/2` runs on a supervisor shutdown and closes the transport.
+    Process.flag(:trap_exit, true)
+    transport = Keyword.get_lazy(opts, :transport, fn -> transport_for(opts) end)
 
-    case System.find_executable(command) do
-      nil ->
-        {:stop, {:command_not_found, command}}
+    case transport.start(opts) do
+      {:ok, tstate} ->
+        name = Keyword.get(opts, :name) || Keyword.get(opts, :command) || Keyword.get(opts, :url)
+        state = %__MODULE__{name: name, transport: transport, tstate: tstate}
+        {:ok, send_request(state, "initialize", initialize_params(transport), :initialize)}
 
-      path ->
-        port_opts =
-          [
-            :binary,
-            :exit_status,
-            :hide,
-            {:line, @max_line},
-            {:args, Enum.map(Keyword.get(opts, :args, []), &to_string/1)},
-            {:env, env_list(Keyword.get(opts, :env, %{}))}
-          ] ++ if(cwd = Keyword.get(opts, :cwd), do: [{:cd, cwd}], else: [])
-
-        port = Port.open({:spawn_executable, path}, port_opts)
-        state = %__MODULE__{name: Keyword.get(opts, :name, command), port: port}
-        {:ok, send_request(state, "initialize", initialize_params(), :initialize)}
+      {:error, reason} ->
+        {:stop, reason}
     end
+  end
+
+  defp transport_for(opts) do
+    if Keyword.get(opts, :url) && !Keyword.get(opts, :command), do: StreamableHTTP, else: Stdio
   end
 
   @impl true
@@ -108,20 +108,6 @@ defmodule SuperPi.MCP.Client do
   end
 
   @impl true
-  def handle_info({port, {:data, {:eol, line}}}, %{port: port} = state) do
-    handle_line(state.buf <> line, %{state | buf: ""})
-  end
-
-  def handle_info({port, {:data, {:noeol, chunk}}}, %{port: port} = state) do
-    {:noreply, %{state | buf: state.buf <> chunk}}
-  end
-
-  def handle_info({port, {:exit_status, code}}, %{port: port} = state) do
-    Logger.warning("[MCP] server #{state.name} exited with status #{code}")
-    state = fail_all(state, {:server_exited, code})
-    {:stop, :normal, state}
-  end
-
   def handle_info({:call_timeout, id}, state) do
     case Map.pop(state.pending, id) do
       {{:call, from}, pending} ->
@@ -133,43 +119,44 @@ defmodule SuperPi.MCP.Client do
     end
   end
 
-  def handle_info(_other, state), do: {:noreply, state}
+  def handle_info(message, %{transport: transport, tstate: tstate} = state) do
+    case transport.handle_info(tstate, message) do
+      {:messages, messages, tstate} ->
+        {:noreply, Enum.reduce(messages, %{state | tstate: tstate}, &handle_message/2)}
+
+      {:ignore, tstate} ->
+        {:noreply, %{state | tstate: tstate}}
+
+      {:closed, reason, tstate} ->
+        Logger.warning("[MCP] server #{state.name} closed: #{inspect(reason)}")
+        state = fail_all(%{state | tstate: tstate}, reason)
+        {:stop, :normal, state}
+    end
+  end
 
   @impl true
-  def terminate(_reason, %{port: port}) when is_port(port) do
-    # Closing the port closes the server's stdin, which ends a well-behaved stdio server.
-    if Port.info(port), do: Port.close(port)
-    :ok
+  def terminate(_reason, %{transport: transport, tstate: tstate}) when not is_nil(transport) do
+    transport.close(tstate)
   end
 
   def terminate(_reason, _state), do: :ok
 
   # --- Protocol ---
 
-  defp initialize_params do
+  defp initialize_params(transport) do
     %{
-      "protocolVersion" => @protocol_version,
+      "protocolVersion" => transport.protocol_version(),
       "capabilities" => %{},
       "clientInfo" => %{"name" => "super-pi-beam", "version" => "0.1.0"}
     }
   end
 
-  defp handle_line(line, state) do
-    case Jason.decode(line) do
-      {:ok, %{"id" => id, "method" => method}} when is_binary(method) ->
-        {:noreply, reply_to_server_request(state, id, method)}
-
-      {:ok, %{"id" => id} = message} ->
-        {:noreply, handle_response(state, id, message)}
-
-      {:ok, _notification} ->
-        {:noreply, state}
-
-      {:error, _} ->
-        # Not JSON: a server that prints a banner to stdout. Ignore it.
-        {:noreply, state}
-    end
+  defp handle_message(%{"id" => id, "method" => method}, state) when is_binary(method) do
+    reply_to_server_request(state, id, method)
   end
+
+  defp handle_message(%{"id" => id} = message, state), do: handle_response(state, id, message)
+  defp handle_message(_notification, state), do: state
 
   # The server may send its own requests. `ping` gets an empty result, anything else is refused.
   defp reply_to_server_request(state, id, "ping"), do: send_message(state, %{"jsonrpc" => "2.0", "id" => id, "result" => %{}})
@@ -250,13 +237,6 @@ defmodule SuperPi.MCP.Client do
   end
 
   defp send_message(state, message) do
-    Port.command(state.port, Jason.encode!(message) <> "\n")
-    state
+    %{state | tstate: state.transport.send_message(state.tstate, message)}
   end
-
-  defp env_list(env) when is_map(env) do
-    Enum.map(env, fn {k, v} -> {String.to_charlist(to_string(k)), String.to_charlist(to_string(v))} end)
-  end
-
-  defp env_list(_), do: []
 end

@@ -39,6 +39,7 @@ defmodule SuperPi.Application do
     ] ++
       SuperPi.Cluster.children() ++
       [
+      {Finch, name: SuperPi.MCPFinch},
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MCPClientSupervisor},
       {Task.Supervisor, name: SuperPi.ToolTaskSupervisor},
       # Agent-controlled egress (`web_fetch`) gets its own pool, apart from LLM traffic.

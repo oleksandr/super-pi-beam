@@ -3,15 +3,19 @@ defmodule SuperPi.MCP.Manager do
   Starts the MCP servers from `mcp_config.json` and exposes their tools to the agent.
 
   The file is the one that `super-pi mcp add|remove|enable|disable` edits (in the global
-  config dir). Each enabled `command` server is started once under `SuperPi.MCPClientSupervisor`.
+  config dir). Each enabled server is started once under `SuperPi.MCPClientSupervisor`.
   Its tools join the tool catalog as `mcp__<server>__<tool>`, so the model sees which server
   a tool belongs to and two servers cannot collide. `SuperPi.Tools.execute/3` routes those
   names to `call_tool/3`.
 
   Tool calls pass the same `before_tool` pipeline as built-in tools, so the permission
-  policy applies. Under the default `accept-edits` mode a tool that is not read-only or
-  an edit is blocked, which includes every MCP tool, so a user must opt in with `auto`
-  mode or `dangerouslySkipPermissions`.
+  policy applies. Every MCP tool is registered with an `"effects"` list, which is what the
+  policy decides by (`SuperPi.Plugins.Permissions`): `["net_read"]` when the server annotates
+  the tool `readOnlyHint: true`, else `["net_write"]`. A read-only tool runs without a prompt
+  under `accept-edits` and in `plan` mode. Any other tool needs `auto` mode, a prompt answer,
+  `permissions.allowTools`, or `dangerouslySkipPermissions`. The `network` policy (`deny`,
+  `allowlist`) applies to every MCP tool, a local stdio one included, because the server may
+  do anything.
 
   ## Configuration
 
@@ -21,8 +25,23 @@ defmodule SuperPi.MCP.Manager do
         mcp_startup_timeout_ms: 10_000,
         mcp_call_timeout_ms: 60_000
 
-  A server entry is `{"command": "...", "args": [...], "env": {...}, "disabled": false}`.
-  Entries with a `url` (HTTP transports) are skipped with a warning.
+  ## Server entries
+
+  Each entry under `"mcpServers"` is one of two shapes. Both accept `"disabled": true`.
+
+  A local process, over stdio:
+
+      {"command": "npx", "args": ["-y", "some-server"], "env": {"TOKEN": "..."}}
+
+  A hosted server, over Streamable HTTP (`url`, or `serverUrl` as other hosts write it):
+
+      {"url": "https://mcp.example.com/mcp",
+       "headers": {"Authorization": "Bearer ${EXAMPLE_TOKEN}"}}
+
+  `${NAME}` in a header value is replaced from the environment at start-up. A name that is not
+  set fails that server with `{:missing_env, names}`. OAuth is not supported. See
+  `SuperPi.MCP.Transport.StreamableHTTP` for the session and fallback behaviour. An entry with
+  both `command` and `url` runs the command.
   """
 
   require Logger
@@ -119,35 +138,40 @@ defmodule SuperPi.MCP.Manager do
   # --- Internals ---
 
   defp start_server(name, spec, timeout) do
-    case {Map.get(spec, "command"), Map.get(spec, "url") || Map.get(spec, "serverUrl")} do
-      {nil, _url} ->
-        Logger.warning("[MCP] server #{name} uses an HTTP transport, which is not supported; skipped")
-        %{server: name, status: {:error, :unsupported_transport}, tools: 0}
-
-      {command, _} ->
+    case client_opts(name, spec) do
+      {:ok, client_opts} ->
         # One launch per server at a time. A concurrent caller waits, then finds it running.
         :global.trans({{:mcp_launch, name}, self()}, fn ->
           case lookup_client(name) do
             {:ok, _pid} -> %{server: name, status: :running, tools: count_tools(name)}
-            :error -> launch(name, command, spec, timeout)
+            :error -> launch(name, client_opts, timeout)
           end
         end, [node()], :infinity)
+
+      :error ->
+        Logger.warning("[MCP] server #{name} has neither a `command` nor a `url`; skipped")
+        %{server: name, status: {:error, :no_command_or_url}, tools: 0}
     end
   end
 
-  defp launch(name, command, spec, timeout) do
+  # A `command` wins over a `url`, so an entry that has both keeps working as it did.
+  defp client_opts(name, spec) do
+    case {Map.get(spec, "command"), Map.get(spec, "url") || Map.get(spec, "serverUrl")} do
+      {command, _url} when is_binary(command) and command != "" ->
+        {:ok, [name: name, command: command, args: List.wrap(Map.get(spec, "args")), env: Map.get(spec, "env") || %{}]}
+
+      {_none, url} when is_binary(url) and url != "" ->
+        {:ok, [name: name, url: url, headers: Map.get(spec, "headers") || %{}]}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp launch(name, client_opts, timeout) do
     child = %{
       id: {:mcp_client, name},
-      start:
-        {Client, :start_link,
-         [
-           [
-             name: name,
-             command: command,
-             args: List.wrap(Map.get(spec, "args")),
-             env: Map.get(spec, "env") || %{}
-           ]
-         ]},
+      start: {Client, :start_link, [client_opts]},
       restart: :temporary
     }
 
@@ -199,13 +223,20 @@ defmodule SuperPi.MCP.Manager do
         %{
           "name" => exposed,
           "description" => "[MCP #{server}] " <> to_string(tool["description"] || tool["name"]),
-          "input_schema" => tool["inputSchema"] || %{"type" => "object", "properties" => %{}}
+          "input_schema" => tool["inputSchema"] || %{"type" => "object", "properties" => %{}},
+          "effects" => effects(tool)
         },
         exposure
       )
     end)
     |> length()
   end
+
+  # The server's own `readOnlyHint` is a claim, not a guarantee, but it is the only signal there
+  # is. Without it the tool may write, so the policy treats it as a network write.
+  @doc false
+  def effects(%{"annotations" => %{"readOnlyHint" => true}}), do: ["net_read"]
+  def effects(_tool), do: ["net_write"]
 
   defp lookup_client(name) do
     ensure_routes!()
