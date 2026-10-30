@@ -125,9 +125,9 @@ defmodule SuperPi.Plugins.PermissionsTest do
   end
 
   describe "harness selection" do
-    test "default harness is Workspace and carries the safety plugins" do
-      assert Harness.default() == Harness.Workspace
-      mods = Harness.Workspace.extensions() |> Enum.map(&if(is_tuple(&1), do: elem(&1, 0), else: &1))
+    test "default harness is Code and carries the safety plugins" do
+      assert Harness.default() == Harness.Code
+      mods = Harness.Code.extensions() |> Enum.map(&if(is_tuple(&1), do: elem(&1, 0), else: &1))
       assert SuperPi.Plugins.Permissions in mods
       assert SuperPi.Plugins.ProtectedPaths in mods
       assert SuperPi.Plugins.ConfirmDestructive in mods
@@ -135,13 +135,13 @@ defmodule SuperPi.Plugins.PermissionsTest do
 
     test "fetch/1 rejects an unknown harness" do
       assert {:error, {:unknown_harness, "agy"}} = Harness.fetch("agy")
-      assert {:ok, Harness.Workspace} = Harness.fetch("super-pi-workspace")
+      assert {:ok, Harness.Code} = Harness.fetch("super-pi-workspace")
     end
 
     test "fetch/1 uses the configured fallback" do
       Application.put_env(:super_pi, :fallback_harness, "super-pi-agent")
       on_exit(fn -> Application.delete_env(:super_pi, :fallback_harness) end)
-      assert {:ok, Harness.Default} = Harness.fetch("agy")
+      assert {:ok, Harness.Assistant} = Harness.fetch("agy")
     end
   end
 

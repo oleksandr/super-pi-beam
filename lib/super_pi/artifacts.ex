@@ -64,6 +64,7 @@ defmodule SuperPi.Artifacts do
     [
       %{
         "name" => "artifact_put",
+        "effects" => ["state_write"],
         "description" =>
           "Save a file so that it survives this task and node failures. Give `content` (text) or `path` (a file in the workspace). Saving under an existing name replaces it.",
         "parameters" => %{
@@ -80,6 +81,7 @@ defmodule SuperPi.Artifacts do
       },
       %{
         "name" => "artifact_get",
+        "effects" => ["read"],
         "description" => "Read a saved artifact, or write it into the workspace with `to_path`.",
         "parameters" => %{
           "type" => "object",
@@ -93,6 +95,7 @@ defmodule SuperPi.Artifacts do
       },
       %{
         "name" => "artifact_list",
+        "effects" => ["read"],
         "description" => "List the saved artifacts of this conversation.",
         "parameters" => %{"type" => "object", "properties" => %{}},
         "exposure" => "direct"

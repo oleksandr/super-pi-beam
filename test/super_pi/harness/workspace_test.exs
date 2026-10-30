@@ -207,7 +207,7 @@ defmodule SuperPi.Harness.WorkspaceTest do
       refute String.contains?(models_out, "claude-sonnet-5-5-medium")
 
       {0, agents_out} = CLI.run(["agents"])
-      assert String.contains?(agents_out, "research")
+      assert String.contains?(agents_out, "super-pi-planner")
 
       {0, _} = CLI.run(["mcp", "add", "sqlite-helper", "sqlite-mcp", "/tmp/test.db"], global_config_dir: tmp_cfg)
       {0, mcp_list_out} = CLI.run(["mcp", "list"], global_config_dir: tmp_cfg)

@@ -25,6 +25,7 @@ defmodule SuperPi.Plugins.Questionnaire do
 
   @tool_spec %{
     "name" => "ask_question",
+    "effects" => ["read"],
     "description" =>
       "Ask the user one or more multiple-choice questions to clarify requirements, design decisions, or ambiguous preferences. Always provide a recommended option prefixed with '(Recommended)'.",
     "parameters" => %{

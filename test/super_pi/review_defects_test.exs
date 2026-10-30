@@ -65,13 +65,27 @@ defmodule SuperPi.ReviewDefectsTest do
   describe "InlineBash for remote callers (high 2)" do
     defp module_of(ext), do: if(is_tuple(ext), do: elem(ext, 0), else: ext)
 
-    test "remote_extensions drops InlineBash, and the harness itself has it" do
-      assert SuperPi.Plugins.InlineBash in Enum.map(SuperPi.Harness.Interactive.extensions([]), &module_of/1)
-      refute SuperPi.Plugins.InlineBash in Enum.map(SuperPi.Harness.remote_extensions(SuperPi.Harness.Interactive), &module_of/1)
+    defmodule WithInlineBash do
+      use SuperPi.Harness,
+        id: "test-inline-bash",
+        name: "With InlineBash",
+        description: "A harness that carries InlineBash",
+        plugins: [SuperPi.Plugins.Permissions, {SuperPi.Plugins.InlineBash, timeout_ms: 10_000}]
     end
 
-    test "an RPC session on the interactive harness runs without InlineBash" do
-      payload = Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "method" => "session.open", "params" => %{"harness" => "super-pi-interactive"}})
+    test "remote_extensions drops InlineBash, and the harness itself has it" do
+      assert SuperPi.Plugins.InlineBash in Enum.map(WithInlineBash.extensions([]), &module_of/1)
+      refute SuperPi.Plugins.InlineBash in Enum.map(SuperPi.Harness.remote_extensions(WithInlineBash), &module_of/1)
+    end
+
+    test "no built-in harness carries InlineBash" do
+      for harness <- SuperPi.Harness.list() do
+        refute SuperPi.Plugins.InlineBash in Enum.map(harness.extensions([]), &module_of/1)
+      end
+    end
+
+    test "an RPC session on the assistant harness runs without InlineBash" do
+      payload = Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "method" => "session.open", "params" => %{"harness" => "super-pi-assistant"}})
       {%{"result" => %{"conversation_id" => conv_id}}, _, _} = RPC.handle_rpc_payload(payload, RPC.new_client_state())
 
       [{pid, _}] = Horde.Registry.lookup(SuperPi.Conversation.Locator.registry(), {:conversation_machine, conv_id})

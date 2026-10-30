@@ -17,6 +17,7 @@ defmodule SuperPi.Plugins.Handoff do
 
   @tool_spec %{
     "name" => "handoff",
+    "effects" => ["state_write"],
     "description" =>
       "Transfer context to a new focused conversation session. Distills key decisions and files into a fresh starting prompt, eliminating accumulated token bloat.",
     "parameters" => %{

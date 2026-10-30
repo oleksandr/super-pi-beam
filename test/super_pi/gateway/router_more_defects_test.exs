@@ -44,7 +44,7 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
     @impl true
     def extensions(_opts), do: [SuperPi.Gateway.RouterMoreDefectsTest.HandledExtension]
     @impl true
-    def agent_defaults(opts), do: SuperPi.Harness.Default.agent_defaults(opts)
+    def agent_defaults(opts), do: SuperPi.Harness.Code.agent_defaults(opts)
   end
 
   setup do
@@ -71,7 +71,7 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
   end
 
   defp chat(messages, extra \\ %{}) do
-    Map.merge(%{"model" => "super-pi-agent", "messages" => messages}, extra)
+    Map.merge(%{"model" => "super-pi-code", "messages" => messages}, extra)
   end
 
   defp user(text), do: %{"role" => "user", "content" => text}
@@ -200,7 +200,7 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
       conv = Storage.create_conversation!()
 
       start_machine(conv,
-        llm_responder: Faults.tool_then_text_responder("bash", %{"command" => "echo marker-cmd-123"}, "done"),
+        llm_responder: Faults.tool_then_text_responder("read", %{"path" => "marker-path-123.txt"}, "done"),
         tool_executor: fn _n, _a, _c -> %{"output" => "ok", "is_error" => false} end
       )
 
@@ -216,7 +216,7 @@ defmodule SuperPi.Gateway.RouterMoreDefectsTest do
         end)
         |> Enum.join()
 
-      assert reasoning =~ "echo marker-cmd-123", "preview lost the arguments: #{inspect(reasoning)}"
+      assert reasoning =~ "marker-path-123.txt", "preview lost the arguments: #{inspect(reasoning)}"
     end
 
     test "non-string tool arguments and output do not crash the SSE handler" do

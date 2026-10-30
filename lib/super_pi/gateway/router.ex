@@ -343,7 +343,7 @@ defmodule SuperPi.Gateway.Router do
   defp handle_title_generation(conn, messages, model, stream?) do
     cmpl_id = "chatcmpl-title-" <> Uniq.UUID.uuid7()
     now = System.system_time(:second)
-    title_model = "gemini-3-flash-preview"
+    title_model = SuperPi.Harness.Defaults.default_model()
 
     title_text =
       if SuperPi.AI.GeminiClient.configured?() do

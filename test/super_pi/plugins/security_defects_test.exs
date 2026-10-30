@@ -9,7 +9,7 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
   """
   use SuperPi.DataCase, async: false
 
-  alias SuperPi.Harness.Autonomous
+  alias SuperPi.Harness.Code, as: CodeHarness
   alias SuperPi.Plugins.{
     AutoCommit,
     ConfirmDestructive,
@@ -26,7 +26,7 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
   # --- helpers ---
 
   defp autonomous_config(plugin) do
-    Enum.find_value(Autonomous.extensions(), fn
+    Enum.find_value(CodeHarness.extensions(), fn
       {^plugin, opts} -> opts
       _ -> nil
     end) || []
@@ -64,13 +64,13 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
 
   # --- ProtectedPaths ---
 
-  describe "ProtectedPaths bypasses (protected_paths.ex, harness/autonomous.ex:20)" do
-    test "Autonomous harness config still guards the write_file/read_file/edit_file aliases" do
+  describe "ProtectedPaths bypasses (protected_paths.ex, harness/code.ex)" do
+    test "Code harness config still guards the write_file/read_file/edit_file aliases" do
       cfg = autonomous_config(ProtectedPaths)
 
       for tool <- ~w(write_file read_file edit_file) do
         assert {:block, _} = ProtectedPaths.before_tool(tool, %{"path" => ".env"}, %{config: cfg}),
-               "#{tool} on .env is allowed under the Autonomous harness config"
+               "#{tool} on .env is allowed under the Code harness config"
       end
     end
 
@@ -134,13 +134,13 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
       end
     end
 
-    test "Autonomous harness config guards every shell tool alias, not only bash" do
+    test "Code harness config guards every shell tool alias, not only bash" do
       cfg = autonomous_config(ConfirmDestructive)
 
       for tool <- ~w(sh terminal run_command exec) do
         assert {:block, _} =
                  ConfirmDestructive.before_tool(tool, %{"command" => "rm -rf /tmp/x"}, %{config: cfg}),
-               "#{tool} runs rm -rf unguarded under the Autonomous harness config"
+               "#{tool} runs rm -rf unguarded under the Code harness config"
       end
     end
   end

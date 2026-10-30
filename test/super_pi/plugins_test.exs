@@ -17,7 +17,6 @@ defmodule SuperPi.PluginsTest do
     Subagent,
     Todo
   }
-  alias SuperPi.Harness.{Autonomous, Interactive}
   alias SuperPi.Durable.Storage
   alias SuperPi.Durable.Schemas.Conversation
 
@@ -289,55 +288,52 @@ defmodule SuperPi.PluginsTest do
   end
 
   describe "Declarative Showcase Harnesses" do
-    test "SuperPi.Harness.Autonomous resolves all composed plugins with options" do
-      exts = Autonomous.extensions()
+    test "SuperPi.Harness.Code resolves all composed plugins with options" do
+      exts = SuperPi.Harness.Code.extensions()
       mods = Enum.map(exts, fn {m, _} -> m; m -> m end)
 
-      assert ProtectedPaths in mods
-      assert ConfirmDestructive in mods
-      assert GitCheckpoint in mods
-      assert AutoCommit in mods
-      assert JevRouter in mods
-      assert Todo in mods
-      assert PromptCustomizer in mods
+      for mod <- [SuperPi.Plugins.Permissions, ProtectedPaths, ConfirmDestructive, GitCheckpoint, AutoCommit, JevRouter, Todo, PromptCustomizer, SuperPi.Plugins.TranscriptLogger] do
+        assert mod in mods
+      end
 
-      assert {ProtectedPaths, opts} = Enum.find(exts, &match?({ProtectedPaths, _}, &1))
-      # Aliases and read tools were added by the security fix; the original three stay guarded.
-      assert Enum.all?(["write", "edit", "read"], &(&1 in opts[:tools]))
       assert {ConfirmDestructive, cd_opts} = Enum.find(exts, &match?({ConfirmDestructive, _}, &1))
-      # Shell aliases were added by the security fix; bash stays guarded.
       assert "bash" in cd_opts[:tools]
-      assert {AutoCommit, [commit_prefix: "[super-pi-auto]", enabled: true]} in exts
-      assert {JevRouter, [planning_model: "gemini-3.1-pro-preview", implementation_model: "gemini-3-flash-preview"]} in exts
+      # Auto-commit ships off: a showcase agent must not commit unasked.
+      assert {AutoCommit, [commit_prefix: "[super-pi]", enabled: false]} in exts
 
-      defaults = Autonomous.agent_defaults()
+      defaults = SuperPi.Harness.Code.agent_defaults()
       assert defaults["effort"] == "high"
-      assert defaults["executionMode"] == "auto"
+      assert defaults["executionMode"] == "accept-edits"
+      assert defaults["maxExecutionMode"] == "auto"
     end
 
-    test "SuperPi.Harness.Interactive resolves all composed plugins with options" do
-      exts = Interactive.extensions()
+    test "SuperPi.Harness.Assistant composes the interactive plugins and no shell expansion" do
+      exts = SuperPi.Harness.Assistant.extensions()
       mods = Enum.map(exts, fn {m, _} -> m; m -> m end)
 
-      assert Questionnaire in mods
-      assert InlineBash in mods
-      assert StructuredOutput in mods
-      assert Handoff in mods
-      assert Subagent in mods
+      for mod <- [Questionnaire, StructuredOutput, Handoff, Subagent, CustomCompaction, Todo, SuperPi.Plugins.Permissions] do
+        assert mod in mods
+      end
 
-      assert {InlineBash, [timeout_ms: 10_000, max_output_bytes: 8_192]} in exts
+      refute InlineBash in mods
       assert {Subagent, [timeout_ms: 30_000]} in exts
 
-      defaults = Interactive.agent_defaults()
+      defaults = SuperPi.Harness.Assistant.agent_defaults()
       assert defaults["effort"] == "medium"
-      assert defaults["executionMode"] == "interactive"
+      assert defaults["executionMode"] == "accept-edits"
+      assert defaults["maxExecutionMode"] == "accept-edits"
+      assert defaults["workspace"] == %{"kind" => "none"}
     end
 
-    test "SuperPi.Harness.resolve resolves all harnesses" do
-      assert SuperPi.Harness.resolve("super-pi-auto") == Autonomous
-      assert SuperPi.Harness.resolve("super-pi-interactive") == Interactive
-      assert SuperPi.Harness.resolve("auto") == Autonomous
-      assert SuperPi.Harness.resolve("interactive") == Interactive
+    test "SuperPi.Harness.resolve maps the ids of earlier releases to their successors" do
+      assert SuperPi.Harness.resolve("super-pi-auto") == SuperPi.Harness.Code
+      assert SuperPi.Harness.resolve("super-pi-workspace") == SuperPi.Harness.Code
+      assert SuperPi.Harness.resolve("super-pi-interactive") == SuperPi.Harness.Assistant
+      assert SuperPi.Harness.resolve("super-pi-fast") == SuperPi.Harness.Assistant
+      assert SuperPi.Harness.resolve("auto") == SuperPi.Harness.Code
+      assert SuperPi.Harness.resolve("interactive") == SuperPi.Harness.Assistant
+      assert SuperPi.Harness.resolve(SuperPi.Harness.Autonomous) == SuperPi.Harness.Code
+      assert SuperPi.Harness.resolve("SuperPi.Harness.Workspace") == SuperPi.Harness.Code
     end
   end
 

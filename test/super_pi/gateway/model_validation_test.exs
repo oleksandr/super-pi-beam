@@ -100,7 +100,8 @@ defmodule SuperPi.Gateway.ModelValidationTest do
 
     test "lists harness ids, and provider models only when the provider is configured" do
       ids = models() |> Enum.map(& &1["id"])
-      assert "super-pi-workspace" in ids
+      assert "super-pi-code" in ids
+      refute "super-pi-workspace" in ids
       refute "gemini-3-flash-preview" in ids
 
       Application.put_env(:super_pi, :gemini_api_key, "test-key")

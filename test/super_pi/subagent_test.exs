@@ -118,6 +118,18 @@ defmodule SuperPi.SubagentTest do
       end
     end
 
+    test "a read-only child has a ceiling of plan, so no setting can lift it" do
+      conv = parent!(%{"executionMode" => "auto"})
+      agent = conv |> delegate(%{"role" => "scout", "prompt" => "x"}, text("ok")) |> child_agent()
+      assert agent["maxExecutionMode"] == "plan"
+    end
+
+    test "a worker never gets a ceiling above its parent's" do
+      conv = parent!(%{"executionMode" => "accept-edits", "maxExecutionMode" => "accept-edits"})
+      agent = conv |> delegate(%{"role" => "worker", "prompt" => "x"}, text("ok")) |> child_agent()
+      assert agent["maxExecutionMode"] == "accept-edits"
+    end
+
     test "a worker inherits the parent's mode and never gains it" do
       for mode <- ["plan", "accept-edits", "auto"] do
         conv = parent!(%{"executionMode" => mode})

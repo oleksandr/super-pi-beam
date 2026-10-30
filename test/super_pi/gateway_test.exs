@@ -43,9 +43,11 @@ defmodule SuperPi.GatewayTest do
     assert is_list(body["data"])
 
     model_ids = Enum.map(body["data"], & &1["id"])
-    assert "super-pi-agent" in model_ids
-    assert "super-pi-fast" in model_ids
-    assert "super-pi-workspace" in model_ids
+    assert "super-pi-code" in model_ids
+    assert "super-pi-assistant" in model_ids
+    assert "super-pi-librarian" in model_ids
+    assert "super-pi-planner" in model_ids
+    refute "super-pi-workspace" in model_ids
     refute "super-pi-agy" in model_ids
     assert "super-pi-planner" in model_ids
   end

@@ -11,10 +11,27 @@ defmodule SuperPi.Env.Workspace do
 
   | Kind | Where | Survives node loss | Capabilities |
   |---|---|---|---|
-  | `local` | The disk of the node, as before (cwd and the permission policy decide). | No | `fs`, `exec` |
-  | `shared` | A directory on storage that every node mounts. Paths are confined to `root`. Writes take a cross-node lock. | Yes | `fs`, `exec` |
-  | `scratch` | A temporary directory on the node that runs the task, confined, removed when the task ends. `"lifetime" => "conversation"` keeps it until the sweep (`scratch_ttl_hours`, default 24). `"base"` or `config :super_pi, scratch_dir` sets the parent directory. | No | `fs`, `exec` |
-  | `none` | No filesystem or commands. The agent has only the artifact tools. | n/a | none |
+  | `local` | The disk of the node, as before (cwd and the permission policy decide). | No | `fs`, `exec`, `net` |
+  | `shared` | A directory on storage that every node mounts. Paths are confined to `root`. Writes take a cross-node lock. | Yes | `fs`, `exec`, `net` |
+  | `scratch` | A temporary directory on the node that runs the task, confined, removed when the task ends. `"lifetime" => "conversation"` keeps it until the sweep (`scratch_ttl_hours`, default 24). `"base"` or `config :super_pi, scratch_dir` sets the parent directory. | No | `fs`, `exec`, `net` |
+  | `none` | No filesystem or commands. The agent has the artifact tools, MCP tools and the web. | n/a | `net` |
+
+  ## Network
+
+  `net` is on in every kind. `"network" => false` in the workspace map removes it, so a deployment
+  can run an agent that reads a repository and cannot make outgoing calls: web, MCP and every other
+  tool that declares a `net_read` or `net_write` effect is then not offered and is refused if called.
+  This differs from `Permissions` (`network: "deny"`): the workspace decides whether the model is
+  shown a network tool, the policy decides whether one call is allowed.
+
+  ## Capability of a tool
+
+  A tool states its effects (`SuperPi.Tools.effects/2`) and the effects give the capability:
+  `fs_write` needs `fs`, `exec` needs `exec`, `net_read` and `net_write` need `net`, `read` and
+  `state_write` need nothing. The built-in file and shell tools are matched by name, because `read`
+  is also the effect of tools that read Super-Pi state. Artifact tools need `artifacts`. A tool that
+  states no effects needs `fs`, `exec` and `net`, so an unknown tool is not offered where any of
+  them is missing.
 
   Artifact tools (`SuperPi.Artifacts`) are offered with `shared`, `scratch` and `none`, and with
   `local` when the workspace sets `"artifacts" => true`. A tool whose capability the workspace
@@ -53,14 +70,14 @@ defmodule SuperPi.Env.Workspace do
   def build(cfg, ctx \\ %{})
 
   def build(%{"kind" => "local"} = cfg, _ctx) do
-    {:ok, %__MODULE__{kind: "local", env: SuperPi.Env.Local, capabilities: [:fs, :exec], artifacts?: cfg["artifacts"] == true}}
+    {:ok, %__MODULE__{kind: "local", env: SuperPi.Env.Local, capabilities: caps(cfg, [:fs, :exec]), artifacts?: cfg["artifacts"] == true}}
   end
 
   def build(%{"kind" => "shared"} = cfg, _ctx) do
     case cfg["root"] do
       root when is_binary(root) and root != "" ->
         if Path.type(root) == :absolute do
-          {:ok, %__MODULE__{kind: "shared", root: root, env: SuperPi.Env.Shared, capabilities: [:fs, :exec], artifacts?: true, confined?: true}}
+          {:ok, %__MODULE__{kind: "shared", root: root, env: SuperPi.Env.Shared, capabilities: caps(cfg, [:fs, :exec]), artifacts?: true, confined?: true}}
         else
           {:error, "workspace kind shared needs an absolute root, got #{inspect(root)}"}
         end
@@ -86,19 +103,23 @@ defmodule SuperPi.Env.Workspace do
     case File.mkdir_p(dir) do
       :ok ->
         notice = if fresh? and notice_if_new, do: notice_if_new, else: nil
-        {:ok, %__MODULE__{kind: "scratch", root: dir, env: SuperPi.Env.Local, capabilities: [:fs, :exec], artifacts?: true, confined?: true, notice: notice}}
+        {:ok, %__MODULE__{kind: "scratch", root: dir, env: SuperPi.Env.Local, capabilities: caps(cfg, [:fs, :exec]), artifacts?: true, confined?: true, notice: notice}}
 
       {:error, reason} ->
         {:error, "cannot create the scratch workspace #{dir}: #{:file.format_error(reason)}"}
     end
   end
 
-  def build(%{"kind" => "none"}, _ctx) do
-    {:ok, %__MODULE__{kind: "none", capabilities: [], artifacts?: true}}
+  def build(%{"kind" => "none"} = cfg, _ctx) do
+    {:ok, %__MODULE__{kind: "none", capabilities: caps(cfg, []), artifacts?: true}}
   end
 
   def build(%{"kind" => kind}, _ctx), do: {:error, "unknown workspace kind #{inspect(kind)} (local, shared, scratch, none)"}
   def build(other, _ctx), do: {:error, "workspace must be a map with a kind, got #{inspect(other)}"}
+
+  # `:net` is on unless the workspace says `"network" => false`.
+  defp caps(%{"network" => false}, base), do: base
+  defp caps(_cfg, base), do: base ++ [:net]
 
   # A task that ran before (a restart or a failover) lost its scratch files.
   defp restart_notice(task_id) do
@@ -111,19 +132,37 @@ defmodule SuperPi.Env.Workspace do
     end
   end
 
-  @doc "Capability a tool needs: `:fs`, `:exec`, `:artifacts`, or `nil` for tools with no requirement."
-  def capability_for(tool) when tool in @file_tools, do: :fs
-  def capability_for(tool) when tool in @exec_tools, do: :exec
-  def capability_for("artifact_" <> _), do: :artifacts
-  def capability_for(_), do: nil
+  @doc """
+  Capabilities a tool needs, all of them: a list of `:fs`, `:exec`, `:net` or `:artifacts`.
+  `agent_cfg` supplies the tool's declared effects (`SuperPi.Tools.effects/2`). See the module doc.
+  """
+  @spec required_capabilities(String.t(), map() | nil) :: [atom()]
+  def required_capabilities(tool, agent_cfg \\ nil)
+  def required_capabilities(tool, _cfg) when tool in @file_tools, do: [:fs]
+  def required_capabilities(tool, _cfg) when tool in @exec_tools, do: [:exec]
+  def required_capabilities("artifact_" <> _, _cfg), do: [:artifacts]
+
+  def required_capabilities(tool, agent_cfg) do
+    case SuperPi.Tools.effects(tool, agent_cfg) do
+      nil -> [:fs, :exec, :net]
+      effects -> effects |> Enum.flat_map(&effect_capabilities/1) |> Enum.uniq()
+    end
+  end
+
+  defp effect_capabilities("fs_write"), do: [:fs]
+  defp effect_capabilities("exec"), do: [:exec]
+  defp effect_capabilities(e) when e in ["net_read", "net_write"], do: [:net]
+  defp effect_capabilities(_), do: []
+
+  @doc "First capability a tool needs, or `nil`. Kept for callers that ask about one capability."
+  def capability_for(tool, agent_cfg \\ nil), do: tool |> required_capabilities(agent_cfg) |> List.first()
 
   @doc "True when the workspace can serve the tool."
-  def supports?(%__MODULE__{} = ws, tool) do
-    case capability_for(tool) do
-      nil -> true
+  def supports?(%__MODULE__{} = ws, tool, agent_cfg \\ nil) do
+    Enum.all?(required_capabilities(tool, agent_cfg), fn
       :artifacts -> ws.artifacts?
       cap -> cap in ws.capabilities
-    end
+    end)
   end
 
   @doc """
@@ -134,7 +173,7 @@ defmodule SuperPi.Env.Workspace do
   def offered_tools(tools, agent_cfg) when is_list(tools) do
     case build(Map.get(agent_cfg, "workspace") || %{"kind" => "local"}, %{}) do
       {:ok, ws} ->
-        kept = Enum.filter(tools, &supports?(ws, &1["name"]))
+        kept = Enum.filter(tools, &supports?(ws, &1["name"], %{"tools" => tools}))
         have = MapSet.new(kept, & &1["name"])
         extra = if ws.artifacts?, do: Enum.reject(SuperPi.Artifacts.tool_specs(), &MapSet.member?(have, &1["name"])), else: []
         kept ++ extra

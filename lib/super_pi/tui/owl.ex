@@ -19,8 +19,8 @@ defmodule SuperPi.TUI.Owl do
     usage = Doc.snapshot("conversation", conversation_id, "pi.usage") || %{}
 
     default_model =
-      if SuperPi.AI.GeminiClient.configured?() do
-        "gemini-3-flash-preview"
+      if Application.get_env(:super_pi, :default_model) || SuperPi.AI.GeminiClient.configured?() do
+        SuperPi.Harness.Defaults.default_model()
       else
         "claude-sonnet-4-5"
       end
@@ -138,7 +138,7 @@ defmodule SuperPi.TUI.Owl do
   Starts an interactive session for `conversation_id`, supporting pluggable harnesses and extensions.
   """
   def start_session(opts \\ []) do
-    harness_key = Keyword.get(opts, :harness, "default")
+    harness_key = Keyword.get(opts, :harness, "super-pi-code")
     harness = SuperPi.Harness.resolve(harness_key)
 
     agent_opts = Keyword.get(opts, :agent, %{})

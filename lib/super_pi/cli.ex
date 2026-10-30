@@ -3,7 +3,8 @@ defmodule SuperPi.CLI do
   Unified Command-Line Interface for Super-Pi-BEAM.
 
   Provides a single, standardized CLI for all agent harnesses:
-  - Supports `--harness <id>` (`workspace`, `default`, `fast`, `auto`, `interactive`, `planner`).
+  - Supports `--harness <id>` (`code`, `assistant`, `librarian`, `planner`). `--agent` is a deprecated alias:
+    `self` selects `code`, `research` selects `planner`.
   - Supports non-interactive `-p` / `--prompt` / `--print` and streaming turns (`--input-format stream-json`).
   - Supports conversation continuation (`-c`, `--continue`) and resumption (`--conversation <id>`).
   - Unified subcommands for `harnesses`, `models`, `agents`, `mcp`, `plugins`, `remote-control`, and `session`.
@@ -16,13 +17,9 @@ defmodule SuperPi.CLI do
   alias SuperPi.Harness
   alias SuperPi.Plugins.TranscriptLogger
   alias SuperPi.TUI.Owl, as: OwlTUI
-  alias SuperPi.Tools
 
-  @agents [
-    {"self", "Full-capability coding agent with read/write/bash/MCP tools"},
-    {"research", "Read-only codebase and documentation research agent"},
-    {"image-generator", "Image generation and editing specialist"}
-  ]
+  # `--agent` values of earlier releases and the harness each one selects.
+  @agent_aliases %{"self" => "super-pi-code", "research" => "super-pi-planner"}
 
   @switches [
     add_dir: :keep,
@@ -62,15 +59,21 @@ defmodule SuperPi.CLI do
   ]
 
   def default_extensions do
-    Harness.Workspace.extensions()
+    Harness.Code.extensions()
   end
 
   def models_catalog do
     SuperPi.AI.Providers.catalog()
   end
 
+  @doc """
+  Harnesses as the `agents` entries of `workspace.metadata`. The key is kept for wire compatibility.
+  Each entry has `"id"` and `"description"` plus the harness capabilities.
+  """
   def agents_catalog do
-    Enum.map(@agents, fn {id, desc} -> %{"id" => id, "description" => desc} end)
+    Enum.map(Harness.list(), fn mod ->
+      mod |> Harness.capabilities() |> Map.put("description", mod.description())
+    end)
   end
 
   @doc """
@@ -160,13 +163,9 @@ defmodule SuperPi.CLI do
       {:subcommand, "help", _rest, _flags} ->
         {0, help_text()}
 
-      {:subcommand, sub, _rest, _flags} when sub in ["agent", "agents"] ->
-        out =
-          @agents
-          |> Enum.map(fn {id, desc} -> String.pad_trailing(id, 20) <> desc end)
-          |> Enum.join("\n")
-
-        {0, out}
+      {:subcommand, sub, rest, flags} when sub in ["agent", "agents"] ->
+        # Deprecated: agent profiles are harnesses now.
+        run(["harnesses" | rest], Keyword.put(opts, :flags, flags))
 
       {:subcommand, "models", _rest, _flags} ->
         out =
@@ -239,7 +238,7 @@ defmodule SuperPi.CLI do
   end
 
   defp resolve_harness(flags, opts) do
-    case flags.harness || Keyword.get(opts, :harness) do
+    case flags.harness || Keyword.get(opts, :harness) || Map.get(@agent_aliases, flags.agent) do
       nil ->
         {:ok, Harness.default()}
 
@@ -252,12 +251,10 @@ defmodule SuperPi.CLI do
   end
 
   defp start_session(flags, positional, opts, harness_mod, workspace_dirs, global_dir, app_dir) do
-    base_agent_defaults = harness_mod.agent_defaults(
-      model: flags.model || "gemini-3-flash-preview",
-      effort: flags.effort || "medium",
-      mode: flags.mode || "auto",
-      workspace_paths: workspace_dirs
-    )
+    base_agent_defaults =
+      harness_mod.agent_defaults(
+        Enum.reject([model: flags.model, effort: flags.effort, mode: flags.mode, workspace_paths: workspace_dirs], fn {_k, v} -> is_nil(v) end)
+      )
 
     agent_cfg =
       base_agent_defaults
@@ -268,13 +265,13 @@ defmodule SuperPi.CLI do
         "globalConfigDir" => global_dir,
         "appDataDir" => app_dir,
         "settingsOverride" => parse_settings_flag(flags.settings),
-        "jsonSchema" => parse_json_schema_flag(flags.json_schema),
-        "agent" => flags.agent,
-        "tools" => tools_for_agent(flags.agent)
+        "jsonSchema" => parse_json_schema_flag(flags.json_schema)
       })
       |> maybe_override("model", flags.model)
       |> maybe_override("effort", flags.effort)
       |> maybe_override("executionMode", flags.mode)
+      # `--mode` never lifts a harness above its ceiling (`maxExecutionMode`).
+      |> SuperPi.Plugins.Permissions.clamp_mode()
 
     conv =
       cond do
@@ -500,14 +497,6 @@ defmodule SuperPi.CLI do
     end
   end
 
-  @read_only_agent_tools ["read", "grep", "find", "ls", "tool_search"]
-
-  defp tools_for_agent("research") do
-    Enum.filter(Tools.active_llm_tools(), &(&1["name"] in @read_only_agent_tools))
-  end
-
-  defp tools_for_agent(_agent), do: Tools.active_llm_tools()
-
   def launch_interactive_tui(conv_id, flags, workspace_dirs, opts \\ []) do
     {:ok, rpc_pid} = SuperPi.RPC.Server.start_link(port: 0)
     port = SuperPi.RPC.Server.port(rpc_pid)
@@ -522,11 +511,11 @@ defmodule SuperPi.CLI do
             "--conversation",
             to_string(conv_id),
             "--model",
-            flags.model || "gemini-3-flash-preview",
+            flags.model || SuperPi.Harness.Defaults.default_model(),
             "--effort",
             flags.effort || "medium",
             "--mode",
-            flags.mode || "auto",
+            flags.mode || "accept-edits",
             "--workspace",
             List.first(workspace_dirs) || File.cwd!()
           ] ++
@@ -732,18 +721,18 @@ defmodule SuperPi.CLI do
   defp normalize_flags(parsed) do
     %{
       add_dirs: Keyword.get_values(parsed, :add_dir),
-      agent: Keyword.get(parsed, :agent, "self"),
+      agent: Keyword.get(parsed, :agent),
       continue: Keyword.get(parsed, :continue, false),
       conversation: Keyword.get(parsed, :conversation),
       dangerously_skip_permissions: Keyword.get(parsed, :dangerously_skip_permissions, false),
       disable_slash_commands: Keyword.get(parsed, :disable_slash_commands, false),
-      effort: Keyword.get(parsed, :effort, "medium"),
+      effort: Keyword.get(parsed, :effort),
       harness: Keyword.get(parsed, :harness),
       help: Keyword.get(parsed, :help, false),
       input_format: Keyword.get(parsed, :input_format, "text"),
       json: Keyword.get(parsed, :json, false),
       json_schema: Keyword.get(parsed, :json_schema),
-      mode: Keyword.get(parsed, :mode, "auto"),
+      mode: Keyword.get(parsed, :mode),
       model: Keyword.get(parsed, :model),
       output_format: Keyword.get(parsed, :output_format, "text"),
       print: Keyword.get(parsed, :print),
@@ -814,7 +803,7 @@ defmodule SuperPi.CLI do
     Usage: super-pi [command] [options] [prompt]
 
     Options:
-      -H, --harness                   Agent harness (workspace, default, fast, auto, interactive, planner)
+      -H, --harness                   Agent harness (code, assistant, librarian, planner)
       -p, --print, --prompt           Run a single prompt non-interactively and print the response
       -i, --prompt-interactive        Run an initial prompt interactively
       -c, --continue                  Continue the most recent conversation
@@ -822,7 +811,7 @@ defmodule SuperPi.CLI do
       --model <model>                 Active LLM model
       --mode <mode>                   Execution mode (auto, accept-edits, plan)
       --effort <level>                Reasoning effort (low, medium, high, xhigh, max)
-      --agent <profile>               Agent profile (self, research, image-generator)
+      --agent <profile>               Deprecated alias of --harness (self is code, research is planner)
       --add-dir <path>                Add a directory to the workspace (repeatable)
       --input-format <format>         Input format (text, stream-json)
       --output-format <format>        Output format (text, json, stream-json)
@@ -836,7 +825,7 @@ defmodule SuperPi.CLI do
     Commands:
       harnesses                       List available agent harnesses
       models                          List available LLM models
-      agents                          List available agent profiles
+      agents                          Deprecated alias of harnesses
       mcp <list|add|remove|enable|disable> Manage MCP server configurations
       plugins <list|enable|disable|validate> Manage workspace plugins
       remote-control <start|status|stop> Control RPC daemon

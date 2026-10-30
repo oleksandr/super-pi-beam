@@ -17,6 +17,7 @@ defmodule SuperPi.Plugins.Todo do
 
   @tool_spec %{
     "name" => "todo",
+    "effects" => ["state_write"],
     "description" =>
       "Manage a structured task checklist. Actions: 'list' (view all), 'add' (create new item), 'toggle' (toggle completed status by id), 'clear' (remove completed items).",
     "parameters" => %{

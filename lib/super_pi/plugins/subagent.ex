@@ -35,7 +35,7 @@ defmodule SuperPi.Plugins.Subagent do
   alias SuperPi.Conversation.Machine
   alias SuperPi.Durable.{Doc, Storage, TaskEngine}
   alias SuperPi.Harness
-  alias SuperPi.Tools
+  alias SuperPi.Plugins.Permissions
 
   def id, do: "subagent"
   def name, do: "Subagent Delegation"
@@ -43,8 +43,23 @@ defmodule SuperPi.Plugins.Subagent do
 
   @read_only_roles ["scout", "planner", "reviewer", "researcher"]
   @roles @read_only_roles ++ ["worker"]
-  @read_only_tools ["read", "grep", "find", "ls", "tool_search"]
   @never_in_child ["delegate_subagent", "ask_question", "handoff"]
+  # Plugins that a child does not load: no delegation, no human to ask, no model switching, no VCS side effects.
+  @not_in_child [
+    __MODULE__,
+    SuperPi.Plugins.Questionnaire,
+    SuperPi.Plugins.Handoff,
+    SuperPi.Plugins.JevRouter,
+    SuperPi.Plugins.GitCheckpoint,
+    SuperPi.Plugins.AutoCommit
+  ]
+  @role_harness %{
+    "scout" => Harness.Planner,
+    "planner" => Harness.Planner,
+    "reviewer" => Harness.Planner,
+    "researcher" => Harness.Planner,
+    "worker" => Harness.Code
+  }
   @max_summary_chars 8_000
 
   @role_prompts %{
@@ -57,6 +72,7 @@ defmodule SuperPi.Plugins.Subagent do
 
   @tool_spec %{
     "name" => "delegate_subagent",
+    "effects" => ["state_write"],
     "description" =>
       "Delegate a focused task to an isolated subagent that runs its own model loop with a fresh context window and returns its final answer. " <>
         "Roles scout, planner, reviewer and researcher are read-only. A worker may edit, within your permissions. " <>
@@ -237,7 +253,7 @@ defmodule SuperPi.Plugins.Subagent do
 
     # The time already spent on setup counts against the child's deadline.
     remaining = max(deadline - System.monotonic_time(:millisecond), 1_000)
-    outcome = run_machine(child.id, prompt, remaining, ctx)
+    outcome = run_machine(child.id, role, prompt, remaining, ctx)
     finish_child_task(task_id, outcome)
 
     base = %{"child_conversation_id" => child.id}
@@ -248,8 +264,8 @@ defmodule SuperPi.Plugins.Subagent do
     end
   end
 
-  defp run_machine(child_id, prompt, timeout_ms, ctx) do
-    machine_opts = [extensions: child_extensions()] ++ config_machine_opts(Map.get(ctx, :config))
+  defp run_machine(child_id, role, prompt, timeout_ms, ctx) do
+    machine_opts = [extensions: child_extensions(role)] ++ config_machine_opts(Map.get(ctx, :config))
 
     # A child runs on the node of its parent (it uses the parent's workspace) and is never restarted.
     case SuperPi.Conversation.Locator.ensure_started(child_id, machine_opts, restart: :temporary, supervision: :local) do
@@ -293,40 +309,32 @@ defmodule SuperPi.Plugins.Subagent do
 
   # --- Child configuration ---
 
-  # A child never has more permission than its parent.
+  # A child never has more permission than its parent. Read-only roles run the `Planner` harness
+  # (plan mode, read-only loadout, confined). A worker runs `Code` in the parent's execution mode and
+  # never above the parent's ceiling.
   defp child_agent(role, parent_agent) do
+    harness = Map.fetch!(@role_harness, role)
     model_opts = if model = parent_agent["model"], do: [model: model], else: []
     workspace_opts = if paths = parent_agent["workspacePaths"], do: [workspace_paths: paths], else: []
+    defaults = harness.agent_defaults(model_opts ++ workspace_opts)
+    mode = if role in @read_only_roles, do: defaults["executionMode"], else: Map.get(parent_agent, "executionMode", "accept-edits")
 
-    Harness.default().agent_defaults(model_opts ++ workspace_opts)
-    |> Map.merge(Map.take(parent_agent, ["workspacePaths", "globalConfigDir", "appDataDir", "settingsOverride", "effort"]))
-    |> Map.put("executionMode", child_mode(role, parent_agent))
+    defaults
+    |> Map.merge(Map.take(parent_agent, ["workspacePaths", "workspace", "globalConfigDir", "appDataDir", "settingsOverride", "effort"]))
+    |> Map.put("executionMode", mode)
+    |> Map.put("maxExecutionMode", Map.get(parent_agent, "maxExecutionMode", mode) |> lower_of(mode))
     |> Map.put("dangerouslySkipPermissions", parent_agent["dangerouslySkipPermissions"] == true)
     |> Map.put("subagentDepth", Map.get(parent_agent, "subagentDepth", 0) + 1)
     |> Map.put("systemSections", [%{"id" => "core", "content" => Map.fetch!(@role_prompts, role)}])
-    |> Map.put("tools", tools_for(role))
+    |> Map.update!("tools", fn tools -> Enum.reject(tools, &(&1["name"] in @never_in_child)) end)
   end
 
-  defp child_mode(role, parent_agent) when role in @read_only_roles do
-    # `plan` is the strictest mode, so it never raises the parent's.
-    _ = parent_agent
-    "plan"
-  end
+  defp lower_of(a, b), do: if(Permissions.rank_of(a) <= Permissions.rank_of(b), do: a, else: b)
 
-  defp child_mode(_worker, parent_agent), do: Map.get(parent_agent, "executionMode", "accept-edits")
-
-  defp tools_for(role) when role in @read_only_roles do
-    Enum.filter(Tools.active_llm_tools(), &(&1["name"] in @read_only_tools))
-  end
-
-  defp tools_for(_worker) do
-    Enum.reject(Tools.active_llm_tools(), &(&1["name"] in @never_in_child))
-  end
-
-  defp child_extensions do
-    Enum.reject(Harness.remote_extensions(Harness.default()), fn ext ->
+  defp child_extensions(role) do
+    Enum.reject(Harness.remote_extensions(Map.fetch!(@role_harness, role)), fn ext ->
       mod = if is_tuple(ext), do: elem(ext, 0), else: ext
-      mod in [__MODULE__, SuperPi.Plugins.Questionnaire, SuperPi.Plugins.Handoff]
+      mod in @not_in_child
     end)
   end
 

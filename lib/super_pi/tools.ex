@@ -23,6 +23,80 @@ defmodule SuperPi.Tools do
 
   @type exposure :: :direct | :model_only | :codemode | :deferred | :hidden
 
+  @effects ~w(read fs_write exec net_read net_write state_write)
+
+  # Effects of the built-in tools and of aliases that a model may call.
+  @builtin_effects %{
+    "read" => ["read"],
+    "read_file" => ["read"],
+    "grep" => ["read"],
+    "search_files" => ["read"],
+    "find" => ["read"],
+    "find_files" => ["read"],
+    "ls" => ["read"],
+    "list_dir" => ["read"],
+    "list_directory" => ["read"],
+    "tool_search" => ["read"],
+    "artifact_put" => ["state_write"],
+    "artifact_get" => ["read"],
+    "artifact_list" => ["read"],
+    "write" => ["fs_write"],
+    "write_file" => ["fs_write"],
+    "edit" => ["fs_write"],
+    "edit_file" => ["fs_write"],
+    "bash" => ["exec"],
+    "sh" => ["exec"],
+    "terminal" => ["exec"],
+    "run_command" => ["exec"],
+    "exec" => ["exec"]
+  }
+
+  @doc "The effect vocabulary: `read`, `fs_write`, `exec`, `net_read`, `net_write`, `state_write`."
+  @spec effect_vocabulary() :: [String.t()]
+  def effect_vocabulary, do: @effects
+
+  @doc """
+  Effects of a tool: what a call changes or reaches.
+
+  | Effect | Meaning |
+  |---|---|
+  | `read` | Reads the workspace or answers from existing state. Changes nothing. |
+  | `fs_write` | Writes workspace files. |
+  | `exec` | Runs a command. |
+  | `net_read` | Reads from the network (a GET). |
+  | `net_write` | Sends data out or changes a remote system. |
+  | `state_write` | Changes Super-Pi state (artifacts, todos, memory, schedules), not the workspace. |
+
+  A tool states its effects in an `"effects"` list on its spec. The lookup order is: the spec in
+  `agent_cfg["tools"]` (plugin tools live there), the catalog, then the table for built-in tools.
+  `nil` means the tool is unknown, which every policy treats as the most dangerous kind.
+  """
+  @spec effects(String.t(), map() | nil) :: [String.t()] | nil
+  def effects(tool_name, agent_cfg \\ nil) when is_binary(tool_name) do
+    from_cfg =
+      with %{} <- agent_cfg,
+           [_ | _] = tools <- Map.get(agent_cfg, "tools"),
+           %{} = spec <- Enum.find(tools, &(is_map(&1) and &1["name"] == tool_name)) do
+        valid_effects(spec["effects"])
+      else
+        _ -> nil
+      end
+
+    from_cfg || from_catalog(tool_name) || Map.get(@builtin_effects, tool_name)
+  end
+
+  defp from_catalog(tool_name) do
+    ensure_catalog_ets!()
+
+    case :ets.lookup(@catalog_ets, tool_name) do
+      [{_, spec}] -> valid_effects(spec["effects"])
+      _ -> nil
+    end
+  end
+
+  defp valid_effects([_ | _] = list), do: if(Enum.all?(list, &(&1 in @effects)), do: list)
+  defp valid_effects(_), do: nil
+
   def ensure_catalog_ets! do
     case :ets.whereis(@catalog_ets) do
       :undefined ->
@@ -148,13 +222,19 @@ defmodule SuperPi.Tools do
     ensure_catalog_ets!()
 
     if String.starts_with?(tool_name, "mcp__") do
-      SuperPi.MCP.Manager.call_tool(tool_name, args)
+      with {:ok, ws} <- Workspace.resolve(ctx || %{}),
+           true <- :net in ws.capabilities do
+        SuperPi.MCP.Manager.call_tool(tool_name, args)
+      else
+        false -> error_result(tool_name, "#{tool_name} needs network access, which this workspace does not allow")
+        {:error, message} -> error_result(tool_name, message)
+      end
     else
       # The workspace (`SuperPi.Env.Workspace`) decides where file and command tools act, and
       # which tools exist at all. A tool is never run against another place than the one configured.
       case Workspace.resolve(ctx || %{}) do
         {:ok, ws} ->
-          if Workspace.supports?(ws, tool_name) do
+          if Workspace.supports?(ws, tool_name, agent_cfg(ctx)) do
             try do
               ws |> then(&run(tool_name, args, &1, ctx || %{})) |> add_notice(ws)
             catch
@@ -169,6 +249,9 @@ defmodule SuperPi.Tools do
       end
     end
   end
+
+  defp agent_cfg(%{conversation_id: id}) when not is_nil(id), do: SuperPi.Durable.Doc.snapshot("conversation", id, "pi.agent")
+  defp agent_cfg(_ctx), do: nil
 
   defp add_notice(%{"output" => out} = result, %{notice: notice}) when is_binary(notice) and is_binary(out) do
     Map.put(result, "output", notice <> "\n" <> out)

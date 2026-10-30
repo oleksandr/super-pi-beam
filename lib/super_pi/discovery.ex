@@ -34,6 +34,29 @@ defmodule SuperPi.Discovery do
       :user_config |> :filename.basedir("super-pi") |> to_string()
   end
 
+  @doc """
+  Workspace roots for a conversation that names none: `config :super_pi, :workspace_paths`, else the
+  current working directory. This is the only place the server reads the working directory for it.
+  """
+  @spec default_workspace_paths() :: [String.t()]
+  def default_workspace_paths do
+    case Application.get_env(:super_pi, :workspace_paths) do
+      [_ | _] = paths -> Enum.map(paths, &Path.expand/1)
+      _ -> [File.cwd!()]
+    end
+  end
+
+  @doc """
+  Roots of a knowledge base: `config :super_pi, :knowledge_paths`, else `default_workspace_paths/0`.
+  """
+  @spec default_knowledge_paths() :: [String.t()]
+  def default_knowledge_paths do
+    case Application.get_env(:super_pi, :knowledge_paths) do
+      [_ | _] = paths -> Enum.map(paths, &Path.expand/1)
+      _ -> default_workspace_paths()
+    end
+  end
+
   @doc "Application data directory (transcripts, built-in skills). See the module doc."
   def default_app_data_dir do
     configured_dir(:app_data_dir, "SUPER_PI_DATA_DIR") ||

@@ -15,6 +15,7 @@ defmodule SuperPi.Plugins.StructuredOutput do
 
   @tool_spec %{
     "name" => "structured_output",
+    "effects" => ["read"],
     "description" =>
       "Return a final structured answer. Use this as your last action when the user asks for structured output, JSON-like output, or a machine-readable summary. Terminate immediately upon calling.",
     "parameters" => %{

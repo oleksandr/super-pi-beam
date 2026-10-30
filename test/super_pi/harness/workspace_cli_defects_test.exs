@@ -109,11 +109,23 @@ defmodule SuperPi.Harness.WorkspaceCliDefectsTest do
       assert mutating == [], "research agent still has: #{inspect(mutating)}"
     end
 
-    test "`--agent research` is recorded in the agent config", %{opts: opts} do
+    test "`--agent research` selects the planner harness, in plan mode", %{opts: opts} do
       conv = Storage.create_conversation!()
       CLI.run(["--conversation", "#{conv.id}", "--agent", "research", "-p", "hi"], session_opts(opts))
 
-      assert Doc.snapshot("conversation", conv.id, "pi.agent")["agent"] == "research"
+      agent = Doc.snapshot("conversation", conv.id, "pi.agent")
+      assert agent["executionMode"] == "plan"
+      assert agent["maxExecutionMode"] == "plan"
+    end
+
+    test "`--harness planner` does not declare mutating tools, and `--mode auto` cannot lift it", %{opts: opts} do
+      conv = Storage.create_conversation!()
+      CLI.run(["--conversation", "#{conv.id}", "--harness", "planner", "--mode", "auto", "-p", "hi"], session_opts(opts))
+
+      agent = Doc.snapshot("conversation", conv.id, "pi.agent")
+      names = Enum.map(agent["tools"], & &1["name"])
+      assert names -- ["read", "grep", "find", "ls", "tool_search"] == []
+      assert agent["executionMode"] == "plan"
     end
   end
 

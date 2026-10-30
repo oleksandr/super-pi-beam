@@ -156,7 +156,7 @@ defmodule SuperPi.Gateway.ProtocolComplianceTest do
            %{
              "role" => "assistant",
              "content" => [
-               %{"type" => "tool_call", "id" => "c1", "name" => "bash", "arguments" => %{"command" => "curl -s https://api.weather.com"}}
+               %{"type" => "tool_call", "id" => "c1", "name" => "read", "arguments" => %{"path" => "weather.json"}}
              ]
            }}
         else
@@ -186,7 +186,7 @@ defmodule SuperPi.Gateway.ProtocolComplianceTest do
         )
 
       payload = %{
-        "model" => "super-pi-agent",
+        "model" => "super-pi-code",
         "messages" => [%{"role" => "user", "content" => "Check weather"}],
         "stream" => true
       }
@@ -214,8 +214,8 @@ defmodule SuperPi.Gateway.ProtocolComplianceTest do
         |> Enum.join("")
 
       # Verify tool progress is visible in reasoning_content
-      assert String.contains?(reasoning_text, "Executing bash")
-      assert String.contains?(reasoning_text, "bash completed")
+      assert String.contains?(reasoning_text, "Executing read")
+      assert String.contains?(reasoning_text, "read completed")
 
       # Extract main content and verify tool progress did NOT bleed into text
       content_text =
@@ -248,16 +248,19 @@ defmodule SuperPi.Gateway.ProtocolComplianceTest do
 
       ids = Enum.map(body["data"], & &1["id"])
       expected = [
-        "super-pi-agent",
-        "super-pi-fast",
-        "super-pi-auto",
-        "super-pi-interactive",
-        "super-pi-workspace",
+        "super-pi-code",
+        "super-pi-assistant",
+        "super-pi-librarian",
         "super-pi-planner"
       ]
 
       for exp_id <- expected do
         assert exp_id in ids, "Missing expected harness model '#{exp_id}' in /v1/models"
+      end
+
+      # Ids of earlier releases resolve but are not listed.
+      for old_id <- ["super-pi-agent", "super-pi-fast", "super-pi-auto", "super-pi-interactive", "super-pi-workspace"] do
+        refute old_id in ids, "#{old_id} should be an alias, not a listed model"
       end
     end
   end

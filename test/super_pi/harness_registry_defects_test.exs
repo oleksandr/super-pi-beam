@@ -129,8 +129,18 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
       assert Harness.resolve("SuperPi.Harness.Planner") == SuperPi.Harness.Planner
     end
 
-    test "Fast.agent_defaults/1 honours opts[:model] (harness/fast.ex:25-43)" do
-      assert %{"model" => "custom-model"} = SuperPi.Harness.Fast.agent_defaults(model: "custom-model")
+    test "agent_defaults/1 honours opts[:model]" do
+      assert %{"model" => "custom-model"} = SuperPi.Harness.Code.agent_defaults(model: "custom-model")
+      assert %{"model" => "custom-model"} = SuperPi.Harness.Assistant.agent_defaults(model: "custom-model")
+    end
+
+    test "the model comes from config :super_pi, :default_model, not from the harness" do
+      Application.put_env(:super_pi, :default_model, "claude-sonnet-5-5")
+      on_exit(fn -> Application.delete_env(:super_pi, :default_model) end)
+
+      for harness <- [Harness.Code, Harness.Assistant, Harness.Librarian, Harness.Planner] do
+        assert harness.agent_defaults()["model"] == "claude-sonnet-5-5"
+      end
     end
 
     test "@callback extensions typespec admits {module, opts} tuples (harness.ex:20)" do
@@ -138,22 +148,40 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
       {_, [spec | _]} = Enum.find(callbacks, fn {{name, arity}, _} -> {name, arity} == {:extensions, 1} end)
       text = :extensions |> Code.Typespec.spec_to_quoted(spec) |> Macro.to_string()
 
-      assert Enum.any?(SuperPi.Harness.Autonomous.extensions(), &is_tuple/1)
+      assert Enum.any?(SuperPi.Harness.Code.extensions(), &is_tuple/1)
       assert text =~ "{", "typespec is list(module()) but harnesses return tuples: #{text}"
     end
   end
 
-  describe "Planner is read-only only by tool listing (harness/planner.ex:40-50)" do
-    test "Planner.extensions/0 blocks bash" do
-      assert {:block, _} = Extension.run_before_tool(Harness.Planner.extensions(), "bash", %{}, %{})
+  describe "Planner is read-only by loadout, mode and confinement" do
+    setup do
+      conv = Storage.create_conversation!(agent: Harness.Planner.agent_defaults())
+      {:ok, ctx: %{conversation_id: conv.id}}
     end
 
-    test "Planner.extensions/0 blocks write" do
-      assert {:block, _} = Extension.run_before_tool(Harness.Planner.extensions(), "write", %{}, %{})
+    test "Planner.extensions/0 blocks bash", %{ctx: ctx} do
+      assert {:block, _} = Extension.run_before_tool(Harness.Planner.extensions(), "bash", %{"command" => "ls"}, ctx)
+    end
+
+    test "Planner.extensions/0 blocks write", %{ctx: ctx} do
+      assert {:block, _} = Extension.run_before_tool(Harness.Planner.extensions(), "write", %{"path" => "x", "content" => "y"}, ctx)
+    end
+
+    test "Planner confines reads to the workspace and hides secrets", %{ctx: ctx} do
+      exts = Harness.Planner.extensions()
+      assert {:block, _} = Extension.run_before_tool(exts, "read", %{"path" => "/etc/passwd"}, ctx)
+      assert {:block, _} = Extension.run_before_tool(exts, "read", %{"path" => ".env"}, ctx)
+    end
+
+    test "the loadout has no mutating tool, and the ceiling is plan" do
+      defaults = Harness.Planner.agent_defaults()
+      assert Enum.map(defaults["tools"], & &1["name"]) -- ["read", "grep", "find", "ls", "tool_search"] == []
+      assert defaults["executionMode"] == "plan"
+      assert defaults["maxExecutionMode"] == "plan"
     end
 
     test "a machine run with Planner extensions does not execute a model-requested write" do
-      conv = Storage.create_conversation!()
+      conv = Storage.create_conversation!(agent: Harness.Planner.agent_defaults())
       test_pid = self()
 
       executor = fn name, _args, _ctx ->
@@ -177,7 +205,14 @@ defmodule SuperPi.HarnessRegistryDefectsTest do
 
   describe "plugin resolution (plugins.ex:96-102,118-121)" do
     test "resolve/1 returns nil for a harness module (it exports id/0 but is not a plugin)" do
-      assert Plugins.resolve(SuperPi.Harness.Default) == nil
+      assert Plugins.resolve(SuperPi.Harness.Code) == nil
+      assert Plugins.resolve(SuperPi.Harness.Planner) == nil
+    end
+
+    test "a harness module string that names a shim resolves, so the default module is not a sentinel" do
+      assert Harness.harness?("SuperPi.Harness.Default")
+      assert Harness.harness?("SuperPi.Harness.Code")
+      refute Harness.harness?("SuperPi.Harness.NoSuchThing")
     end
 
     # UNSURE: uniq_by keeps the first entry, so a bare module listed before its configured
