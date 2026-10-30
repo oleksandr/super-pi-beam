@@ -20,11 +20,7 @@ defmodule SuperPi.Durable.Storage do
   and allocating a monotonic `seq` number.
   """
   def commit(fun) when is_function(fun, 1) do
-    opts =
-      case Application.get_env(:super_pi, :storage_backend, :sqlite) do
-        :sqlite -> [mode: :immediate]
-        _ -> []
-      end
+    opts = tx_opts()
 
     DeferredFlusher.ensure_pending_ets!()
     items_to_drain = :ets.tab2list(:super_pi_deferred_pending)
@@ -35,10 +31,13 @@ defmodule SuperPi.Durable.Storage do
       try do
         Repo.transaction(
           fn ->
+            # Drained documents get their own seq: `fun` may write the same
+            # document, and (document_id, seq) is unique.
+            drain_seq = if items_to_drain == [], do: nil, else: next_seq!()
             seq = next_seq!()
 
             Enum.each(items_to_drain, fn {{scope_kind, scope_id, kind, key}, value} ->
-              Doc.put_doc(scope_kind, scope_id, kind, value, seq, key: key)
+              Doc.put_doc(scope_kind, scope_id, kind, value, drain_seq, key: key)
             end)
 
             fun.(seq)
@@ -83,29 +82,34 @@ defmodule SuperPi.Durable.Storage do
   end
 
   @doc """
+  Options for `Repo.transaction/2`. SQLite takes the write lock up front
+  (`BEGIN IMMEDIATE`) so a read-then-write transaction cannot lose a race.
+  """
+  def tx_opts do
+    case Application.get_env(:super_pi, :storage_backend, :sqlite) do
+      :sqlite -> [mode: :immediate]
+      _ -> []
+    end
+  end
+
+  @doc "True when the backend supports `SELECT ... FOR UPDATE`."
+  def row_locks?, do: Application.get_env(:super_pi, :storage_backend, :sqlite) != :sqlite
+
+  @doc """
   Allocates and returns the next monotonic sequence number (`Seq`).
+
+  One atomic upsert, valid on SQLite and PostgreSQL. The row lock held until
+  commit serializes concurrent allocators.
   """
   def next_seq! do
-    case Repo.query!("UPDATE record_ids SET seq = seq + 1 WHERE name = 'global_seq' RETURNING seq").rows do
-      [[next]] ->
-        next
+    %{rows: [[next]]} =
+      Repo.query!("""
+      INSERT INTO record_ids (name, seq) VALUES ('global_seq', 1)
+      ON CONFLICT (name) DO UPDATE SET seq = record_ids.seq + 1
+      RETURNING seq
+      """)
 
-      [] ->
-        Repo.query!("INSERT INTO record_ids (name, seq) VALUES ('global_seq', 1)")
-        1
-    end
-  rescue
-    _ ->
-      case Repo.query!("SELECT seq FROM record_ids WHERE name = 'global_seq'").rows do
-        [[current]] ->
-          next = current + 1
-          Repo.query!("UPDATE record_ids SET seq = ? WHERE name = 'global_seq'", [next])
-          next
-
-        [] ->
-          Repo.query!("INSERT INTO record_ids (name, seq) VALUES ('global_seq', 1)")
-          1
-      end
+    next
   end
 
   def current_seq do

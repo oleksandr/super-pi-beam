@@ -132,8 +132,9 @@ defmodule SuperPi.CompactionDefectsTest do
         )
 
       assert {:ok, _} = Machine.submit(pid, "next", timeout: 5_000)
-      assert {:threshold, _} = Compaction.check_policy(conv.id), "precondition: history over threshold"
       assert [_ | _] = compaction_entries(conv.id), "no compaction after exceeding the threshold"
+      # Compacted history no longer counts toward the threshold.
+      assert :none = Compaction.check_policy(conv.id)
     end
   end
 

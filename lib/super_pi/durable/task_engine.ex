@@ -73,73 +73,67 @@ defmodule SuperPi.Durable.TaskEngine do
   end
 
   @doc """
-  Atomically transitions a task to `"running"` via `Fsmx.transition_Multi/4`.
+  Atomically transitions a task to `"running"`. The task row is locked for the
+  read and the write, so two workers cannot both claim it: the loser gets
+  `{:error, :already_running}`.
   """
   def start_task(task_id) do
-    case Repo.get(TaskSchema, task_id) do
-      nil ->
-        {:error, :not_found}
-
-      %TaskSchema{status: "running"} ->
-        {:error, :already_running}
-
-      %TaskSchema{} ->
-        transition_task(task_id, "running", %{})
-    end
+    locked(task_id, fn
+      %TaskSchema{status: "running"} -> Repo.active_repo().rollback(:already_running)
+      task -> transition!(task, "running", %{})
+    end)
   end
 
   @doc """
   Checkpoints a running task to a new phase (`{phase: next_phase, ...}`).
   """
   def checkpoint_task(task_id, next_phase, new_state) when is_binary(next_phase) and is_map(new_state) do
-    case Repo.get(TaskSchema, task_id) do
-      nil ->
-        {:error, :not_found}
-
+    locked(task_id, fn
       %TaskSchema{status: status} when status != "running" ->
-        {:error, {:invalid_status, status}}
+        Repo.active_repo().rollback({:invalid_status, status})
 
-      %TaskSchema{} ->
-        transition_task(task_id, "running", %{
+      task ->
+        transition!(task, "running", %{
           phase: next_phase,
           state: Map.put(new_state, "phase", next_phase)
         })
-    end
+    end)
   end
 
   @doc """
   Transitions a running task to `"waiting"` on `child_task_ids` with policy `"all_settled"` or `"fail_fast"`.
+
+  The parent row is locked while the children are read and the parent is
+  written. A child that settles concurrently takes the same lock in
+  `reconcile_parent_after_child_settled!/2`, so it either sees `"waiting"` and
+  wakes the parent, or commits first and this call sees it settled. No lost wakeup.
   """
   def wait_for_children(task_id, child_task_ids, wait_policy \\ "all_settled")
       when is_list(child_task_ids) and wait_policy in ["all_settled", "fail_fast"] do
-    case Repo.get(TaskSchema, task_id) do
-      nil ->
-        {:error, :not_found}
-
-      %TaskSchema{} = parent ->
-        existing_children =
-          if child_task_ids == [] do
-            []
-          else
-            Repo.all(from t in TaskSchema, where: t.id in ^child_task_ids)
-          end
-
-        existing_ids = MapSet.new(existing_children, & &1.id)
-
-        cond do
-          child_task_ids != [] and not Enum.all?(child_task_ids, &MapSet.member?(existing_ids, &1)) ->
-            {:error, :unknown_child}
-
-          child_task_ids == [] or Enum.all?(existing_children, &TaskSchema.terminal?/1) ->
-            {:ok, parent}
-
-          true ->
-            transition_task(task_id, "waiting", %{
-              wait_policy: wait_policy,
-              waiting_on_task_ids: %{"ids" => child_task_ids}
-            })
+    locked(task_id, fn parent ->
+      existing_children =
+        if child_task_ids == [] do
+          []
+        else
+          Repo.all(from t in TaskSchema, where: t.id in ^child_task_ids)
         end
-    end
+
+      existing_ids = MapSet.new(existing_children, & &1.id)
+
+      cond do
+        child_task_ids != [] and not Enum.all?(child_task_ids, &MapSet.member?(existing_ids, &1)) ->
+          Repo.active_repo().rollback(:unknown_child)
+
+        child_task_ids == [] or Enum.all?(existing_children, &TaskSchema.terminal?/1) ->
+          parent
+
+        true ->
+          transition!(parent, "waiting", %{
+            wait_policy: wait_policy,
+            waiting_on_task_ids: %{"ids" => child_task_ids}
+          })
+      end
+    end)
   end
 
   @doc """
@@ -147,8 +141,8 @@ defmodule SuperPi.Durable.TaskEngine do
   `Oban` wake job (`REQ-OBAN-01`).
   """
   def sleep_until(task_id, %DateTime{} = wake_at, checkpoint_state \\ nil) do
-    Repo.transaction(fn ->
-      task = Repo.get!(TaskSchema, task_id)
+    tx(fn ->
+      task = lock_task(task_id) || raise Ecto.NoResultsError, queryable: TaskSchema
       seq = Storage.next_seq!()
 
       params = %{
@@ -188,13 +182,10 @@ defmodule SuperPi.Durable.TaskEngine do
   Wakes a `"sleeping"` task back to `"pending"` when its deadline arrives.
   """
   def wake_sleeping_task(task_id) do
-    case Repo.get(TaskSchema, task_id) do
-      %TaskSchema{status: "sleeping"} ->
-        transition_task(task_id, "pending", %{sleep_until: nil})
-
-      _ ->
-        {:error, :not_sleeping}
-    end
+    locked(task_id, fn
+      %TaskSchema{status: "sleeping"} = task -> transition!(task, "pending", %{sleep_until: nil})
+      _ -> Repo.active_repo().rollback(:not_sleeping)
+    end)
   end
 
   @doc """
@@ -203,8 +194,8 @@ defmodule SuperPi.Durable.TaskEngine do
   - Otherwise transitions to `"completed"` and reconciles any parent task waiting on it.
   """
   def complete_task(task_id, result \\ %{}) when is_map(result) do
-    Repo.transaction(fn ->
-      task = Repo.get!(TaskSchema, task_id)
+    tx(fn ->
+      task = lock_task(task_id) || raise Ecto.NoResultsError, queryable: TaskSchema
 
       if task.status in ["completed", "completing"] do
         task
@@ -238,8 +229,8 @@ defmodule SuperPi.Durable.TaskEngine do
   end
 
   def fail_task(task_id, error_map) when is_map(error_map) do
-    Repo.transaction(fn ->
-      task = Repo.get!(TaskSchema, task_id)
+    tx(fn ->
+      task = lock_task(task_id) || raise Ecto.NoResultsError, queryable: TaskSchema
 
       if TaskSchema.terminal?(task) do
         task
@@ -276,7 +267,7 @@ defmodule SuperPi.Durable.TaskEngine do
 
       %TaskSchema{} ->
         {:ok, updated} =
-          Repo.transaction(fn ->
+          tx(fn ->
             seq = Storage.next_seq!()
             abort_subtree_bottom_up!(task_id, seq)
           end)
@@ -293,7 +284,7 @@ defmodule SuperPi.Durable.TaskEngine do
   """
   def reconcile_on_open!(conversation_id) do
     {:ok, reconciled} =
-      Repo.transaction(fn ->
+      tx(fn ->
         seq = Storage.next_seq!()
 
         running_tasks =
@@ -389,33 +380,48 @@ defmodule SuperPi.Durable.TaskEngine do
   end
 
   @doc """
-   Performs an atomic `Fsmx` transition inside an `Ecto.Multi` transaction (`REQ-FSM-01`, `REQ-FSM-02`).
+  Performs an atomic `Fsmx` transition under a row lock (`REQ-FSM-01`, `REQ-FSM-02`).
+  Returns `{:ok, task}`, `{:error, :not_found}` or `{:error, changeset}`.
   """
   def transition_task(task_id, target_status, extra_params \\ %{}) do
-    case Repo.get(TaskSchema, task_id) do
-      nil ->
-        {:error, :not_found}
+    locked(task_id, &transition!(&1, target_status, extra_params))
+  end
 
-      %TaskSchema{} = task ->
-        seq = Storage.next_seq!()
-        params = Map.put(extra_params, :updated_seq, seq)
+  defp tx(fun), do: Repo.transaction(fun, Storage.tx_opts())
 
-        multi =
-          Multi.new()
-          |> Fsmx.transition_multi(task, :transition, target_status, params, state_field: :status)
+  # Runs `fun` in a transaction with the task row locked. `fun` returns the
+  # result or rolls back with a reason; a missing task is `{:error, :not_found}`.
+  defp locked(task_id, fun) do
+    tx(fn ->
+      case lock_task(task_id) do
+        nil -> Repo.active_repo().rollback(:not_found)
+        task -> fun.(task)
+      end
+    end)
+  end
 
-        case Repo.transaction(multi) do
-          {:ok, %{transition: updated}} ->
-            {:ok, updated}
+  # SQLite has no row locks; `Storage.tx_opts/0` serializes writers instead.
+  defp lock_task(task_id) do
+    if Storage.row_locks?() do
+      Repo.one(from t in TaskSchema, where: t.id == ^task_id, lock: "FOR UPDATE")
+    else
+      Repo.get(TaskSchema, task_id)
+    end
+  end
 
-          {:error, :transition, changeset, _changes} ->
-            {:error, changeset}
-        end
+  defp transition!(task, target_status, params) do
+    seq = Storage.next_seq!()
+
+    case task
+         |> Fsmx.transition_changeset(target_status, Map.put(params, :updated_seq, seq), state_field: :status)
+         |> Repo.update() do
+      {:ok, updated} -> updated
+      {:error, changeset} -> Repo.active_repo().rollback(changeset)
     end
   end
 
   defp abort_subtree_bottom_up!(task_id, seq) do
-    task = Repo.get!(TaskSchema, task_id)
+    task = lock_task(task_id) || raise Ecto.NoResultsError, queryable: TaskSchema
 
     if not task.abort_requested do
       task
@@ -471,7 +477,8 @@ defmodule SuperPi.Durable.TaskEngine do
   defp reconcile_parent_after_child_settled!(%TaskSchema{owner_task_id: nil}, _seq), do: :ok
 
   defp reconcile_parent_after_child_settled!(%TaskSchema{owner_task_id: parent_id} = child, seq) do
-    case Repo.get(TaskSchema, parent_id) do
+    # Same lock `wait_for_children/3` takes: see its doc.
+    case lock_task(parent_id) do
       nil ->
         :ok
 

@@ -169,7 +169,7 @@ defmodule SuperPi.Durable.Doc do
   conversation fork ancestry when `at_seq` predates the fork point (`spec.md` §3.3).
   """
   def snapshot_as_of(conversation_id, kind, at_seq, key \\ "") when is_integer(at_seq) do
-    owner_conv_id = resolve_ancestor_conversation_at_seq(conversation_id, at_seq)
+    {owner_conv_id, effective_seq} = resolve_ancestor_conversation_at_seq(conversation_id, at_seq)
 
     query =
       from d in Document,
@@ -178,8 +178,8 @@ defmodule SuperPi.Durable.Doc do
             d.scope_id == ^owner_conv_id and
             d.kind == ^kind and
             d.key == ^key and
-            d.created_seq <= ^at_seq and
-            (is_nil(d.retired_seq) or d.retired_seq > ^at_seq),
+            d.created_seq <= ^effective_seq and
+            (is_nil(d.retired_seq) or d.retired_seq > ^effective_seq),
         order_by: [desc: d.created_seq],
         limit: 1
 
@@ -188,22 +188,34 @@ defmodule SuperPi.Durable.Doc do
         nil
 
       doc ->
-        {val, _} = reconstruct_doc_value(doc.id, at_seq)
+        {val, _} = reconstruct_doc_value(doc.id, effective_seq)
         val
     end
   end
 
+  # A fork sees its parent only up to the fork entry. Parent writes after that
+  # entry (but before the fork was created) are not part of the fork's history,
+  # so the lookup seq is clamped to the fork entry's seq.
   defp resolve_ancestor_conversation_at_seq(conversation_id, at_seq) do
     case Repo.get(Conversation, conversation_id) do
       nil ->
-        conversation_id
+        {conversation_id, at_seq}
 
-      %Conversation{created_seq: created_seq, parent_conversation_id: parent_id}
+      %Conversation{created_seq: created_seq, parent_conversation_id: parent_id} = conv
       when not is_nil(parent_id) and at_seq < created_seq ->
-        resolve_ancestor_conversation_at_seq(parent_id, at_seq)
+        resolve_ancestor_conversation_at_seq(parent_id, min(at_seq, fork_entry_seq(conv, at_seq)))
 
       _ ->
-        conversation_id
+        {conversation_id, at_seq}
+    end
+  end
+
+  defp fork_entry_seq(%Conversation{parent_entry_id: nil}, at_seq), do: at_seq
+
+  defp fork_entry_seq(%Conversation{parent_entry_id: entry_id}, at_seq) do
+    case Repo.get(SuperPi.Durable.Schemas.Entry, entry_id) do
+      nil -> at_seq
+      entry -> entry.seq
     end
   end
 

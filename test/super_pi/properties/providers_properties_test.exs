@@ -18,7 +18,7 @@ defmodule SuperPi.Properties.ProvidersTest do
         @behaviour SuperPi.AI.Provider
         def id, do: unquote(id)
         def handles?(model), do: unquote(prefix) == "" or String.starts_with?(model, unquote(prefix))
-        def configured?, do: Application.get_env(:super_pi, {:fake_configured, unquote(id)}, true)
+        def configured?, do: Application.get_env(:super_pi, :"fake_configured_#{unquote(id)}", true)
         def models, do: [%{"id" => unquote(id) <> "-model", "label" => unquote(id)}]
         def generate(_payload, _opts), do: {:ok, %{"role" => "assistant", "content" => []}}
       end
@@ -44,7 +44,7 @@ defmodule SuperPi.Properties.ProvidersTest do
   @fakes [A, B, AB, Any]
 
   setup do
-    keys = [:mock_llm, :providers, :gemini_api_key] ++ Enum.map(@fakes, &{:fake_configured, &1.id()})
+    keys = [:mock_llm, :providers, :gemini_api_key] ++ Enum.map(@fakes, &:"fake_configured_#{&1.id()}")
     saved = Enum.map(keys, &{&1, Application.fetch_env(:super_pi, &1)})
     System.delete_env("GEMINI_API_KEY")
 
@@ -75,7 +75,7 @@ defmodule SuperPi.Properties.ProvidersTest do
     Application.put_env(:super_pi, :providers, providers)
 
     for {mod, flag} <- Enum.zip(@fakes, flags) do
-      Application.put_env(:super_pi, {:fake_configured, mod.id()}, flag)
+      Application.put_env(:super_pi, :"fake_configured_#{mod.id()}", flag)
     end
   end
 

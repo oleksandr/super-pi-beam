@@ -104,13 +104,7 @@ defmodule SuperPi.Compaction do
     context_window = Keyword.get(opts, :context_window, @default_context_window)
     background_tokens = Keyword.get(opts, :background_tokens, @default_background_tokens)
 
-    entries =
-      if opts == [] do
-        {visible, _} = Context.visible_entries_with_graph(conversation_id)
-        visible
-      else
-        Context.derive(conversation_id).active_entries
-      end
+    entries = Context.derive(conversation_id).active_entries
 
     current_tokens = estimate_total_tokens(entries)
 
