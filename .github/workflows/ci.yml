@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-sqlite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - run: mise exec -- mix deps.get
+      - run: mise exec -- mix compile --warnings-as-errors
+      - run: mise exec -- mix test
+
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: super_pi_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SUPER_PI_STORAGE_BACKEND: postgres
+      DATABASE_URL: ecto://postgres:postgres@localhost:5432/super_pi_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - run: mise exec -- mix deps.get
+      # The whole suite on PostgreSQL.
+      - run: mise exec -- mix test
+      # Real-concurrency tests, and the migration property on its own database
+      # (it migrates down, so it must not share the suite's database).
+      - run: PGPASSWORD=postgres createdb -h localhost -U postgres super_pi_migration
+      - run: mise exec -- mix test --only postgres
+        env:
+          SUPER_PI_MIGRATION_TEST_URL: ecto://postgres:postgres@localhost:5432/super_pi_migration

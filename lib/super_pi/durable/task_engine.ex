@@ -79,8 +79,8 @@ defmodule SuperPi.Durable.TaskEngine do
   """
   def start_task(task_id) do
     locked(task_id, fn
-      %TaskSchema{status: "running"} -> Repo.active_repo().rollback(:already_running)
-      task -> transition!(task, "running", %{})
+      %TaskSchema{status: "running"}, _seq -> Repo.active_repo().rollback(:already_running)
+      task, seq -> transition!(task, "running", %{}, seq)
     end)
   end
 
@@ -89,14 +89,16 @@ defmodule SuperPi.Durable.TaskEngine do
   """
   def checkpoint_task(task_id, next_phase, new_state) when is_binary(next_phase) and is_map(new_state) do
     locked(task_id, fn
-      %TaskSchema{status: status} when status != "running" ->
+      %TaskSchema{status: status}, _seq when status != "running" ->
         Repo.active_repo().rollback({:invalid_status, status})
 
-      task ->
-        transition!(task, "running", %{
-          phase: next_phase,
-          state: Map.put(new_state, "phase", next_phase)
-        })
+      task, seq ->
+        transition!(
+          task,
+          "running",
+          %{phase: next_phase, state: Map.put(new_state, "phase", next_phase)},
+          seq
+        )
     end)
   end
 
@@ -110,7 +112,7 @@ defmodule SuperPi.Durable.TaskEngine do
   """
   def wait_for_children(task_id, child_task_ids, wait_policy \\ "all_settled")
       when is_list(child_task_ids) and wait_policy in ["all_settled", "fail_fast"] do
-    locked(task_id, fn parent ->
+    locked(task_id, fn parent, seq ->
       existing_children =
         if child_task_ids == [] do
           []
@@ -128,10 +130,12 @@ defmodule SuperPi.Durable.TaskEngine do
           parent
 
         true ->
-          transition!(parent, "waiting", %{
-            wait_policy: wait_policy,
-            waiting_on_task_ids: %{"ids" => child_task_ids}
-          })
+          transition!(
+            parent,
+            "waiting",
+            %{wait_policy: wait_policy, waiting_on_task_ids: %{"ids" => child_task_ids}},
+            seq
+          )
       end
     end)
   end
@@ -141,9 +145,8 @@ defmodule SuperPi.Durable.TaskEngine do
   `Oban` wake job (`REQ-OBAN-01`).
   """
   def sleep_until(task_id, %DateTime{} = wake_at, checkpoint_state \\ nil) do
-    tx(fn ->
+    tx(fn seq ->
       task = lock_task(task_id) || raise Ecto.NoResultsError, queryable: TaskSchema
-      seq = Storage.next_seq!()
 
       params = %{
         sleep_until: wake_at,
@@ -183,8 +186,8 @@ defmodule SuperPi.Durable.TaskEngine do
   """
   def wake_sleeping_task(task_id) do
     locked(task_id, fn
-      %TaskSchema{status: "sleeping"} = task -> transition!(task, "pending", %{sleep_until: nil})
-      _ -> Repo.active_repo().rollback(:not_sleeping)
+      %TaskSchema{status: "sleeping"} = task, seq -> transition!(task, "pending", %{sleep_until: nil}, seq)
+      _, _seq -> Repo.active_repo().rollback(:not_sleeping)
     end)
   end
 
@@ -194,13 +197,12 @@ defmodule SuperPi.Durable.TaskEngine do
   - Otherwise transitions to `"completed"` and reconciles any parent task waiting on it.
   """
   def complete_task(task_id, result \\ %{}) when is_map(result) do
-    tx(fn ->
+    tx(fn seq ->
       task = lock_task(task_id) || raise Ecto.NoResultsError, queryable: TaskSchema
 
       if task.status in ["completed", "completing"] do
         task
       else
-        seq = Storage.next_seq!()
         live_children = list_live_owned_children(task.id)
 
         target_status = if live_children == [], do: "completed", else: "completing"
@@ -229,7 +231,7 @@ defmodule SuperPi.Durable.TaskEngine do
   end
 
   def fail_task(task_id, error_map) when is_map(error_map) do
-    tx(fn ->
+    tx(fn seq ->
       task = lock_task(task_id) || raise Ecto.NoResultsError, queryable: TaskSchema
 
       if TaskSchema.terminal?(task) do
@@ -239,8 +241,6 @@ defmodule SuperPi.Durable.TaskEngine do
         Enum.each(live_children, fn child ->
           abort_task!(child.id)
         end)
-
-        seq = Storage.next_seq!()
 
         case Fsmx.transition_changeset(task, "failed", %{result: error_map, updated_seq: seq}, state_field: :status)
              |> Repo.update() do
@@ -267,10 +267,7 @@ defmodule SuperPi.Durable.TaskEngine do
 
       %TaskSchema{} ->
         {:ok, updated} =
-          tx(fn ->
-            seq = Storage.next_seq!()
-            abort_subtree_bottom_up!(task_id, seq)
-          end)
+          tx(fn seq -> abort_subtree_bottom_up!(task_id, seq) end)
 
         updated
     end
@@ -284,9 +281,7 @@ defmodule SuperPi.Durable.TaskEngine do
   """
   def reconcile_on_open!(conversation_id) do
     {:ok, reconciled} =
-      tx(fn ->
-        seq = Storage.next_seq!()
-
+      tx(fn seq ->
         running_tasks =
           Repo.all(
             from t in TaskSchema,
@@ -384,18 +379,21 @@ defmodule SuperPi.Durable.TaskEngine do
   Returns `{:ok, task}`, `{:error, :not_found}` or `{:error, changeset}`.
   """
   def transition_task(task_id, target_status, extra_params \\ %{}) do
-    locked(task_id, &transition!(&1, target_status, extra_params))
+    locked(task_id, &transition!(&1, target_status, extra_params, &2))
   end
 
-  defp tx(fun), do: Repo.transaction(fun, Storage.tx_opts())
+  # Every transaction takes the global seq row first, then task rows. `next_seq!/0`
+  # holds that row until commit, so a fixed order (seq, then tasks) is what keeps
+  # two transactions from deadlocking on PostgreSQL. `fun` receives the seq.
+  defp tx(fun), do: Repo.transaction(fn -> fun.(Storage.next_seq!()) end, Storage.tx_opts())
 
-  # Runs `fun` in a transaction with the task row locked. `fun` returns the
+  # Runs `fun` with the locked task and the transaction's seq. `fun` returns the
   # result or rolls back with a reason; a missing task is `{:error, :not_found}`.
   defp locked(task_id, fun) do
-    tx(fn ->
+    tx(fn seq ->
       case lock_task(task_id) do
         nil -> Repo.active_repo().rollback(:not_found)
-        task -> fun.(task)
+        task -> fun.(task, seq)
       end
     end)
   end
@@ -409,9 +407,7 @@ defmodule SuperPi.Durable.TaskEngine do
     end
   end
 
-  defp transition!(task, target_status, params) do
-    seq = Storage.next_seq!()
-
+  defp transition!(task, target_status, params, seq) do
     case task
          |> Fsmx.transition_changeset(target_status, Map.put(params, :updated_seq, seq), state_field: :status)
          |> Repo.update() do

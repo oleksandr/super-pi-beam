@@ -149,7 +149,7 @@ defmodule SuperPi.RPCAndTUITest do
       assert String.contains?(compact_out, "Compacted conversation")
 
       cluster_info = Cluster.status()
-      assert cluster_info.db_adapter == SuperPi.Repo.SQLite
+      assert cluster_info.db_adapter == SuperPi.Repo.active_repo()
 
       GenServer.stop(pid)
     end

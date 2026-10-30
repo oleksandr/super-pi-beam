@@ -182,7 +182,9 @@ defmodule SuperPi.Harness.WorkspaceTest do
       assert [%{"text" => "Hooked run complete!"}] = decoded["content"]
 
       # Verify SessionStart hook injected system section AND PreToolUse overwrite notice was prepended
-      derived = Context.derive(1)
+      # Sequences are not rolled back by the sandbox on PostgreSQL, so the id is not always 1.
+      conv_id = SuperPi.Durable.Storage.latest_conversation().id
+      derived = Context.derive(conv_id)
       assert Enum.any?(derived.system_sections, &(&1["content"] == "CUSTOM_HOOK_STARTUP_ACTIVE"))
 
       tool_msg = Enum.find(derived.messages, &(&1["role"] == "tool"))
@@ -190,7 +192,7 @@ defmodule SuperPi.Harness.WorkspaceTest do
       assert String.contains?(tool_msg["content"], "saw_rewritten=yes")
 
       # Verify dual-write transcript.jsonl and transcript_full.jsonl were created
-      transcript_file = Path.join([tmp_ws, "brain", "1", ".system_generated", "logs", "transcript.jsonl"])
+      transcript_file = Path.join([tmp_ws, "brain", to_string(conv_id), ".system_generated", "logs", "transcript.jsonl"])
       assert File.regular?(transcript_file)
 
       File.rm_rf!(tmp_ws)

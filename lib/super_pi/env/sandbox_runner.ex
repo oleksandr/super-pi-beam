@@ -81,8 +81,24 @@ defmodule SuperPi.Env.SandboxRunner do
         exec_with_spill(cmd, args, cd, spill_limit, parent)
       end)
 
+    # On timeout, kill the OS process tree before the task. Once the task dies,
+    # Exile kills the shell, its children are reparented to init, and walking
+    # `pgrep -P` from the shell no longer finds them.
+    outcome =
+      case Task.yield(task, timeout_ms) do
+        nil ->
+          kill_command_tree()
+          # Killing the shell ends the command, so the task may still return a result.
+          # The run timed out, so discard it.
+          Task.shutdown(task, :brutal_kill)
+          nil
+
+        reply ->
+          reply
+      end
+
     res =
-      case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      case outcome do
         {:ok, result} ->
           result
 
@@ -96,12 +112,6 @@ defmodule SuperPi.Env.SandboxRunner do
           {:error, %{type: "tool_crash", reason: inspect(reason)}}
 
         nil ->
-          receive do
-            {:os_pid, os_pid} -> kill_process_tree(os_pid)
-          after
-            0 -> :ok
-          end
-
           {:error, %{type: "tool_timeout", reason: "Timed out after #{timeout_ms}ms"}}
       end
 
@@ -235,6 +245,14 @@ defmodule SuperPi.Env.SandboxRunner do
       {:error, valid, _rest} -> valid
       {:incomplete, valid, _rest} -> valid
       valid when is_binary(valid) -> valid
+    end
+  end
+
+  defp kill_command_tree do
+    receive do
+      {:os_pid, os_pid} -> kill_process_tree(os_pid)
+    after
+      0 -> :ok
     end
   end
 

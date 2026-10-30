@@ -357,11 +357,34 @@ mise exec -- mix run examples/rpc_showcase_client.exs
 
 ## Running the Property-Based Test Suite
 
-Super-Pi-BEAM uses **`ExUnitProperties` (`StreamData`)** property-based testing across all core subsystems (`19` property suites, `14` unit/integration tests, and `1` doctest):
+Super-Pi-BEAM uses **`ExUnitProperties` (`StreamData`)** property-based testing across the core subsystems, plus unit and integration tests.
 
 ```bash
-MIX_ENV=test mise exec -- mix test --trace
+mix test                                   # whole suite on SQLite
+mix test test/super_pi/properties          # property tests only
+mix test --seed 0                          # fixed seed; a failure prints the shrunk input
 ```
+
+**PostgreSQL.** The same suite runs on PostgreSQL. Two more kinds of test need a real server and are excluded by default:
+
+```bash
+export SUPER_PI_STORAGE_BACKEND=postgres
+export DATABASE_URL=ecto://user:pass@localhost/super_pi_test   # the database must exist
+mix test                                   # whole suite on PostgreSQL
+
+# Real-concurrency tests and the migration property (tag :postgres).
+# The migration property migrates down, so give it its own scratch database.
+export SUPER_PI_MIGRATION_TEST_URL=ecto://user:pass@localhost/super_pi_migration
+mix test --only postgres
+```
+
+**Live providers.** Smoke tests against real provider APIs (cost money, need network) run only when asked and skip without a key:
+
+```bash
+GEMINI_API_KEY=... mix test --include live test/super_pi/ai/live_provider_test.exs
+```
+
+`.github/workflows/ci.yml` runs the SQLite suite, the PostgreSQL suite and the `:postgres` tests.
 
 ---
 

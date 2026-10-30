@@ -10,7 +10,7 @@ defmodule SuperPi.Durable.DurableMoreDefectsTest do
   sandbox serialises everything on one connection).
   """
   use SuperPi.DataCase, async: false
-  use Oban.Testing, repo: SuperPi.Repo.SQLite
+  use Oban.Testing, repo: SuperPi.Repo.active_repo()
 
   import ExUnit.CaptureLog
 

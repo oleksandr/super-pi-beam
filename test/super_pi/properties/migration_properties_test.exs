@@ -4,8 +4,13 @@ defmodule SuperPi.Properties.MigrationTest do
   full `up`, leaves the schema of a single `up`.
 
   The SQLite variant runs on a temporary database. The PostgreSQL variant runs only when
-  `DATABASE_URL` is set (`mix test --include postgres`). It checks the circular foreign keys
-  between `conversations`, `entries` and `tasks`, which SQLite does not enforce at creation.
+  `SUPER_PI_MIGRATION_TEST_URL` is set (`mix test --only postgres`). It checks the circular
+  foreign keys between `conversations`, `entries` and `tasks`, which SQLite does not enforce
+  at creation.
+
+  The variant migrates the database down, so point the variable at a scratch database that
+  no other test uses. It is not `DATABASE_URL` on purpose: the suite's own database would
+  lose its schema.
   """
   use ExUnit.Case, async: false
   use ExUnitProperties
@@ -72,7 +77,7 @@ defmodule SuperPi.Properties.MigrationTest do
 
   @tag :postgres
   property "any up and down sequence ends in the schema of a single up (PostgreSQL)" do
-    url = System.get_env("DATABASE_URL")
+    url = System.get_env("SUPER_PI_MIGRATION_TEST_URL") || flunk("SUPER_PI_MIGRATION_TEST_URL is not set")
     {:ok, pid} = SuperPi.Repo.Postgres.start_link(name: nil, url: url, pool_size: 2)
     SuperPi.Repo.Postgres.put_dynamic_repo(pid)
 
