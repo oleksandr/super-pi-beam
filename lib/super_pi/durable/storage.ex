@@ -122,6 +122,21 @@ defmodule SuperPi.Durable.Storage do
   end
 
   @doc """
+  The most recently created top-level conversation (no owning task), or `nil`.
+  Used by `--continue`.
+  """
+  def latest_conversation do
+    import Ecto.Query
+
+    Repo.one(
+      from c in Conversation,
+        where: is_nil(c.owner_task_id) and is_nil(c.parent_conversation_id),
+        order_by: [desc: c.id],
+        limit: 1
+    )
+  end
+
+  @doc """
   Opens or lazily creates the root conversation (`id = 1`) with its 5 built-in documents (`spec.md` §2.5).
   """
   def ensure_root_conversation!(agent_config \\ %{}) do

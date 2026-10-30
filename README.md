@@ -47,6 +47,26 @@ make build
 make test
 ```
 
+The application applies pending database migrations at startup (`config :super_pi, auto_migrate: false` turns this off). For PostgreSQL the database must already exist.
+
+### Using the CLI
+
+```bash
+export GEMINI_API_KEY=...          # a configured provider is required (see Model Providers)
+
+bin/super-pi                       # interactive chat in a terminal; one prompt from stdin in a pipe
+bin/super-pi chat                  # interactive chat (line REPL, streams text as it arrives; /exit to quit)
+bin/super-pi run "explain mix.exs" # one prompt, prints the answer; with no prompt it reads stdin
+bin/super-pi -p "hello" --model gemini-3-flash-preview
+bin/super-pi -c                    # continue the most recent conversation
+bin/super-pi --conversation 12     # resume conversation 12
+bin/super-pi --harness super-pi-planner -p "plan the refactor"   # an unknown harness is an error
+echo '{"prompt":"hi"}' | bin/super-pi --input-format stream-json  # one JSON result line per input line
+bin/super-pi gateway 4000          # the HTTP gateway is a separate command
+```
+
+There is no bundled full-screen TUI. `bin/super-pi chat` is a line REPL. A full-screen client can attach through the JSON-RPC server (`bin/super-pi rpc`) or the HTTP gateway. If a `super-pi-tui` executable is on `PATH`, `SuperPi.CLI.launch_interactive_tui/4` starts it against a local RPC server.
+
 ---
 
 ## Recommended Harness Evaluation: OpenCode

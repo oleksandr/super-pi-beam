@@ -9,6 +9,8 @@ config :super_pi, SuperPi.Repo.SQLite,
 
 config :super_pi, Oban, testing: :manual
 config :super_pi, :mock_llm, true
+# The test alias migrates before the suite; the sandbox must not race a second run.
+config :super_pi, auto_migrate: false
 
 config :logger, level: :warning
 

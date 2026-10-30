@@ -2,6 +2,10 @@
 # ==============================================================================
 # bin/super-pi — Main CLI entrypoint for the Super-Pi-BEAM Harness
 # Supports:
+#   super-pi                          Interactive chat (terminal) or one prompt from stdin (pipe)
+#   super-pi run [prompt]             Run one prompt; reads stdin when no prompt is given
+#   super-pi chat                     Interactive chat
+#   super-pi gateway [port]           Run the OpenAI-compatible HTTP gateway
 #   super-pi mcp                      Run standard Model Context Protocol server over stdio
 #   super-pi rpc [--port P]           Run JSON-RPC 2.0 server
 #   super-pi session list             List durable conversations
@@ -16,7 +20,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
 if [[ $# -eq 0 ]]; then
-  CMD="gateway"
+  if [[ -t 0 ]]; then CMD="chat"; else CMD="run"; fi
 elif [[ "$1" =~ ^[0-9]+$ || "$1" == "--verbose" || "$1" == "-v" ]]; then
   CMD="gateway"
 elif [[ "$1" =~ ^- ]]; then

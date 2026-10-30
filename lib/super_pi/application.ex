@@ -18,6 +18,7 @@ defmodule SuperPi.Application do
 
     children = [
       SuperPi.Repo.active_repo(),
+      SuperPi.Repo.Migrator,
       {Phoenix.PubSub, name: SuperPi.PubSub},
       {Registry, keys: :unique, name: SuperPi.Registry},
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.FileLockSupervisor},
