@@ -110,6 +110,12 @@ defmodule SuperPi.ACP.Server do
     {:ok, %__MODULE__{send: send_fun}}
   end
 
+  # The client owns the servers it handed over, so they end with its connection.
+  @impl true
+  def terminate(_reason, st) do
+    Enum.each(Map.keys(st.by_conversation), &SuperPi.MCP.Manager.stop_scope/1)
+  end
+
   @impl true
   def handle_info({:acp_line, line}, st) do
     case Jason.decode(line) do
@@ -248,7 +254,7 @@ defmodule SuperPi.ACP.Server do
     with {:ok, cwd} <- fetch_cwd(params),
          {:ok, harness} <- Session.pick_harness(params["_meta"]) do
       session = Session.create(st.principal, cwd, harness)
-      apply_mcp_servers(params["mcpServers"])
+      apply_mcp_servers(session, params["mcpServers"])
       st = attach(st, session)
 
       st
@@ -263,7 +269,7 @@ defmodule SuperPi.ACP.Server do
     with {:ok, cwd} <- fetch_cwd(params),
          {:ok, session_id} <- fetch_string(params, "sessionId"),
          {:ok, session} <- Session.load(st.principal, session_id, cwd) |> or_not_found(session_id) do
-      apply_mcp_servers(params["mcpServers"])
+      apply_mcp_servers(session, params["mcpServers"])
       st = attach(st, session)
       st = Enum.reduce(Session.replay(session), st, &notify_update(&2, session.id, &1))
 
@@ -560,16 +566,16 @@ defmodule SuperPi.ACP.Server do
   defp or_not_found({:ok, session}, _id), do: {:ok, session}
   defp or_not_found(:error, id), do: {:error, :not_found, "Session not found: #{id}"}
 
-  # MCP servers that the client hands over. The manager starts them and adds their tools to the
-  # catalog. A server that cannot start is logged by the manager and skipped.
-  defp apply_mcp_servers(servers) when is_list(servers) and servers != [] do
+  # MCP servers that the client hands over. The manager starts them for this session's conversation
+  # only, and `terminate/2` stops them. A server that cannot start is logged by the manager and skipped.
+  defp apply_mcp_servers(session, servers) when is_list(servers) and servers != [] do
     if Application.get_env(:super_pi, :mcp_clients, true),
-      do: SuperPi.MCP.Manager.add_servers(servers)
+      do: SuperPi.MCP.Manager.add_servers(session.conversation_id, servers)
 
     :ok
   end
 
-  defp apply_mcp_servers(_), do: :ok
+  defp apply_mcp_servers(_session, _servers), do: :ok
 
   defp auth_methods do
     if Auth.required?(),

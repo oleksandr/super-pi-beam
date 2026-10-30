@@ -422,6 +422,37 @@ defmodule SuperPi.ACPTest do
     conv_id
   end
 
+  describe "mcpServers" do
+    setup do
+      Application.put_env(:super_pi, :mcp_clients, true)
+      on_exit(fn -> Application.put_env(:super_pi, :mcp_clients, false) end)
+      SuperPi.MCP.Manager.stop_all()
+      on_exit(&SuperPi.MCP.Manager.stop_all/0)
+      {:ok, fake} = SuperPi.TestSupport.FakeHTTPMCP.start()
+      on_exit(fn -> SuperPi.TestSupport.FakeHTTPMCP.stop(fake) end)
+      {:ok, fake: fake}
+    end
+
+    test "the servers belong to the session's conversation and stop with the connection", %{
+      server: server,
+      fake: fake
+    } do
+      {sid, _resp, _notes} =
+        new_session(server, %{
+          "mcpServers" => [%{"type" => "http", "name" => "hosted", "url" => fake.url}]
+        })
+
+      conv_id = conv_of(sid)
+      tools = SuperPi.Durable.Doc.snapshot("conversation", conv_id, "pi.agent")["tools"]
+      assert Enum.any?(tools, &(&1["name"] == "mcp__hosted__echo"))
+      assert "mcp__hosted__echo" in SuperPi.MCP.Manager.tool_names(conv_id)
+      assert SuperPi.MCP.Manager.tool_names() == []
+
+      GenServer.stop(server)
+      assert SuperPi.MCP.Manager.tool_names(conv_id) == []
+    end
+  end
+
   describe "session/prompt" do
     test "streams message chunks and answers end_turn", %{server: server} do
       {sid, _, _} = new_session(server)

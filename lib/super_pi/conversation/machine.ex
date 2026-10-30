@@ -264,26 +264,10 @@ defmodule SuperPi.Conversation.Machine do
         end
 
       SuperPi.MCP.Manager.ensure_started(opts)
-      declare_mcp_tools(conv_id, agent)
+      SuperPi.MCP.Manager.declare_tools(conv_id)
     end
 
     :ok
-  end
-
-  # The agent document holds the tool list sent to the model, captured when the conversation was
-  # configured. Add the MCP tools that were registered after that.
-  defp declare_mcp_tools(conv_id, agent) do
-    declared = agent |> Map.get("tools", []) |> Enum.map(& &1["name"]) |> MapSet.new()
-
-    new_tools =
-      SuperPi.Tools.active_llm_tools()
-      |> Enum.filter(
-        &(String.starts_with?(&1["name"], "mcp__") and not MapSet.member?(declared, &1["name"]))
-      )
-
-    if new_tools != [] do
-      Storage.configure_agent!(conv_id, %{"tools" => Map.get(agent, "tools", []) ++ new_tools})
-    end
   end
 
   # --- State: :recovering ---

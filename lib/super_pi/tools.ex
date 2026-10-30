@@ -140,16 +140,17 @@ defmodule SuperPi.Tools do
   def register_tool!(%{"name" => name} = spec, exposure \\ :direct)
       when is_binary(name) and exposure in [:direct, :model_only, :codemode, :deferred, :hidden] do
     ensure_catalog_ets!()
-
-    # One key for the schema in the catalog, whatever the source called it.
-    entry =
-      spec
-      |> Map.drop(["input_schema", "inputSchema"])
-      |> Map.put("parameters", SuperPi.AI.ToolSchemas.parameters(spec, name))
-      |> Map.put("exposure", Atom.to_string(exposure))
-
+    entry = tool_entry(spec, exposure)
     :ets.insert(@catalog_ets, {name, entry})
     entry
+  end
+
+  @doc "The catalog form of a tool spec: one `\"parameters\"` key for the schema, whatever the source called it."
+  def tool_entry(%{"name" => name} = spec, exposure) do
+    spec
+    |> Map.drop(["input_schema", "inputSchema"])
+    |> Map.put("parameters", SuperPi.AI.ToolSchemas.parameters(spec, name))
+    |> Map.put("exposure", Atom.to_string(exposure))
   end
 
   @doc """
@@ -228,7 +229,7 @@ defmodule SuperPi.Tools do
     if String.starts_with?(tool_name, "mcp__") do
       with {:ok, ws} <- Workspace.resolve(ctx || %{}),
            true <- :net in ws.capabilities do
-        SuperPi.MCP.Manager.call_tool(tool_name, args)
+        SuperPi.MCP.Manager.call_tool(tool_name, args, conversation_scope(ctx))
       else
         false ->
           error_result(
@@ -259,6 +260,9 @@ defmodule SuperPi.Tools do
       end
     end
   end
+
+  defp conversation_scope(%{conversation_id: id}) when not is_nil(id), do: id
+  defp conversation_scope(_ctx), do: :global
 
   defp agent_cfg(%{conversation_id: id}) when not is_nil(id),
     do: SuperPi.Durable.Doc.snapshot("conversation", id, "pi.agent")

@@ -2,6 +2,7 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
   @moduledoc "Client over Streamable HTTP (and the HTTP+SSE fallback) against `FakeHTTPMCP`."
   use SuperPi.DataCase, async: false
 
+  alias SuperPi.Durable.{Doc, Storage}
   alias SuperPi.MCP.{Client, Manager}
   alias SuperPi.MCP.Transport.StreamableHTTP
   alias SuperPi.Plugins.Permissions
@@ -371,30 +372,91 @@ defmodule SuperPi.MCP.StreamableHTTPTest do
   end
 
   describe "servers handed over at run time (ACP mcpServers)" do
-    test "an HTTP server with header pairs is started and its tools join the catalog" do
+    defp conversation, do: Storage.create_conversation!(agent: %{"model" => "m"}).id
+
+    defp acp_server(fake, value) do
+      %{
+        "type" => "http",
+        "name" => "acp-http",
+        "url" => fake.url,
+        "headers" => [%{"name" => "x-test", "value" => value}]
+      }
+    end
+
+    defp declared(conv_id) do
+      (Doc.snapshot("conversation", conv_id, "pi.agent") || %{})
+      |> Map.get("tools", [])
+      |> Enum.map(& &1["name"])
+    end
+
+    test "an HTTP server with header pairs is started and its tools are declared for the conversation" do
       fake = server()
+      conv_id = conversation()
 
-      assert [%{server: "acp-http", status: status, tools: tools}] =
-               Manager.add_servers([
-                 %{
-                   "type" => "http",
-                   "name" => "acp-http",
-                   "url" => fake.url,
-                   "headers" => [%{"name" => "x-test", "value" => "1"}]
-                 }
-               ])
+      assert [%{server: "acp-http", status: :started, tools: tools}] =
+               Manager.add_servers(conv_id, [acp_server(fake, "1")])
 
-      assert status in [:started, :running]
       assert tools > 0
-      assert "mcp__acp-http__echo" in Manager.tool_names()
+      assert "mcp__acp-http__echo" in Manager.tool_names(conv_id)
+      assert "mcp__acp-http__echo" in declared(conv_id)
       assert Fake.requests(fake) |> Enum.any?(&(header(&1, "x-test") == "1"))
     end
 
+    test "another conversation neither sees nor reaches the tools" do
+      fake = server()
+      [a, b] = [conversation(), conversation()]
+      Manager.add_servers(a, [acp_server(fake, "1")])
+      Manager.declare_tools(b)
+
+      assert Manager.tool_names() == []
+      refute Enum.any?(Tools.active_llm_tools(), &(&1["name"] == "mcp__acp-http__echo"))
+      refute "mcp__acp-http__echo" in declared(b)
+
+      assert %{"is_error" => true, "output" => output} =
+               Manager.call_tool("mcp__acp-http__echo", %{"text" => "hi"}, b)
+
+      assert output =~ "not available"
+
+      assert %{"is_error" => false} =
+               Manager.call_tool("mcp__acp-http__echo", %{"text" => "hi"}, a)
+    end
+
+    test "two conversations with a same-named server get one process each, with their own headers" do
+      fake = server()
+      [a, b] = [conversation(), conversation()]
+
+      assert [%{status: :started}] = Manager.add_servers(a, [acp_server(fake, "a")])
+      assert [%{status: :started}] = Manager.add_servers(b, [acp_server(fake, "b")])
+      assert [%{status: :running}] = Manager.add_servers(b, [acp_server(fake, "b")])
+
+      Manager.call_tool("mcp__acp-http__echo", %{"text" => "hi"}, b)
+
+      calls = Fake.requests(fake, "tools/call")
+      assert [%{} = call] = calls
+      assert header(call, "x-test") == "b"
+    end
+
+    test "stop_scope stops the conversation's servers and leaves the others running" do
+      fake = server()
+      [a, b] = [conversation(), conversation()]
+      Manager.add_servers(a, [acp_server(fake, "a")])
+      Manager.add_servers(b, [acp_server(fake, "b")])
+
+      Manager.stop_scope(a)
+
+      assert Manager.tool_names(a) == []
+      assert "mcp__acp-http__echo" in Manager.tool_names(b)
+
+      assert %{"is_error" => true} =
+               Manager.call_tool("mcp__acp-http__echo", %{"text" => "hi"}, a)
+    end
+
     test "an entry with no name or no way to start is skipped, a bad one does not raise" do
-      assert [] = Manager.add_servers([%{"command" => "x"}, %{"name" => ""}])
+      conv_id = conversation()
+      assert [] = Manager.add_servers(conv_id, [%{"command" => "x"}, %{"name" => ""}])
 
       assert [%{status: {:error, :no_command_or_url}}] =
-               Manager.add_servers([%{"name" => "nothing"}])
+               Manager.add_servers(conv_id, [%{"name" => "nothing"}])
     end
   end
 end
