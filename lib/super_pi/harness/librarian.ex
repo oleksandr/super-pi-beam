@@ -18,7 +18,7 @@ defmodule SuperPi.Harness.Librarian do
 
   alias SuperPi.Plugins
 
-  use SuperPi.Harness,
+  use SuperPi.Harness.DSL,
     id: "super-pi-librarian",
     name: "Super-Pi Librarian",
     description: "Durable knowledge curation with scheduled capture, recall and web ingest",

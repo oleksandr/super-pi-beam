@@ -13,7 +13,7 @@ defmodule SuperPi.Harness.Planner do
 
   alias SuperPi.Plugins
 
-  use SuperPi.Harness,
+  use SuperPi.Harness.DSL,
     id: "super-pi-planner",
     name: "Super-Pi Planner",
     description: "Read-only architectural analysis, planning, and verification",

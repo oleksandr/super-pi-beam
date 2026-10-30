@@ -1,4 +1,4 @@
-.PHONY: all build test test-postgres test-cluster test-postgres-tls test-image pg-up pg-down clean
+.PHONY: all build test cyclecheck test-postgres test-cluster test-postgres-tls test-image pg-up pg-down clean
 
 all: build
 
@@ -7,6 +7,10 @@ build:
 
 test:
 	mise exec -- mix test --warnings-as-errors
+
+cyclecheck:
+	mise exec -- mix xref graph --format cycles --label compile-connected --fail-above 0
+	mise exec -- mix xref graph --format cycles --label compile --fail-above 0
 
 clean:
 	mise exec -- mix clean

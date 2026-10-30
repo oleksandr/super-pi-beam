@@ -23,7 +23,7 @@ defmodule SuperPi.Harness.Assistant do
 
   alias SuperPi.Plugins
 
-  use SuperPi.Harness,
+  use SuperPi.Harness.DSL,
     id: "super-pi-assistant",
     name: "Super-Pi Assistant",
     description: "Assistant for knowledge work: questions, web access, MCP connectors and delegation, no filesystem",

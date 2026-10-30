@@ -19,7 +19,7 @@ defmodule SuperPi.Harness.Code do
   alias SuperPi.Harness.Defaults
   alias SuperPi.Plugins
 
-  use SuperPi.Harness,
+  use SuperPi.Harness.DSL,
     id: "super-pi-code",
     name: "Super-Pi Code",
     description: "Repository coding agent: reversible edits, rules, skills, hooks, model cascading",

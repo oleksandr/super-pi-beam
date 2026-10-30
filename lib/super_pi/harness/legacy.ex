@@ -20,20 +20,19 @@ defmodule SuperPi.Harness.Legacy do
 
     quote do
       @behaviour SuperPi.Harness
-      @target unquote(target)
 
       @impl true
-      defdelegate id, to: @target
+      defdelegate id, to: unquote(target)
       @impl true
-      defdelegate name, to: @target
+      defdelegate name, to: unquote(target)
       @impl true
-      defdelegate description, to: @target
+      defdelegate description, to: unquote(target)
       @impl true
-      defdelegate extensions(opts \\ []), to: @target
+      defdelegate extensions(opts \\ []), to: unquote(target)
       @impl true
-      defdelegate agent_defaults(opts \\ []), to: @target
+      defdelegate agent_defaults(opts \\ []), to: unquote(target)
       @impl true
-      defdelegate capabilities, to: @target
+      defdelegate capabilities, to: unquote(target)
     end
   end
 end
