@@ -485,6 +485,23 @@ defmodule SuperPi.MCP.Server do
       catch
         :exit, _ -> :ok
       end
+
+      # The registry drops its entry when it sees the process exit, a moment after `stop`
+      # returns. Wait so that no caller can find a dead machine.
+      wait_unregistered(conv.id, 100)
+    end
+  end
+
+  defp wait_unregistered(_conv_id, 0), do: :ok
+
+  defp wait_unregistered(conv_id, tries) do
+    case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
+      [] ->
+        :ok
+
+      _ ->
+        Process.sleep(5)
+        wait_unregistered(conv_id, tries - 1)
     end
   end
 
