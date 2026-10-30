@@ -7,7 +7,7 @@
 ## Key Capabilities
 
 1. **Unified Always-Durable Engine (`SuperPi.Durable`)**:
-   - Runs on **SQLite WAL mode** (`ecto_sqlite3`) by default for single-node CLI/TUI/RPC usage and switches to **PostgreSQL** (`postgrex`) at runtime (`SUPER_PI_DB_ADAPTER=postgres`) for multi-node clusters.
+   - Runs on **SQLite WAL mode** (`ecto_sqlite3`) by default for single-node CLI/TUI/RPC usage and switches to **PostgreSQL** (`postgrex`) at runtime (`SUPER_PI_STORAGE_BACKEND=postgres`, single node). Multi-node clustering is not implemented.
    - Persists 6 core tables (`conversations`, `entries`, `tasks`, `submissions`, `documents`, `document_revisions`) with a monotonic commit sequence (`seq`).
    - Maintains 5 built-in scoped conversation documents (`pi.agent`, `pi.provider`, `pi.live`, `pi.inbox`, `pi.usage`) with `Jsonpatch` operational deltas and `asOf` fork reconstruction.
    - Batches high-frequency streaming updates via `SuperPi.Durable.DeferredFlusher` (`100ms` `:ets` staging and `1000ms` lazy database flush).
@@ -162,7 +162,7 @@ end
   Human-collaborative interactive showcase declaratively assembled from:
   `[Questionnaire, InlineBash, StructuredOutput, Handoff, Subagent]`.
 - **`SuperPi.Harness.Workspace` (`super-pi-workspace`)**:
-  Workspace development persona declaratively assembled from plugins (`Rules`, `Skills`, `Hooks`, `Permissions`, `SlashCommands`, `TranscriptLogger`).
+  Workspace development persona declaratively assembled from plugins (`SlashCommands`, `Rules`, `Skills`, `Hooks`, `Permissions`, `ProtectedPaths`, `ConfirmDestructive`, `TranscriptLogger`). It is the default harness for the Gateway, RPC and MCP entry points.
 - **`SuperPi.Harness.Planner` (`super-pi-planner`)**:
   Read-only architectural planning specialist with write protection.
 
@@ -174,14 +174,14 @@ bin/super-pi harnesses
 
 Output:
 ```text
-HARNESS ID            NAME                            DESCRIPTION
---------------------------------------------------------------------------------
-super-pi-agent        Super-Pi Standard Agent         Autonomous coding agent with 10-rule context derivation and safe sandbox
-super-pi-fast         Super-Pi Fast Responder         High-throughput fast response harness powered by gemini-3-flash-preview for rapid turnarounds
-super-pi-auto         Super-Pi Autonomous Enterprise HarnessAutonomous harness composed of security shields, git rollbacks, dynamic model cascading, and task ledger
-super-pi-interactive  Super-Pi Human-Collaborative Interactive HarnessInteractive harness composed of clarification questionnaires, inline shell evaluation, terminating outputs, and context distillation
-super-pi-workspace    Workspace Development Harness   Workspace development persona with hierarchical rules, progressive skills, lifecycle hooks, permissions, and transcript logging
-super-pi-planner      Super-Pi Architecture Planner   Read-only architectural analysis, planning, and verification harness
+HARNESS ID            NAME                                              DESCRIPTION
+-------------------------------------------------------------------------------------------------------
+super-pi-agent        Super-Pi Standard Agent                           Autonomous coding agent with 10-rule context derivation and 4-layer safe sandbox
+super-pi-fast         Super-Pi Fast Responder                           High-throughput fast response harness powered by gemini-3-flash-preview for rapid turnarounds
+super-pi-auto         Super-Pi Autonomous Enterprise Harness            Autonomous harness composed of security shields, git rollbacks, dynamic model cascading, and task ledge
+super-pi-interactive  Super-Pi Human-Collaborative Interactive Harness  Interactive harness composed of clarification questionnaires, inline shell evaluation, terminating outp
+super-pi-workspace    Workspace Development Harness                     Workspace development persona with hierarchical rules, progressive skills, lifecycle hooks, permissions
+super-pi-planner      Super-Pi Architecture Planner                     Read-only architectural analysis, planning, and verification harness
 ```
 
 ### General-Purpose Engine vs Coding Default
@@ -197,16 +197,16 @@ While Super-Pi-BEAM ships with software engineering defaults (`super-pi-agent`),
 
 ### Declarative Plugins Ecosystem (`SuperPi.Plugins`)
 
-Super-Pi-BEAM includes a library of **13 modular plugins** migrated from the Pi ecosystem and native BEAM patterns. Plugins implement the 12-hook `SuperPi.Extension` behaviour and can be assembled declaratively into any harness (even in separate external repositories):
+Super-Pi-BEAM includes a library of **19 modular plugins** migrated from the Pi ecosystem and native BEAM patterns. Plugins implement the 12-hook `SuperPi.Extension` behaviour and can be assembled declaratively into any harness (even in separate external repositories):
 
 | Plugin | Module | Impact / Feature |
 | :--- | :--- | :--- |
 | **`JevRouter`** | `SuperPi.Plugins.JevRouter` | **60–80% token cost reduction**: routes to reasoning model (`pro`) for planning, then cascades to fast model (`flash`) on first edit. |
-| **`Handoff`** | `SuperPi.Plugins.Handoff` | **Resets active context to 0 tokens**: distills conversation decisions into a clean, focused child thread. |
+| **`Handoff`** | `SuperPi.Plugins.Handoff` | **Context transfer**: stores a child conversation seeded with the summary and goal that the model supplies. It does not run the child. |
 | **`InlineBash`** | `SuperPi.Plugins.InlineBash` | **Saves 1 round-trip turn**: pre-evaluates `!{command}` expressions in user prompts directly on input. |
 | **`StructuredOutput`** | `SuperPi.Plugins.StructuredOutput` | **Zero-waste completion**: provides terminating `structured_output` tool (`control: %{"terminate" => true}`). |
-| **`Subagent`** | `SuperPi.Plugins.Subagent` | **Isolated context delegation**: spawns concurrent worker tasks under OTP supervision without polluting parent context. |
-| **`Questionnaire`** | `SuperPi.Plugins.Questionnaire` | **Human-in-the-loop alignment**: structured multi-choice clarification tool with recommended defaults. |
+| **`Subagent`** | `SuperPi.Plugins.Subagent` | **Not implemented**: calls return a `not_implemented` error and the tool is not advertised. |
+| **`Questionnaire`** | `SuperPi.Plugins.Questionnaire` | **Not implemented**: calls return a `not_implemented` error and the tool is not advertised. Preset answers work for headless runs. |
 | **`CustomCompaction`** | `SuperPi.Plugins.CustomCompaction` | **Tiered off-model summarization**: offloads compaction to fast models, preserving key decisions and tool cut-points. |
 | **`Todo`** | `SuperPi.Plugins.Todo` | **Stateful task ledger**: manages task checklists stored in durable session documents (`pi.live`), surviving branch forks. |
 | **`PromptCustomizer`** | `SuperPi.Plugins.PromptCustomizer` | **Adaptive guidance**: injects operational rules tailored specifically to active tools, keeping base prompts compact. |
@@ -214,6 +214,46 @@ Super-Pi-BEAM includes a library of **13 modular plugins** migrated from the Pi 
 | **`ConfirmDestructive`** | `SuperPi.Plugins.ConfirmDestructive` | **Execution gate**: intercepts dangerous bash operations (`rm -rf`, `DROP TABLE`, `git reset --hard`). |
 | **`GitCheckpoint`** | `SuperPi.Plugins.GitCheckpoint` | **Atomic rollback**: takes git stash checkpoints before tool mutations to support clean fork recovery. |
 | **`AutoCommit`** | `SuperPi.Plugins.AutoCommit` | **Turn finalization**: automatically stages and commits modified files when an agent run finishes. |
+| **`Rules`** | `SuperPi.Plugins.Rules` | **Repository rules**: injects `AGENTS.md`, `GEMINI.md` and `.agents/rules/*.md` into the system prompt within a token budget. |
+| **`Skills`** | `SuperPi.Plugins.Skills` | **Progressive skills**: discovers `SKILL.md` skills across workspace, global and built-in locations and indexes them. |
+| **`Hooks`** | `SuperPi.Plugins.Hooks` | **Lifecycle hooks**: runs `hooks.json` commands on `SessionStart`, `PreToolUse`, `PostToolUse` and `Stop`. |
+| **`Permissions`** | `SuperPi.Plugins.Permissions` | **Policy engine**: execution modes, command allow and deny lists, workspace confinement (on by default). |
+| **`SlashCommands`** | `SuperPi.Plugins.SlashCommands` | **Slash commands**: `/plan`, `/goal`, `/boost`, `/model`, `/mode` expansion on input. |
+| **`TranscriptLogger`** | `SuperPi.Plugins.TranscriptLogger` | **Transcripts**: writes JSONL transcripts under the app data directory and manages plugin metadata. |
+
+### Model Providers (`SuperPi.AI.Provider`)
+
+A provider owns one model API. `SuperPi.AI.Providers` picks the provider for a model:
+
+1. In mock mode (`config :super_pi, mock_llm: true`) only the echo provider is active. Mock mode never turns on by itself.
+2. Otherwise the first provider in `config :super_pi, :providers` whose `handles?/1` returns true serves the model. The default list is `[SuperPi.AI.Providers.Gemini]`.
+3. A model with no provider, or a provider without credentials, is an error. There is no silent fallback.
+
+To serve an unsupported or exotic model, implement the `SuperPi.AI.Provider` behaviour and register it first in the list:
+
+```elixir
+config :super_pi, :providers, [MyApp.MyProvider, SuperPi.AI.Providers.Gemini]
+```
+
+Only Gemini ships today. Anthropic and OpenAI are planned (Task 44).
+
+### Permissions and Remote Modes
+
+The `Permissions` plugin enforces three execution modes: `plan` (read-only), `accept-edits` (file edits, shell commands only from the allow list) and `auto`. Workspace confinement is on by default (`allowNonWorkspaceAccess: false`). Policy is data: `config :super_pi, :permissions`, `<app data dir>/settings.json`, and the session's `settingsOverride`. `permissions.deny` blocks matching shell commands in every mode.
+
+Gateway, RPC and MCP callers get a limited mode:
+
+```elixir
+config :super_pi, :permissions,
+  remote_default_mode: "accept-edits",
+  remote_max_mode: "accept-edits"
+```
+
+A caller may request any mode up to `remote_max_mode`. Gateway callers send the `x-super-pi-mode` header or an `execution_mode` body field. RPC callers set `agent.executionMode`. RPC callers cannot set `dangerouslySkipPermissions`, `settingsOverride` or workspace paths. Without config, a request can only tighten the mode. An unknown harness name is an error. Set `config :super_pi, fallback_harness: "<id>"` for a fallback, and `default_harness` to change the default.
+
+### Paths
+
+No path is hardcoded. Global config, app data and extra discovery roots resolve from app config, then the environment (`SUPER_PI_CONFIG_DIR`, `SUPER_PI_DATA_DIR`, `SUPER_PI_DISCOVERY_ROOTS`), then the operating system default (`:filename.basedir/2`). See `SuperPi.Discovery`.
 
 ### First-Class Plugin Configuration Architecture
 
@@ -252,7 +292,7 @@ To maintain clean separation of concerns, Super-Pi-BEAM enforces a 3-tier config
 | Configuration Scope | Target Storage / Location | What Belongs Here |
 | :--- | :--- | :--- |
 | **Tier 1: Declarative Files** | `lib/super_pi/harness/*.ex` (or application codebase) | **Architectural Structure & Constraints**: Plugin pipeline assembly, tool definitions, static execution boundaries (`timeout_ms`, `max_output_bytes`), auto-commit prefixes, and default cascade models. Kept in version control. |
-| **Tier 2: Environment Variables** | `.env` / Shell Environment | **Secrets & Infrastructure Adapters**: API tokens (`GEMINI_API_KEY`, `OPENAI_API_KEY`), database engine selection (`SUPER_PI_DB_ADAPTER=postgres`), port bindings (`SUPER_PI_GATEWAY_PORT`), fast operational overrides (`JEV_PLANNING_MODEL`, `JEV_IMPLEMENTATION_MODEL`), and host-specific path rules (`PROTECTED_PATHS`). Never committed. |
+| **Tier 2: Environment Variables** | `.env` / Shell Environment | **Secrets & Infrastructure Adapters**: API tokens (`GEMINI_API_KEY`, `OPENAI_API_KEY`), database engine selection (`SUPER_PI_STORAGE_BACKEND=postgres`), port bindings (`SUPER_PI_GATEWAY_PORT`), fast operational overrides (`JEV_PLANNING_MODEL`, `JEV_IMPLEMENTATION_MODEL`), and host-specific path rules (`PROTECTED_PATHS`). Never committed. |
 | **Tier 3: Durable Session State** | `pi.agent` document in SQLite / Postgres | **Dynamic Runtime Overrides**: Per-turn parameters passed by OpenCode, Gateway requests, or MCP callers (`model`, `temperature`, `thinking`, `effort`). Persisted durably across process crashes and branch forks. |
 
 ### Adding a Custom Harness
@@ -313,6 +353,9 @@ lib/
 ├── super_pi/
 │   ├── ai/
 │   │   ├── gemini_client.ex       # Live Google Gemini SSE streaming & tool-calling client
+│   │   ├── provider.ex            # Provider behaviour (escape hatch for custom models)
+│   │   ├── providers.ex           # Provider registry, fail-closed resolution, model catalog
+│   │   ├── providers/             # Gemini and Mock providers
 │   │   ├── stream_normalizer.ex   # Multi-provider SSE normalizer & partial JSON repair
 │   │   └── virtual_model.ex       # Virtual model router & UUIDv7 session affinity
 │   ├── code_mode/
@@ -335,17 +378,17 @@ lib/
 │   ├── extension.ex               # Unified 12-hook extension behaviour & pipeline
 │   ├── gateway/
 │   │   └── router.ex              # OpenAI-compatible HTTP Gateway with SSE streaming
-│   ├── harness/                   # Pluggable harness personas (Default, Autonomous, Interactive, AGY, Planner)
-│   │   ├── agy/                   # Encapsulated AGY submodules (discovery, brain, CLI, extensions)
-│   │   ├── agy.ex
+│   ├── harness/                   # Pluggable harness personas (Default, Fast, Autonomous, Interactive, Workspace, Planner)
 │   │   ├── autonomous.ex          # Enterprise autonomous harness with Jev cascading & auto-commit
 │   │   ├── default.ex             # Standard autonomous coding agent harness
 │   │   ├── interactive.ex         # Human-in-the-loop interactive harness with questionnaires & handoffs
-│   │   └── planner.ex             # Read-only architectural planning harness
+│   │   ├── fast.ex                # Low-latency harness
+│   │   ├── planner.ex             # Read-only architectural planning harness
+│   │   └── workspace.ex           # Declarative workspace harness (rules, skills, hooks, permissions, slash commands)
 │   ├── harness.ex                 # SuperPi.Harness behaviour contract & resolver
 │   ├── mcp/
 │   │   └── server.ex              # Model Context Protocol stdio server
-│   ├── plugins/                   # 13 reusable Pi ecosystem plugins (JevRouter, Handoff, InlineBash, etc.)
+│   ├── plugins/                   # 19 reusable plugins (JevRouter, Handoff, Permissions, Rules, Skills, etc.)
 │   ├── plugins.ex                 # SuperPi.Plugins registry, aliases, & option resolver
 │   ├── repo.ex                    # Runtime-switchable SQLite3 / Postgrex Ecto repo facade
 │   ├── rpc/
