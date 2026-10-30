@@ -294,7 +294,8 @@ defmodule SuperPi.MCP.Manager do
       end
     end
 
-    :ok
+    # Same owner and same reason, for the HTTP server's sessions.
+    SuperPi.MCP.Sessions.create_table()
   end
 
   defp sanitize(value), do: value |> to_string() |> String.replace(~r/[^A-Za-z0-9_-]/, "_")

@@ -112,6 +112,9 @@ defmodule SuperPi.Gateway.Router do
     send_json(conn, 200, %{"status" => "healthy"})
   end
 
+  # MCP over Streamable HTTP. Authentication, tracing and error handling above apply to it.
+  forward "/mcp", to: SuperPi.MCP.HTTPPlug
+
   get "/v1/models" do
     now = System.system_time(:second)
 
