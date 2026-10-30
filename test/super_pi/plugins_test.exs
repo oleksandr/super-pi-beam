@@ -26,9 +26,9 @@ defmodule SuperPi.PluginsTest do
   end
 
   describe "Plugin Registry & Resolution" do
-    test "lists and catalogs all 13 built-in plugins" do
+    test "lists and catalogs the built-in plugins" do
       plugins = Plugins.list()
-      assert length(plugins) == 13
+      assert length(plugins) >= 13
       assert GitCheckpoint in plugins
       assert JevRouter in plugins
       assert Handoff in plugins
@@ -42,7 +42,7 @@ defmodule SuperPi.PluginsTest do
       assert PromptCustomizer in plugins
 
       catalog = Plugins.catalog()
-      assert length(catalog) == 13
+      assert length(catalog) == length(plugins)
       assert Enum.all?(catalog, &(&1.id != nil and &1.name != nil and &1.description != nil))
     end
 

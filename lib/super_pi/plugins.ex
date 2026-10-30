@@ -26,7 +26,8 @@ defmodule SuperPi.Plugins do
     StructuredOutput,
     Subagent,
     Todo,
-    TranscriptLogger
+    TranscriptLogger,
+    Web
   }
 
   @built_in_plugins [
@@ -42,7 +43,8 @@ defmodule SuperPi.Plugins do
     Questionnaire,
     StructuredOutput,
     Subagent,
-    Todo
+    Todo,
+    Web
   ]
 
   @aliases %{
@@ -75,7 +77,8 @@ defmodule SuperPi.Plugins do
     "subagent" => Subagent,
     "todo" => Todo,
     "transcript_logger" => TranscriptLogger,
-    "transcript-logger" => TranscriptLogger
+    "transcript-logger" => TranscriptLogger,
+    "web" => Web
   }
 
   @doc """

@@ -41,6 +41,8 @@ defmodule SuperPi.Application do
       [
       {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.MCPClientSupervisor},
       {Task.Supervisor, name: SuperPi.ToolTaskSupervisor},
+      # Agent-controlled egress (`web_fetch`) gets its own pool, apart from LLM traffic.
+      {Finch, name: SuperPi.WebFinch, pools: %{default: [size: 25, conn_opts: [transport_opts: [timeout: 10_000]]]}},
       {TelemetryMetricsPrometheus.Core, name: SuperPi.Telemetry.reporter_name(), metrics: SuperPi.Telemetry.metrics()},
       SuperPi.Durable.DeferredFlusher,
       {Oban, Application.fetch_env!(:super_pi, Oban)}
