@@ -308,9 +308,56 @@ export SUPER_PI_GATEWAY_TOKEN="key-one,key-two"
 - **Ownership.** The principal that creates a conversation owns it. Another principal asking for it gets the same answer as for a conversation that does not exist (`-32004` over RPC; a new conversation over the Gateway). Gateway session ids are per principal. A conversation without an owner (created by the CLI) belongs to `anonymous`, so it is reachable only when authentication is off.
 - **MCP.** The MCP server runs over stdio for the process that started it. Its `tools/call` goes through the default harness's `before_tool` pipeline (permissions, protected paths), in the remote mode (`accept-edits` unless configured).
 
-### Gateway Model Names
+### HTTP Gateway Reference (OpenAI-compatible inference endpoint)
 
-`model` in `/v1/chat/completions` is either a harness id (`super-pi-planner`, a virtual model that picks an agent persona) or a model that a registered provider serves, which is passed through to that provider. Anything else returns `404 model_not_found`. A model whose provider has no key returns `503 provider_not_configured`. `GET /v1/models` lists what the gateway serves.
+**Contract.** The gateway implements the OpenAI **Chat Completions** API (`POST /v1/chat/completions`, `GET /v1/models`) as an *inference provider*. Any client that talks to an OpenAI-compatible provider (OpenCode, the AI SDK, LiteLLM, plain `curl`) can use it with `baseURL = http://127.0.0.1:4000/v1`.
+
+**One difference matters.** The gateway is an agent behind a model-shaped door, not a model proxy. The server runs the agent loop: it calls the LLM, executes tools (`read`, `write`, `edit`, `bash`, ...) itself under the permission policy, and returns the final answer. The client sends a prompt and gets text back. The client does not execute tools.
+
+```bash
+bin/super-pi gateway 4000            # loopback only; add --verbose for token-level logs
+```
+
+**Endpoints**
+
+| Endpoint | Behavior |
+|---|---|
+| `GET /` and `GET /health` | Status. Always open. |
+| `GET /v1/models` | Harness ids (virtual models) plus models of every configured provider. |
+| `POST /v1/chat/completions` | Chat completion, `stream: false` (JSON) or `stream: true` (SSE `chat.completion.chunk` events, ending with `data: [DONE]`). |
+
+**Request**
+
+```bash
+curl http://127.0.0.1:4000/v1/chat/completions \
+  -H 'Authorization: Bearer <key>' \            # only when tokens are configured
+  -H 'x-session-id: my-chat' \                  # keeps one conversation across requests
+  -H 'x-super-pi-mode: plan' \                  # optional, can only tighten the permission mode
+  -d '{"model": "super-pi-workspace", "stream": true,
+       "messages": [{"role": "user", "content": "List the files in lib/"}]}'
+```
+
+- `model`: a harness id (a virtual model that picks an agent persona with its own plugins and tools) or a model that a registered provider serves, which is passed through to that provider. Anything else returns `404 model_not_found`. A model whose provider has no key returns `503 provider_not_configured`. `GET /v1/models` lists exactly the accepted values.
+- **Sessions.** Conversations are durable and live on the server. Send `x-session-id` (or `session_id` in the body) to continue one, or `x-conversation-id` to attach by id. The first request of a session seeds the prior `messages`. Later requests use only the **last user message**, because the server already holds the history. Without a session id, every request starts a new conversation.
+- **Streaming.** Answer text arrives as `delta.content`. Reasoning and tool progress arrive as `delta.reasoning_content`, so a client can show them without mixing them into the answer. `usage` is reported once. A failed turn ends with `finish_reason: "error"`.
+- **Errors** use the OpenAI shape `{"error": {"message", "type", "code"}}`: `400 invalid_params`, `401 invalid_api_key`, `404 model_not_found`, `503 provider_not_configured`.
+- **Authentication, ownership and modes**: see *Authentication and Ownership* and *Permissions and Remote Modes*.
+
+**Limitations**
+
+| Not supported | What happens |
+|---|---|
+| Client-defined `tools`, `tool_choice`, `functions` | Ignored. The agent uses its own server-side tools. The response never contains `tool_calls`. |
+| `temperature`, `top_p`, `max_tokens`, `stop`, `seed`, `n`, `stream_options`, `response_format` | Ignored. One choice is returned. Use harness and agent configuration instead. |
+| Images and other non-text content parts | Dropped. Only text is read. |
+| `/v1/completions`, `/v1/embeddings`, `/v1/responses`, `/v1/audio/*`, `/v1/images/*` | `404`. |
+| Replaying history from the client | Later requests in a session use only the last user message. Edited or regenerated earlier messages are not applied. |
+| Concurrent requests on one session | Queued by the conversation, not run in parallel. |
+| A model that is not a harness or provider model | `404 model_not_found`. There is no silent fallback. |
+| Rate limits, quotas, per-key budgets | None. |
+| TLS | None. Put a reverse proxy in front for a non-loopback bind. |
+| Multi-node serving | Not implemented. Session ids live in the memory of one node. |
+| Token counts for streamed turns | Reported from the provider when it gives them. Not estimated. |
 
 ### Paths
 

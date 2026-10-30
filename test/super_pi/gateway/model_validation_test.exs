@@ -84,4 +84,41 @@ defmodule SuperPi.Gateway.ModelValidationTest do
     assert conn.status == 200
     assert conn.resp_body =~ "from acme"
   end
+
+  describe "GET /v1/models" do
+    defp models do
+      conn(:get, "/v1/models") |> Router.call(@opts) |> then(&Jason.decode!(&1.resp_body)["data"])
+    end
+
+    test "lists harness ids, and provider models only when the provider is configured" do
+      ids = models() |> Enum.map(& &1["id"])
+      assert "super-pi-workspace" in ids
+      refute "gemini-3-flash-preview" in ids
+
+      Application.put_env(:super_pi, :gemini_api_key, "test-key")
+      entry = Enum.find(models(), &(&1["id"] == "gemini-3-flash-preview"))
+      assert entry["owned_by"] == "gemini"
+    end
+
+    test "every listed model is accepted by chat completions validation" do
+      Application.put_env(:super_pi, :gemini_api_key, "test-key")
+      Application.put_env(:super_pi, :mock_llm, true)
+
+      # Listed harnesses run a real turn. Some commit their workspace when the turn ends
+      # (AutoCommit), so run in a scratch directory and never in the repository.
+      scratch = Path.join(System.tmp_dir!(), "mv_scratch_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(scratch)
+      original = File.cwd!()
+      File.cd!(scratch)
+
+      on_exit(fn ->
+        File.cd!(original)
+        File.rm_rf(scratch)
+      end)
+
+      for %{"id" => id} <- models() do
+        refute chat(id).status in [404, 503], "#{id} is listed but rejected"
+      end
+    end
+  end
 end

@@ -92,7 +92,24 @@ defmodule SuperPi.Gateway.Router do
         }
       end)
 
-    send_json(conn, 200, %{"object" => "list", "data" => models})
+    # Models that a configured provider serves are passed through, so they are valid `model` values.
+    provider_models =
+      SuperPi.AI.Providers.catalog()
+      |> Enum.filter(& &1["available"])
+      |> Enum.map(fn m ->
+        %{
+          "id" => m["id"],
+          "object" => "model",
+          "created" => now,
+          "owned_by" => m["provider"],
+          "permission" => [],
+          "root" => m["id"],
+          "parent" => nil,
+          "description" => m["label"]
+        }
+      end)
+
+    send_json(conn, 200, %{"object" => "list", "data" => models ++ provider_models})
   end
 
   post "/v1/chat/completions" do
