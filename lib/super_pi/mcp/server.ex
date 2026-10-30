@@ -17,7 +17,11 @@ defmodule SuperPi.MCP.Server do
   alias SuperPi.Durable.Storage
   alias SuperPi.Tools
 
-  @protocol_version "2024-11-05"
+  require Logger
+
+  # Newest first. The ceiling is 2025-06-18: 2026-07-28 replaces elicitation, sampling and roots
+  # with a different round trip, so no mainstream host negotiates it yet.
+  @supported_versions ["2025-06-18", "2025-03-26", "2024-11-05"]
   @server_name "super-pi-beam"
   @server_version "1.0.0"
 
@@ -75,10 +79,15 @@ defmodule SuperPi.MCP.Server do
 
   defp dispatch("initialize", params, id, state) do
     client_info = Map.get(params, "clientInfo", %{})
+    requested = Map.get(params, "protocolVersion")
+    version = negotiate_version(requested)
+
+    # Which version hosts really ask for is not recorded anywhere else.
+    Logger.debug("[MCP] initialize from #{inspect(Map.get(client_info, "name"))}: requested #{inspect(requested)}, answering #{version}")
 
     reply =
       jsonrpc_result(id, %{
-        "protocolVersion" => @protocol_version,
+        "protocolVersion" => version,
         "capabilities" => %{
           "tools" => %{"listChanged" => true},
           "resources" => %{"subscribe" => false, "listChanged" => false},
@@ -90,7 +99,7 @@ defmodule SuperPi.MCP.Server do
         }
       })
 
-    next_state = Map.put(state, :client_info, client_info)
+    next_state = state |> Map.put(:client_info, client_info) |> Map.put(:protocol_version, version)
     {:reply, reply, next_state}
   end
 
@@ -313,6 +322,17 @@ defmodule SuperPi.MCP.Server do
   defp dispatch(unknown_method, _params, id, state) do
     {:reply, jsonrpc_error(id, -32601, "Method not found: #{unknown_method}"), state}
   end
+
+  @doc "Protocol versions this server speaks, newest first."
+  def supported_versions, do: @supported_versions
+
+  @doc """
+  The version to answer `initialize` with: the client's when supported, else the newest supported.
+  The client then decides whether it can speak that version (MCP lifecycle, version negotiation).
+  """
+  @spec negotiate_version(term()) :: String.t()
+  def negotiate_version(requested) when requested in @supported_versions, do: requested
+  def negotiate_version(_requested), do: hd(@supported_versions)
 
   # --- Tool Schema Definitions ---
 
