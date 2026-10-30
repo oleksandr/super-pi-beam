@@ -538,6 +538,28 @@ defmodule SuperPi.RPC.Server do
 
   defp authorize("auth.login", _params, _client_state), do: :ok
 
+  # An answer is allowed only for a question on a conversation that the principal may use.
+  defp authorize("ui.respond", params, client_state) do
+    case principal(client_state) do
+      nil ->
+        {:error, -32001, "Unauthorized: call auth.login with a valid token first"}
+
+      principal ->
+        request_id = Map.get(params, "request_id")
+
+        case SuperPi.UI.Broker.conversation_of(request_id) do
+          # An unknown id is answered by the handler itself.
+          nil ->
+            :ok
+
+          conv_id ->
+            if Auth.authorized?(conv_id, principal),
+              do: :ok,
+              else: {:error, -32004, "No question is waiting under request_id #{request_id}"}
+        end
+    end
+  end
+
   defp authorize(_method, params, client_state) do
     case principal(client_state) do
       nil ->
@@ -698,6 +720,9 @@ defmodule SuperPi.RPC.Server do
       Phoenix.PubSub.subscribe(SuperPi.PubSub, "conversation:#{conv_id}")
     end
 
+    # `"interactive": true` says this client answers `ui_request` events (see `ui.respond`).
+    if Map.get(params, "interactive") == true, do: SuperPi.UI.Broker.register_responder(conv_id)
+
     watched = MapSet.put(client_state.watched_conversations, conv_id)
     next_state = Map.put(client_state, :watched_conversations, watched)
 
@@ -721,13 +746,17 @@ defmodule SuperPi.RPC.Server do
   defp dispatch_method("ui.respond", params, id, client_state) do
     req_id = Map.fetch!(params, "request_id")
     value = Map.get(params, "value")
-    pending = Map.put(client_state.pending_ui_requests, req_id, value)
-    next_state = Map.put(client_state, :pending_ui_requests, pending)
-    {jsonrpc_result(id, %{"resolved" => req_id, "value" => value}), next_state, []}
+
+    case SuperPi.UI.Broker.respond(req_id, value) do
+      :ok -> {jsonrpc_result(id, %{"resolved" => req_id}), client_state, []}
+      {:error, :unknown_request} -> {jsonrpc_error(id, -32004, "No question is waiting under request_id #{req_id}"), client_state, []}
+    end
   end
 
   defp dispatch_method("session.cancel", params, id, client_state) do
     conv_id = Map.fetch!(params, "conversation_id")
+    # A turn that waits for an answer cannot handle the cancel message until the wait ends.
+    SuperPi.UI.Broker.cancel_pending(conv_id)
 
     case Registry.lookup(SuperPi.Registry, {:conversation_machine, conv_id}) do
       [{pid, _}] ->

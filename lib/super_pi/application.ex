@@ -9,6 +9,7 @@ defmodule SuperPi.Application do
     SuperPi.Durable.DeferredFlusher.ensure_pending_ets!()
     SuperPi.Gateway.Router.ensure_session_cache!()
     SuperPi.MCP.Manager.create_tables()
+    SuperPi.UI.Broker.create_tables()
 
     gateway_children =
       if Application.get_env(:super_pi, :start_gateway, false) do

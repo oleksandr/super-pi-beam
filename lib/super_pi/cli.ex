@@ -373,6 +373,8 @@ defmodule SuperPi.CLI do
     read = Keyword.get(opts, :read_line, &IO.gets/1)
     write = Keyword.get(opts, :write, &IO.write/1)
     Phoenix.PubSub.subscribe(SuperPi.PubSub, "conversation:#{conv_id}")
+    # The terminal can answer `ask_question` calls from the model.
+    SuperPi.UI.Broker.register_responder(conv_id)
     write.("Super-Pi conversation #{conv_id}. /exit to quit.\n")
     code = chat_turns(conv_id, pid, flags, app_dir, read, write)
     Phoenix.PubSub.unsubscribe(SuperPi.PubSub, "conversation:#{conv_id}")
@@ -396,7 +398,7 @@ defmodule SuperPi.CLI do
             0
 
           text ->
-            chat_turn(conv_id, pid, text, flags, app_dir, write)
+            chat_turn(conv_id, pid, text, flags, app_dir, read, write)
             chat_turns(conv_id, pid, flags, app_dir, read, write)
         end
     end
@@ -404,9 +406,9 @@ defmodule SuperPi.CLI do
 
   # Runs one turn and prints text deltas as they arrive. Falls back to the final
   # message when the provider streamed nothing.
-  defp chat_turn(conv_id, pid, text, flags, app_dir, write) do
+  defp chat_turn(conv_id, pid, text, flags, app_dir, read, write) do
     task = Task.async(fn -> Machine.submit(pid, text, timeout: :infinity) end)
-    {result, streamed?} = await_turn(task, write, false)
+    {result, streamed?} = await_turn(task, conv_id, read, write, false)
 
     case result do
       {:ok, :handled_by_extension} ->
@@ -424,14 +426,18 @@ defmodule SuperPi.CLI do
     flags
   end
 
-  defp await_turn(%Task{ref: ref} = task, write, streamed?) do
+  defp await_turn(%Task{ref: ref} = task, conv_id, read, write, streamed?) do
     receive do
       {:conversation_event, _id, %{"type" => "text_delta", "delta" => delta}} when is_binary(delta) ->
         write.(delta)
-        await_turn(task, write, true)
+        await_turn(task, conv_id, read, write, true)
+
+      {:conversation_event, _id, %{"type" => "ui_request", "kind" => "questionnaire"} = request} ->
+        answer_questionnaire(conv_id, request, read, write)
+        await_turn(task, conv_id, read, write, streamed?)
 
       {:conversation_event, _id, _other} ->
-        await_turn(task, write, streamed?)
+        await_turn(task, conv_id, read, write, streamed?)
 
       {^ref, result} ->
         Process.demonitor(ref, [:flush])
@@ -440,6 +446,63 @@ defmodule SuperPi.CLI do
       {:DOWN, ^ref, :process, _pid, reason} ->
         {{:error, reason}, streamed?}
     end
+  end
+
+  # Asks each question on the terminal. Type an option number (several, comma separated, for a
+  # multi-select question) or free text. End of input cancels the question.
+  defp answer_questionnaire(conv_id, %{"request_id" => request_id, "questions" => questions}, read, write) do
+    answers =
+      Enum.reduce_while(questions, [], fn q, acc ->
+        case ask_one(q, read, write) do
+          {:ok, selected} -> {:cont, [%{"question" => q["question"], "selected" => selected} | acc]}
+          :eof -> {:halt, :eof}
+        end
+      end)
+
+    case answers do
+      :eof -> SuperPi.UI.Broker.cancel_pending(conv_id)
+      list -> SuperPi.UI.Broker.respond(request_id, Enum.reverse(list))
+    end
+  end
+
+  defp ask_one(q, read, write) do
+    options = List.wrap(q["options"])
+    multi? = q["is_multi_select"] == true
+
+    write.("\n? #{q["question"]}\n")
+    options |> Enum.with_index(1) |> Enum.each(fn {opt, i} -> write.("  #{i}) #{opt}\n") end)
+    if multi?, do: write.("  (several numbers, separated by commas)\n")
+
+    case read.("answer> ") do
+      line when line in [:eof, nil] ->
+        :eof
+
+      {:error, _} ->
+        :eof
+
+      line ->
+        case parse_choice(String.trim(line), options, multi?) do
+          nil -> ask_one(q, read, write)
+          selected -> {:ok, selected}
+        end
+    end
+  end
+
+  defp parse_choice("", _options, _multi?), do: nil
+
+  defp parse_choice(text, options, multi?) do
+    picks =
+      text
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.map(fn token ->
+        case Integer.parse(token) do
+          {n, ""} when n >= 1 and n <= length(options) -> Enum.at(options, n - 1)
+          _ -> token
+        end
+      end)
+
+    if multi?, do: picks, else: if(length(options) > 0 and match?({_, ""}, Integer.parse(text)), do: hd(picks), else: text)
   end
 
   defp read_stdin_prompt(opts) do

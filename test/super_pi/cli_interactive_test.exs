@@ -93,6 +93,48 @@ defmodule SuperPi.CLIInteractiveTest do
     end
   end
 
+  describe "chat answers ask_question on the terminal" do
+    defp question_responder(me) do
+      {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+      fn payload, _ctx ->
+        case Agent.get_and_update(calls, &{&1, &1 + 1}) do
+          0 ->
+            args = %{"questions" => [%{"question" => "Which backend?", "options" => ["SQLite", "PostgreSQL"]}]}
+            {:ok, Faults.tool_call_msg("q1", "ask_question", args)}
+
+          _ ->
+            send(me, {:history, inspect(payload.messages)})
+            {:ok, Faults.text_msg("thanks")}
+        end
+      end
+    end
+
+    test "a numbered answer reaches the model", %{opts: opts} do
+      opts = Keyword.merge(opts, extensions: [SuperPi.Plugins.Questionnaire], llm_responder: question_responder(self()))
+
+      {{0, ""}, out} = chat(opts, ["go", "2", "/exit"])
+
+      assert out =~ "? Which backend?"
+      assert out =~ "1) SQLite"
+      assert out =~ "thanks"
+      assert_received {:history, history}
+      assert history =~ "Answer: PostgreSQL"
+    end
+
+    test "free text is passed through, and end of input cancels the question", %{opts: opts} do
+      opts = Keyword.merge(opts, extensions: [SuperPi.Plugins.Questionnaire], llm_responder: question_responder(self()))
+      {{0, ""}, _out} = chat(opts, ["go", "MySQL", "/exit"])
+      assert_received {:history, history}
+      assert history =~ "Answer: MySQL"
+
+      opts2 = Keyword.put(opts, :llm_responder, question_responder(self()))
+      {{0, ""}, _} = chat(opts2, ["go"])
+      assert_received {:history, cancelled}
+      assert cancelled =~ "cancelled"
+    end
+  end
+
   describe "--harness" do
     test "an unknown harness is an error, not a silent fallback", %{opts: opts} do
       assert {1, message} = CLI.run(["--harness", "no-such-harness", "-p", "hi"], opts)

@@ -186,16 +186,19 @@ defmodule SuperPi.PluginsTest do
       }
     ]
 
-    test "does not advertise the ask_question tool" do
+    test "advertises the ask_question tool once" do
       {:ok, cfg} = Questionnaire.before_agent_start(%{"tools" => []}, %{})
-      refute Enum.any?(cfg["tools"], &(&1["name"] == "ask_question"))
+      assert Enum.count(cfg["tools"], &(&1["name"] == "ask_question")) == 1
+
+      {:ok, again} = Questionnaire.before_agent_start(cfg, %{})
+      assert Enum.count(again["tools"], &(&1["name"] == "ask_question")) == 1
     end
 
-    test "returns a not_implemented error and never picks an answer itself" do
-      res = Questionnaire.wrap_tool("ask_question", %{"questions" => @questions}, fn _ -> %{} end, %{})
+    test "with no client able to answer, the call fails and never picks an answer itself" do
+      res = Questionnaire.wrap_tool("ask_question", %{"questions" => @questions}, fn _ -> %{} end, %{conversation_id: 987_654})
 
       assert res["is_error"] == true
-      assert res["structured_output"]["status"] == "not_implemented"
+      assert res["structured_output"]["status"] == "no_interactive_client"
       refute res["output"] =~ "SQLite"
     end
 

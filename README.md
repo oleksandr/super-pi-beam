@@ -258,7 +258,7 @@ Super-Pi-BEAM includes a library of **19 modular plugins** migrated from the Pi 
 | **`InlineBash`** | `SuperPi.Plugins.InlineBash` | **Saves 1 round-trip turn**: pre-evaluates `!{command}` expressions in user prompts directly on input. |
 | **`StructuredOutput`** | `SuperPi.Plugins.StructuredOutput` | **Zero-waste completion**: provides terminating `structured_output` tool (`control: %{"terminate" => true}`). |
 | **`Subagent`** | `SuperPi.Plugins.Subagent` | **Not implemented**: calls return a `not_implemented` error and the tool is not advertised. |
-| **`Questionnaire`** | `SuperPi.Plugins.Questionnaire` | **Not implemented**: calls return a `not_implemented` error and the tool is not advertised. Preset answers work for headless runs. |
+| **`Questionnaire`** | `SuperPi.Plugins.Questionnaire` | **`ask_question` tool**: asks the user multiple-choice questions through a connected client (`bin/super-pi chat` asks on the terminal; an RPC client watches with `"interactive": true` and answers with `ui.respond`). With no client able to answer (the HTTP gateway, headless runs) the call fails at once. The conversation waits while a question is open; the wait is not stored across a crash. |
 | **`CustomCompaction`** | `SuperPi.Plugins.CustomCompaction` | **Tiered off-model summarization**: offloads compaction to fast models, preserving key decisions and tool cut-points. |
 | **`Todo`** | `SuperPi.Plugins.Todo` | **Stateful task ledger**: manages task checklists stored in durable session documents (`pi.live`), surviving branch forks. |
 | **`PromptCustomizer`** | `SuperPi.Plugins.PromptCustomizer` | **Adaptive guidance**: injects operational rules tailored specifically to active tools, keeping base prompts compact. |
