@@ -12,9 +12,8 @@ defmodule SuperPi.Harness.Code do
     `config :super_pi, :planning_model` and `:implementation_model`.
   - `Todo`, `PromptCustomizer`, `TranscriptLogger`.
 
-  It replaces `super-pi-workspace`, `super-pi-auto`, `super-pi-agent` and `super-pi-fast` of earlier
-  releases, which stay resolvable as aliases (`super-pi-agent` and `-fast` now map to
-  `super-pi-assistant`; use `--effort low` for the old fast profile).
+  It replaces `super-pi-workspace` and `super-pi-auto` of earlier releases. Both ids stay resolvable
+  as aliases. It is also the default harness (`SuperPi.Harness.default/0`).
   """
 
   alias SuperPi.Harness.Defaults

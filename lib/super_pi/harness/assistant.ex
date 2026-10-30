@@ -16,8 +16,9 @@ defmodule SuperPi.Harness.Assistant do
   `InlineBash` is not part of it. It runs `!{...}` outside the tool pipeline, so the workspace
   capability set cannot stop it, and a `none` workspace would still reach a shell.
 
-  `executionMode` is `accept-edits`, the ceiling too. It replaces `super-pi-interactive` and, for
-  callers that sent no harness, `super-pi-agent`.
+  `executionMode` is `accept-edits`, the ceiling too. It replaces `super-pi-interactive`,
+  `super-pi-agent` and `super-pi-fast` of earlier releases. All three ids stay resolvable as aliases.
+  `super-pi-fast` no longer sets a low effort: use `--effort low`.
   """
 
   alias SuperPi.Plugins
