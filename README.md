@@ -386,7 +386,7 @@ bin/super_pi eval "SuperPi.Release.rollback(20261030000001)"   # back to a versi
 
 **Gateway sessions** (`x-session-id` to conversation) are stored in the `gateway_sessions` table, so they survive a restart and are shared by every node. Idle sessions expire after `gateway_session_ttl_days` (90), and the table keeps at most `gateway_session_limit` rows (100,000).
 
-TLS is tested against a real server: `mix test --only postgres test/super_pi/postgres_tls_test.exs` (see the file for the variables).
+TLS is tested against a real server: `make test-postgres-tls` creates the certificates, starts PostgreSQL with TLS in Docker and runs `test/super_pi/postgres_tls_test.exs`. To use your own server, see the file for the variables.
 
 ### Multi-Node Cluster
 
@@ -610,7 +610,17 @@ mix test --only postgres
 GEMINI_API_KEY=... mix test --include live test/super_pi/ai/live_provider_test.exs
 ```
 
-Run the SQLite suite with `mix test`, the PostgreSQL suite with `SUPER_PI_STORAGE_BACKEND=postgres mix test`, the `:postgres` tests with `--only postgres`, and the multi-node suite with `make test-cluster`. The project has no CI service configuration.
+**Make targets.** The project has no CI service. Run these before a merge:
+
+| Target | Runs |
+| --- | --- |
+| `make test` | SQLite suite. Compiler warnings fail the run. |
+| `make test-postgres` | The suite and the `:postgres` tests against PostgreSQL 18 in Docker. |
+| `make test-cluster` | Multi-node tests. Needs `DATABASE_URL`; `make pg-up` starts a PostgreSQL for it. |
+| `make test-postgres-tls` | TLS tests against PostgreSQL in Docker. |
+| `make test-image` | Builds the Docker image, starts it and probes `/health`. |
+
+To run the PostgreSQL suite against your own server, use the commands in *PostgreSQL* above.
 
 ---
 

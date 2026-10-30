@@ -20,7 +20,11 @@ defmodule SuperPi.QuestionnaireFlowTest do
     me = self()
     Phoenix.PubSub.subscribe(SuperPi.PubSub, "conversation:#{conv_id}")
     Broker.register_responder(conv_id)
-    task = Task.async(fn -> send(me, :asking) && ask(conv_id) end)
+    task =
+      Task.async(fn ->
+        send(me, :asking)
+        ask(conv_id)
+      end)
     assert_receive {:conversation_event, ^conv_id, %{"type" => "ui_request"} = event}, 5_000
     {task, event}
   end

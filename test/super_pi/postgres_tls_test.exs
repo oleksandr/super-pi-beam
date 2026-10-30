@@ -35,7 +35,8 @@ defmodule SuperPi.PostgresTLSTest do
   # Returns `{:ok, ssl_in_use?}` or `{:error, reason}`.
   defp connect(env) do
     System.put_env("SUPER_PI_STORAGE_BACKEND", "postgres")
-    System.put_env("DATABASE_URL", @url)
+    # Read at run time: when the variable is unset at compile time the module is skipped.
+    System.put_env("DATABASE_URL", System.fetch_env!("SUPER_PI_TLS_TEST_URL"))
     Enum.each(["SUPER_PI_DB_SSL", "SUPER_PI_DB_SSL_CA", "SUPER_PI_DB_SSL_SNI"], &System.delete_env/1)
     Enum.each(env, fn {k, v} -> System.put_env(k, v) end)
 
