@@ -366,7 +366,7 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 ```
 
 - `model`: a harness id (a virtual model that picks an agent persona with its own plugins and tools) or a model that a registered provider serves, which is passed through to that provider. Anything else returns `404 model_not_found`. A model whose provider has no key returns `503 provider_not_configured`. `GET /v1/models` lists exactly the accepted values.
-- **Sessions.** Conversations are durable and live on the server. Send `x-session-id` (or `session_id` in the body) to continue one, or `x-conversation-id` to attach by id. The first request of a session seeds the prior `messages`. Later requests use only the **last user message**, because the server already holds the history. Without a session id, every request starts a new conversation.
+- **Sessions.** Conversations are durable and live on the server. Send `x-session-id` (or `session_id` in the body) to continue one, or `x-conversation-id` to attach by id. The conversations are stored, but the session-id-to-conversation map is held in memory: after a gateway restart the same `x-session-id` starts a new conversation (Task 47 stores the map in the database). `x-conversation-id` keeps working across restarts. The first request of a session seeds the prior `messages`. Later requests use only the **last user message**, because the server already holds the history. Without a session id, every request starts a new conversation.
 - **Streaming.** Answer text arrives as `delta.content`. Reasoning and tool progress arrive as `delta.reasoning_content`, so a client can show them without mixing them into the answer. `usage` is reported once. A failed turn ends with `finish_reason: "error"`.
 - **Errors** use the OpenAI shape `{"error": {"message", "type", "code"}}`: `400 invalid_params`, `401 invalid_api_key`, `404 model_not_found`, `503 provider_not_configured`.
 - **Authentication, ownership and modes**: see *Authentication and Ownership* and *Permissions and Remote Modes*.
@@ -428,7 +428,7 @@ To maintain clean separation of concerns, Super-Pi-BEAM enforces a 3-tier config
 | Configuration Scope | Target Storage / Location | What Belongs Here |
 | :--- | :--- | :--- |
 | **Tier 1: Declarative Files** | `lib/super_pi/harness/*.ex` (or application codebase) | **Architectural Structure & Constraints**: Plugin pipeline assembly, tool definitions, static execution boundaries (`timeout_ms`, `max_output_bytes`), auto-commit prefixes, and default cascade models. Kept in version control. |
-| **Tier 2: Environment Variables** | `.env` / Shell Environment | **Secrets & Infrastructure Adapters**: API tokens (`GEMINI_API_KEY`, `OPENAI_API_KEY`), database engine selection (`SUPER_PI_STORAGE_BACKEND=postgres`), port bindings (`SUPER_PI_GATEWAY_PORT`), fast operational overrides (`JEV_PLANNING_MODEL`, `JEV_IMPLEMENTATION_MODEL`), and host-specific path rules (`PROTECTED_PATHS`). Never committed. |
+| **Tier 2: Environment Variables** | `.env` / Shell Environment | **Secrets & Infrastructure Adapters**: API tokens (`GEMINI_API_KEY`, `SUPER_PI_GATEWAY_TOKEN`), database engine selection (`SUPER_PI_STORAGE_BACKEND=postgres`, `DATABASE_URL`), tracing (`OTEL_EXPORTER_OTLP_ENDPOINT`), fast operational overrides (`JEV_PLANNING_MODEL`, `JEV_IMPLEMENTATION_MODEL`), and host-specific path rules (`PROTECTED_PATHS`). Never committed. |
 | **Tier 3: Durable Session State** | `pi.agent` document in SQLite / Postgres | **Dynamic Runtime Overrides**: Per-turn parameters passed by OpenCode, Gateway requests, or MCP callers (`model`, `temperature`, `thinking`, `effort`). Persisted durably across process crashes and branch forks. |
 
 ### Adding a Custom Harness
@@ -517,6 +517,9 @@ lib/
 │   │   ├── providers/             # Gemini and Mock providers
 │   │   ├── stream_normalizer.ex   # Multi-provider SSE normalizer & partial JSON repair
 │   │   └── virtual_model.ex       # Virtual model router & UUIDv7 session affinity
+│   ├── auth.ex                    # Bearer tokens and conversation ownership
+│   ├── cli.ex                     # Unified CLI (run, chat, flags, subcommands)
+│   ├── cluster.ex                 # Runtime topology report (multi-node not implemented)
 │   ├── code_mode/
 │   │   └── journal.ex             # Deterministic Codemode crash-and-replay journal
 │   ├── compaction.ex              # 4-mode context compaction & tool-pair cut-point finder
@@ -534,9 +537,11 @@ lib/
 │   │   ├── file_lock.ex           # Per-path Registry-keyed advisory FileLock
 │   │   ├── local.ex               # Local filesystem & gitignore-aware scanner
 │   │   └── sandbox_runner.ex      # Unlinked Task supervisor with :max_heap_size & 4 MiB spill
+│   ├── discovery.ex               # Config, data and discovery paths (app env, env vars, OS defaults)
 │   ├── extension.ex               # Unified 12-hook extension behaviour & pipeline
 │   ├── gateway/
-│   │   └── router.ex              # OpenAI-compatible HTTP Gateway with SSE streaming
+│   │   ├── router.ex              # OpenAI-compatible HTTP Gateway with SSE streaming
+│   │   └── server.ex              # Bandit listener; refuses a non-loopback bind without a token
 │   ├── harness/                   # Pluggable harness personas (Default, Fast, Autonomous, Interactive, Workspace, Planner)
 │   │   ├── autonomous.ex          # Enterprise autonomous harness with Jev cascading & auto-commit
 │   │   ├── default.ex             # Standard autonomous coding agent harness
@@ -546,15 +551,22 @@ lib/
 │   │   └── workspace.ex           # Declarative workspace harness (rules, skills, hooks, permissions, slash commands)
 │   ├── harness.ex                 # SuperPi.Harness behaviour contract & resolver
 │   ├── mcp/
+│   │   ├── client.ex              # MCP client for one stdio server
+│   │   ├── manager.ex             # Starts configured MCP servers, exposes mcp__<server>__<tool>
 │   │   └── server.ex              # Model Context Protocol stdio server
 │   ├── plugins/                   # 19 reusable plugins (JevRouter, Handoff, Permissions, Rules, Skills, etc.)
 │   ├── plugins.ex                 # SuperPi.Plugins registry, aliases, & option resolver
 │   ├── repo.ex                    # Runtime-switchable SQLite3 / Postgrex Ecto repo facade
+│   ├── repo/
+│   │   └── migrator.ex            # Applies pending migrations at startup
 │   ├── rpc/
 │   │   └── server.ex              # JSON-RPC 2.0 server with K=2 ack-clocked backpressure
+│   ├── telemetry.ex               # OpenTelemetry spans and Prometheus metrics
 │   ├── tools.ex                   # 7 built-in 3-channel tools & 5 ToolExposure modes
 │   ├── tui/
 │   │   └── owl.ex                 # Interactive Owl terminal UI
+│   ├── ui/
+│   │   └── broker.ex              # Routes ask_question requests to a client and answers back
 │   └── workers/
 │       └── oban_workers.ex        # Oban workers (generation_retry, compaction, verification, subagents)
 examples/
