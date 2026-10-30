@@ -55,7 +55,7 @@ defmodule SuperPi.MixProject do
 
       # Safe Execution Environment & Native Rustler NIF
       {:exile, "~> 0.10"},
-      {:muontrap, "~> 1.5"},
+      {:muontrap, "~> 2.0"},
       {:rustler, "~> 0.35", runtime: false},
 
       # TUI, PubSub, Cluster, & Telemetry
