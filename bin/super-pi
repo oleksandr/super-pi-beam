@@ -7,7 +7,7 @@
 #   super-pi chat                     Interactive chat
 #   super-pi gateway [port]           Run the OpenAI-compatible HTTP gateway
 #   super-pi mcp                      Run standard Model Context Protocol server over stdio
-#   super-pi rpc [--port P]           Run JSON-RPC 2.0 server
+#   super-pi rpc [--port P|--unix PATH|--stdio]  Run JSON-RPC 2.0 server
 #   super-pi session list             List durable conversations
 #   super-pi session show <ID>        Display conversation details
 # ==============================================================================
@@ -70,6 +70,8 @@ case "${CMD}" in
 
   mcp)
     if [[ $# -eq 0 ]]; then
+      # stdout carries protocol messages only; logs go to stderr.
+      export SUPER_PI_LOG_STDERR=1
       exec mise exec -- mix run -e "SuperPi.MCP.Server.run_stdio()"
     else
       exec mise exec -- mix run -e '
@@ -81,13 +83,41 @@ case "${CMD}" in
     ;;
 
   rpc)
-    PORT="${1:-4001}"
-    if ! [[ "${PORT}" =~ ^[0-9]+$ ]]; then
+    # super-pi rpc [PORT | --port PORT]   JSON-RPC over TCP on 127.0.0.1 (default 4001)
+    # super-pi rpc --unix PATH            JSON-RPC over a Unix domain socket (mode 0600)
+    # super-pi rpc --stdio                JSON-RPC over stdin/stdout, for an IDE that starts it as a subprocess
+    MODE="tcp"; PORT="4001"; SOCK=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --stdio) MODE="stdio"; shift ;;
+        --unix) MODE="unix"; SOCK="${2:-}"; shift 2 || { echo "Error: --unix needs a path" >&2; exit 1; } ;;
+        --port) PORT="${2:-}"; shift 2 || { echo "Error: --port needs a number" >&2; exit 1; } ;;
+        *) PORT="$1"; shift ;;
+      esac
+    done
+    if [[ "${MODE}" == "tcp" ]] && ! [[ "${PORT}" =~ ^[0-9]+$ ]]; then
       echo "Error: port must be a valid numeric integer, got: ${PORT}" >&2
       exit 1
     fi
-    echo "Starting SuperPi.RPC.Server on port ${PORT}..." >&2
-    exec mise exec -- mix run --no-halt -e "SuperPi.RPC.Server.start_link(port: ${PORT}); Process.sleep(:infinity)"
+    if [[ "${MODE}" == "unix" && -z "${SOCK}" ]]; then
+      echo "Error: --unix needs a path" >&2
+      exit 1
+    fi
+    case "${MODE}" in
+      stdio)
+        export SUPER_PI_LOG_STDERR=1
+        exec mise exec -- mix run -e "SuperPi.RPC.Server.run_stdio(); System.halt(0)"
+        ;;
+      unix)
+        export SUPER_PI_RPC_SOCKET="${SOCK}"
+        echo "Starting SuperPi.RPC.Server on unix socket ${SOCK}..." >&2
+        exec mise exec -- mix run --no-halt -e 'SuperPi.RPC.Server.start_link(socket_path: System.get_env("SUPER_PI_RPC_SOCKET")); Process.sleep(:infinity)'
+        ;;
+      *)
+        echo "Starting SuperPi.RPC.Server on port ${PORT}..." >&2
+        exec mise exec -- mix run --no-halt -e "SuperPi.RPC.Server.start_link(port: ${PORT}); Process.sleep(:infinity)"
+        ;;
+    esac
     ;;
 
   harness|harnesses|models|agents|plugin|plugins|remote-control|run|chat)

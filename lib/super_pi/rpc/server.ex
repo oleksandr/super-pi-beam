@@ -179,25 +179,30 @@ defmodule SuperPi.RPC.Server do
 
   @impl true
   def init(opts) do
-    port = Keyword.get(opts, :port, 0)
+    base = [:binary, packet: :line, active: false, buffer: 1_000_000, packet_size: 1_000_000]
 
-    {:ok, listen_socket} =
-      :gen_tcp.listen(port, [
-        :binary,
-        packet: :line,
-        active: false,
-        reuseaddr: true,
-        ip: {127, 0, 0, 1},
-        buffer: 1_000_000,
-        packet_size: 1_000_000
-      ])
+    {listen_socket, actual_port, socket_path} =
+      case Keyword.get(opts, :socket_path) do
+        nil ->
+          {:ok, sock} =
+            :gen_tcp.listen(Keyword.get(opts, :port, 0), base ++ [reuseaddr: true, ip: {127, 0, 0, 1}])
 
-    {:ok, actual_port} = :inet.port(listen_socket)
+          {:ok, actual_port} = :inet.port(sock)
+          {sock, actual_port, nil}
+
+        path ->
+          # A Unix socket is reachable only by processes that can open the file.
+          # Remove a stale file from an earlier run, and restrict the new one to the owner.
+          File.rm(path)
+          {:ok, sock} = :gen_tcp.listen(0, base ++ [ifaddr: {:local, to_charlist(path)}])
+          File.chmod!(path, 0o600)
+          {sock, nil, path}
+      end
+
     server_pid = self()
-
     spawn_link(fn -> accept_loop(listen_socket, server_pid) end)
 
-    {:ok, %__MODULE__{listen_socket: listen_socket, port: actual_port}}
+    {:ok, %__MODULE__{listen_socket: listen_socket, port: actual_port, socket_path: socket_path}}
   end
 
   @impl true
@@ -206,8 +211,9 @@ defmodule SuperPi.RPC.Server do
   end
 
   @impl true
-  def terminate(_reason, %__MODULE__{listen_socket: sock}) do
+  def terminate(_reason, %__MODULE__{listen_socket: sock, socket_path: path}) do
     if sock, do: :gen_tcp.close(sock)
+    if path, do: File.rm(path)
     :ok
   end
 
@@ -230,7 +236,7 @@ defmodule SuperPi.RPC.Server do
   defp serve_client_socket(sock, client_state) do
     receive do
       :socket_ready ->
-        :inet.setopts(sock, active: :once)
+        rearm(sock)
         client_loop(sock, client_state, "")
     after
       5_000 ->
@@ -244,16 +250,16 @@ defmodule SuperPi.RPC.Server do
         new_buf = buf <> chunk
         {lines, rem_buf} = split_lines(new_buf)
         next_state = process_lines(sock, lines, client_state)
-        :inet.setopts(sock, active: :once)
+        rearm(sock)
         client_loop(sock, next_state, rem_buf)
 
       {:async_rpc_reply, reply, notifs} ->
         if reply do
-          :gen_tcp.send(sock, Jason.encode!(reply) <> "\n")
+          send_line(sock, Jason.encode!(reply) <> "\n")
         end
 
         Enum.each(notifs, fn notif ->
-          :gen_tcp.send(sock, Jason.encode!(notif) <> "\n")
+          send_line(sock, Jason.encode!(notif) <> "\n")
         end)
 
         client_loop(sock, client_state, buf)
@@ -263,7 +269,7 @@ defmodule SuperPi.RPC.Server do
           {next_state, notifications} = enqueue_watch_event(client_state, event_payload)
 
           Enum.each(notifications, fn notif ->
-            :gen_tcp.send(sock, Jason.encode!(notif) <> "\n")
+            send_line(sock, Jason.encode!(notif) <> "\n")
           end)
 
           client_loop(sock, next_state, buf)
@@ -278,13 +284,13 @@ defmodule SuperPi.RPC.Server do
         Enum.each(Map.get(client_state, :submit_tasks, []), fn pid ->
           Process.exit(pid, :kill)
         end)
-        :gen_tcp.close(sock)
+        close_transport(sock)
 
       {:tcp_error, ^sock, _reason} ->
         Enum.each(Map.get(client_state, :submit_tasks, []), fn pid ->
           Process.exit(pid, :kill)
         end)
-        :gen_tcp.close(sock)
+        close_transport(sock)
     end
   end
 
@@ -320,17 +326,55 @@ defmodule SuperPi.RPC.Server do
           {reply, next_state, notifications} = handle_rpc_payload(line, client_state)
 
           if reply do
-            :gen_tcp.send(sock, Jason.encode!(reply) <> "\n")
+            send_line(sock, Jason.encode!(reply) <> "\n")
           end
 
           Enum.each(notifications, fn notif ->
-            :gen_tcp.send(sock, Jason.encode!(notif) <> "\n")
+            send_line(sock, Jason.encode!(notif) <> "\n")
           end)
 
           process_lines(sock, rest, next_state)
       end
     end
   end
+
+  # --- stdio transport ---
+
+  @doc """
+  Serves one client on standard input and output until stdin closes. One JSON-RPC message
+  per line in each direction.
+
+  stdout carries only protocol lines, so route logs to stderr first (`bin/super-pi rpc --stdio`
+  does this with `SUPER_PI_LOG_STDERR=1`).
+  """
+  def run_stdio(opts \\ []) do
+    parent = self()
+    # Raw bytes by default, so UTF-8 JSON passes through unchanged. A test can inject a reader.
+    read_line = Keyword.get(opts, :read_line, fn -> IO.binread(:stdio, :line) end)
+    spawn_link(fn -> read_stdin(parent, read_line) end)
+    client_loop(:stdio, new_client_state(), "")
+  end
+
+  defp read_stdin(parent, read_line) do
+    case read_line.() do
+      line when is_binary(line) ->
+        send(parent, {:tcp, :stdio, line})
+        read_stdin(parent, read_line)
+
+      _eof_or_error ->
+        send(parent, {:tcp_closed, :stdio})
+    end
+  end
+
+  # `sock` is a socket, or `:stdio`. The client loop is the same for both.
+  defp send_line(:stdio, data), do: IO.binwrite(:stdio, data)
+  defp send_line(sock, data), do: :gen_tcp.send(sock, data)
+
+  defp rearm(:stdio), do: :ok
+  defp rearm(sock), do: :inet.setopts(sock, active: :once)
+
+  defp close_transport(:stdio), do: :ok
+  defp close_transport(sock), do: :gen_tcp.close(sock)
 
   # --- Method Parameter Validation ---
 
@@ -784,8 +828,10 @@ defmodule SuperPi.RPC.Server do
         nil ->
           base_agent = Permissions.sanitize_remote_agent(Map.get(params, "agent", %{}))
 
+          model_opts = if model = Map.get(base_agent, "model"), do: [model: model], else: []
+
           defaults =
-            harness.agent_defaults(model: Map.get(base_agent, "model"))
+            harness.agent_defaults(model_opts)
             |> Permissions.apply_remote_mode(Map.get(base_agent, "executionMode"))
 
           agent_cfg = Map.merge(defaults, base_agent)

@@ -1,5 +1,10 @@
 import Config
 
+# stdio servers (`rpc --stdio`, `mcp`) use stdout for protocol messages only. Logs go to stderr.
+if System.get_env("SUPER_PI_LOG_STDERR") in ["1", "true"] do
+  config :logger, :default_handler, config: %{type: :standard_error}
+end
+
 case System.get_env("SUPER_PI_STORAGE_BACKEND") do
   "postgres" ->
     database_url =

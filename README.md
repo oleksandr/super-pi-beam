@@ -157,6 +157,18 @@ opencode mcp list
 
 ---
 
+### JSON-RPC Server
+
+A JSON-RPC 2.0 server exposes sessions to editors and other programs (`session.open`, `session.submit`, `session.watch`, `session.fork`, and more; see `SuperPi.RPC.Server`). One JSON object per line, in both directions.
+
+```bash
+bin/super-pi rpc 4001            # TCP on 127.0.0.1 (loopback only)
+bin/super-pi rpc --unix /run/user/1000/super-pi.sock   # Unix socket, file mode 0600
+bin/super-pi rpc --stdio         # stdin/stdout, for an IDE that starts it as a subprocess
+```
+
+In `--stdio` and `mcp` modes stdout carries protocol lines only; logs go to stderr (`SUPER_PI_LOG_STDERR=1`, set by the launcher). With tokens configured, a client must call `auth.login` first (see *Authentication and Ownership*).
+
 ### MCP Client: Using Other MCP Servers as Tools
 
 Super-Pi also connects to MCP servers as a client. Servers come from `mcp_config.json` in the global config dir, the file that `super-pi mcp add|remove|enable|disable|list` edits:
