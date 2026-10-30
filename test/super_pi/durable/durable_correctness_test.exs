@@ -4,7 +4,7 @@ defmodule SuperPi.Durable.DurableCorrectnessTest do
 
   The Ecto sandbox shares one connection, so the concurrency tests check the
   invariants (one winner, no lost wakeup, unique seqs) but cannot reproduce
-  true PostgreSQL interleavings. Those belong in the PostgreSQL CI job.
+  true PostgreSQL interleavings. Those belong in the `:postgres` tests.
   """
   use SuperPi.DataCase, async: false
 

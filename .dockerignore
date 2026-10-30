@@ -1,7 +1,6 @@
 _build
 deps
 .git
-.github
 priv/*.db*
 test
 tmp

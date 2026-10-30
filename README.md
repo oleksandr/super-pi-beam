@@ -386,7 +386,7 @@ bin/super_pi eval "SuperPi.Release.rollback(20261030000001)"   # back to a versi
 
 **Gateway sessions** (`x-session-id` to conversation) are stored in the `gateway_sessions` table, so they survive a restart and are shared by every node. Idle sessions expire after `gateway_session_ttl_days` (90), and the table keeps at most `gateway_session_limit` rows (100,000).
 
-TLS is tested against a real server: `mix test --only postgres test/super_pi/postgres_tls_test.exs` (see the file for the variables), and in the `test-postgres-tls` CI job.
+TLS is tested against a real server: `mix test --only postgres test/super_pi/postgres_tls_test.exs` (see the file for the variables).
 
 ### Multi-Node Cluster
 
@@ -610,7 +610,7 @@ mix test --only postgres
 GEMINI_API_KEY=... mix test --include live test/super_pi/ai/live_provider_test.exs
 ```
 
-`.github/workflows/ci.yml` runs the SQLite suite, the PostgreSQL suite and the `:postgres` tests.
+Run the SQLite suite with `mix test`, the PostgreSQL suite with `SUPER_PI_STORAGE_BACKEND=postgres mix test`, the `:postgres` tests with `--only postgres`, and the multi-node suite with `make test-cluster`. The project has no CI service configuration.
 
 ---
 
