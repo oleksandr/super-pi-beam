@@ -160,6 +160,17 @@ defmodule SuperPi.ClusterSupport do
     )
   end
 
+  @doc "How many `pi.generation` tasks the conversation has."
+  def generation_count(conversation_id) do
+    import Ecto.Query
+
+    SuperPi.Repo.one(
+      from t in SuperPi.Durable.Schemas.Task,
+        where: t.conversation_id == ^conversation_id and t.kind == "pi.generation",
+        select: count(t.id)
+    )
+  end
+
   @doc "Creates a task of the conversation that node `owner` runs, and returns it."
   def create_running_task(conversation_id, owner) do
     import Ecto.Query

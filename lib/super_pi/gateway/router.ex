@@ -25,6 +25,7 @@ defmodule SuperPi.Gateway.Router do
   plug :trace_request
   plug :authenticate
   plug :reject_when_draining
+  plug :webhook_trigger
   plug Plug.Parsers,
     parsers: [:json],
     pass: ["application/json"],
@@ -475,7 +476,11 @@ defmodule SuperPi.Gateway.Router do
   end
 
   # A draining node takes no new turns. The client retries and reaches another node.
-  defp reject_when_draining(%Plug.Conn{method: "POST", request_path: "/v1/chat/completions"} = conn, _opts) do
+  defp reject_when_draining(%Plug.Conn{method: "POST", request_path: "/v1/chat/completions"} = conn, _opts), do: drain_gate(conn)
+  defp reject_when_draining(%Plug.Conn{method: "POST", path_info: ["v1", "triggers", _]} = conn, _opts), do: drain_gate(conn)
+  defp reject_when_draining(conn, _opts), do: conn
+
+  defp drain_gate(conn) do
     if SuperPi.Drain.accepting?() do
       conn
     else
@@ -492,7 +497,13 @@ defmodule SuperPi.Gateway.Router do
     end
   end
 
-  defp reject_when_draining(conn, _opts), do: conn
+  # `POST /v1/triggers/:token` (`SuperPi.Triggers`). It runs before the JSON parser: it reads a
+  # capped body of its own, and the token it checks is not the gateway bearer token.
+  defp webhook_trigger(%Plug.Conn{method: "POST", path_info: ["v1", "triggers", token]} = conn, _opts) do
+    conn |> SuperPi.Triggers.handle(token) |> halt()
+  end
+
+  defp webhook_trigger(conn, _opts), do: conn
 
   # One span per request. A streamed response ends the span when the headers are sent.
   defp trace_request(conn, _opts) do
@@ -544,6 +555,11 @@ defmodule SuperPi.Gateway.Router do
   # (`SuperPi.Auth`). With no tokens configured the gateway is open, which is safe only on
   # loopback; `SuperPi.Gateway.Server` refuses a non-loopback bind without a token.
   defp authenticate(%Plug.Conn{request_path: path} = conn, _opts) when path in ["/", "/health", "/ready"] do
+    assign(conn, :principal, Auth.anonymous())
+  end
+
+  # A webhook trigger carries its own per-trigger secret, not the gateway token.
+  defp authenticate(%Plug.Conn{method: "POST", path_info: ["v1", "triggers", _]} = conn, _opts) do
     assign(conn, :principal, Auth.anonymous())
   end
 

@@ -9,7 +9,8 @@ config :super_pi,
 config :super_pi, SuperPi.Repo.SQLite,
   priv: "priv/repo",
   database: Path.expand("../priv/super_pi_#{config_env()}.db", __DIR__),
-  pool_size: 10,
+  # At least the sum of the Oban queue limits below, so a busy queue never starves the others.
+  pool_size: 13,
   default_transaction_mode: :immediate,
   journal_mode: :wal,
   cache_size: -64000,
@@ -27,12 +28,21 @@ config :super_pi, Oban,
     generation_retry: 3,
     compaction: 2,
     verification: 2,
-    subagents: 3
+    subagents: 3,
+    schedule_tick: 1,
+    schedule_runs: 2
   ],
   plugins: [
     {Oban.Plugins.Pruner, max_age: 86_400},
-    {Oban.Plugins.Lifeline, rescue_after: :timer.minutes(30)}
+    {Oban.Plugins.Lifeline, rescue_after: :timer.minutes(30)},
+    # One static entry. User schedules are rows in `schedules`; the tick worker fires the due ones.
+    {Oban.Plugins.Cron, crontab: [{"* * * * *", SuperPi.Workers.ScheduleTickWorker}]}
   ]
+
+# IANA zone data for schedules comes bundled with `tzdata`. Its default polls daily and downloads
+# new releases at run time, which needs egress and a writable data directory.
+config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
+config :tzdata, :autoupdate, :disabled
 
 # Every log line from a conversation process carries its conversation and task id.
 config :logger, :default_formatter,

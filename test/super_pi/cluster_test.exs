@@ -285,6 +285,67 @@ defmodule SuperPi.ClusterTest do
     end
   end
 
+  describe "scheduler" do
+    test "a fire runs once with several peers up, and the run survives its node dying", %{created: created} do
+      # The run is a turn that takes a few seconds, so a node can be killed in the middle of it.
+      peers = Support.start_peers(3, mock_llm: true, mock_llm_delay_ms: 4_000)
+      on_exit(fn -> Support.stop_peers(peers) end)
+      wait_until(fn -> Enum.all?(peers, &(length(registry_members(&1.node)) == 3)) end, 30_000, "Horde members to join")
+
+      [a, b | _] = peers
+      id = conversation(a, created)
+
+      attrs = %{conversation_id: id, prompt: "morning briefing", cron: "0 7 * * *", mode: "append", catch_up: true}
+      {:ok, schedule, nil} = call(a, SuperPi.Schedule, :create, [attrs])
+      fire = %{"schedule_id" => schedule.id, "fire_at" => "2026-10-30T07:00:00Z"}
+
+      # A duplicated job: two peers run the same fire at once. The conditional claim lets one through.
+      results =
+        [a, b]
+        |> Task.async_stream(fn peer -> call(peer, SuperPi.Schedule, :run, [fire]) end, timeout: 60_000)
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      assert Enum.count(results, &match?({:ok, task_id} when is_integer(task_id), &1)) == 1
+      assert {:ok, :skipped} in results
+      assert call(a, Support, :generation_count, [id]) == 1
+
+      pid = wait_for_owner(a, id)
+      victim = Enum.find(peers, &(&1.node == node(pid)))
+      survivors = peers -- [victim]
+      wait_until(fn -> running_task?(hd(survivors), id) end, 20_000, "the run to start")
+      wait_until(fn -> supervised_on?(hd(survivors), pid) end, 20_000, "a survivor to learn the machine")
+      :erpc.cast(victim.node, :erlang, :halt, [1])
+
+      # As in the node failure test: Horde restarts the machine, or the next request does.
+      restarted? =
+        try do
+          wait_until(
+            fn ->
+              case owner_of(hd(survivors), id) do
+                new when is_pid(new) -> node(new) != victim.node
+                _ -> false
+              end
+            end,
+            20_000,
+            "the machine to restart on a surviving node"
+          )
+
+          true
+        rescue
+          ExUnit.AssertionError -> false
+        end
+
+      unless restarted?, do: {:ok, _} = ensure(hd(survivors), id)
+
+      wait_until(fn -> task_status(hd(survivors), id) == "completed" end, 60_000, "the resumed run to complete")
+      assert Enum.any?(call(hd(survivors), Support, :messages, [id]), &(inspect(&1) =~ "Echo: morning briefing"))
+
+      # The same fire again, from a survivor, still makes no second run.
+      assert {:ok, :skipped} = call(hd(survivors), SuperPi.Schedule, :run, [fire])
+      assert call(hd(survivors), Support, :generation_count, [id]) == 1
+    end
+  end
+
   defp wait_for_owner(peer, id) do
     wait_until(fn -> is_pid(owner_of(peer, id)) end, 20_000, "a machine for the conversation")
     owner_of(peer, id)

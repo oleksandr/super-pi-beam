@@ -112,6 +112,15 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   @doc """
+  Tells the machine that a pending `pi.generation` task was stored for it (a scheduled run, see
+  `SuperPi.Schedule`). An idle machine starts the task at once. A busy one starts it when its
+  turn ends. A machine that is still recovering finds the task itself.
+  """
+  def resume_pending(pid_or_via) do
+    :gen_statem.cast(pid_or_via, :resume_pending)
+  end
+
+  @doc """
   `submit/3` for entry points (gateway, RPC): a machine that exits or a call that times out is
   `{:error, reason}`, not an exit of the caller.
   """
@@ -291,6 +300,17 @@ defmodule SuperPi.Conversation.Machine do
 
   def handle_event(:cast, :cancel, :idle, _data) do
     :keep_state_and_data
+  end
+
+  def handle_event(:cast, :resume_pending, :idle, %__MODULE__{} = data) do
+    case resume_or_idle(data) do
+      {:next_state, :idle, _data} -> :keep_state_and_data
+      other -> other
+    end
+  end
+
+  def handle_event(:cast, :resume_pending, _busy_state, _data) do
+    {:keep_state_and_data, [:postpone]}
   end
 
   def handle_event(:cast, :cancel, _state, %__MODULE__{} = data) do
