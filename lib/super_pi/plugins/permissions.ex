@@ -65,6 +65,7 @@ defmodule SuperPi.Plugins.Permissions do
 
   alias SuperPi.Discovery
   alias SuperPi.Durable.Doc
+  alias SuperPi.UI.PermissionPrompt
 
   @read_only_tools ["read", "grep", "find", "ls", "tool_search"]
   @edit_tools ["write", "edit"]
@@ -159,20 +160,112 @@ defmodule SuperPi.Plugins.Permissions do
 
   @impl true
   def before_tool(tool_name, args, ctx) do
+    {agent_cfg, settings} = load_state(ctx)
+
+    case evaluate(tool_name, args, agent_cfg, settings) do
+      :allow ->
+        :allow
+
+      {:block, reason} ->
+        {:block, reason}
+
+      # A human can decide. The call goes on to `wrap_tool`, which runs in the tool task and asks.
+      # Without a client to ask, the block stands, with the message it always had.
+      {:prompt, reason, _risk} ->
+        if PermissionPrompt.available?(Map.get(ctx, :conversation_id), settings), do: :allow, else: {:block, reason}
+    end
+  end
+
+  @impl true
+  def wrap_tool(tool_name, args, next, ctx) do
+    {agent_cfg, settings} = load_state(ctx)
+
+    case evaluate(tool_name, args, agent_cfg, settings) do
+      {:prompt, reason, risk} -> prompt(tool_name, args, next, ctx, reason, risk)
+      _ -> next.(args)
+    end
+  end
+
+  defp load_state(ctx) do
     agent_cfg = (Doc.snapshot("conversation", ctx.conversation_id, "pi.agent") || %{}) |> clamp_mode()
-    settings = load_effective_settings(agent_cfg)
-    decide(tool_name, args, agent_cfg, settings)
+    {agent_cfg, load_effective_settings(agent_cfg)}
+  end
+
+  defp prompt(tool_name, args, next, ctx, reason, risk) do
+    fields = %{"tool_name" => tool_name, "arguments" => args, "reason" => reason, "risk" => risk}
+
+    case PermissionPrompt.ask(ctx, fields) do
+      :allow_once ->
+        next.(args)
+
+      :allow_always ->
+        remember(ctx.conversation_id, tool_name, args, :allow)
+        next.(args)
+
+      :reject_always ->
+        remember(ctx.conversation_id, tool_name, args, :deny)
+        blocked_result(reason)
+
+      # A refusal, no client, a timeout, a cancel and an unreadable answer all end the same way.
+      _ ->
+        blocked_result(reason)
+    end
+  end
+
+  # The result of a call that was blocked: what the machine records for a `{:block, reason}`.
+  defp blocked_result(reason) do
+    %{
+      "is_error" => true,
+      "output" => "Blocked by extension: #{reason}",
+      "structured_output" => nil,
+      "details" => %{"blocked" => true}
+    }
+  end
+
+  # `allow_always` and `reject_always` change the session's `settingsOverride` in `pi.agent`, never
+  # `settings.json`. A remote caller cannot send `settingsOverride` (`sanitize_remote_agent/1`), so
+  # answering a prompt is the only way it gets there, and only for this conversation.
+  defp remember(conversation_id, tool_name, args, kind) do
+    agent = Doc.snapshot("conversation", conversation_id, "pi.agent") || %{}
+    override = Map.get(agent, "settingsOverride") || %{}
+    perms = Map.get(override, "permissions") || %{}
+
+    {key, entry} =
+      case {kind, tool_name in ["bash", "run_command"]} do
+        {:allow, true} -> {"allow", "command(#{String.trim(command_string(args))})"}
+        {:deny, true} -> {"deny", "command(#{String.trim(command_string(args))})"}
+        {:allow, false} -> {"allowTools", tool_name}
+        {:deny, false} -> {"denyTools", tool_name}
+      end
+
+    perms = Map.update(perms, key, [entry], &Enum.uniq(List.wrap(&1) ++ [entry]))
+    SuperPi.Durable.Storage.configure_agent!(conversation_id, %{"settingsOverride" => Map.put(override, "permissions", perms)})
+    :ok
   end
 
   @doc """
   The decision for one call, as a pure function of the tool, its arguments, the agent config and
-  the effective settings. `before_tool/3` loads the last two and calls this.
+  the effective settings. `before_tool/3` loads the last two and decides through `evaluate/4`.
 
   The decision depends on the tool's effects (`SuperPi.Tools.effects/2`), the mode and the policy,
   and it never loosens as the mode rises (`plan` < `accept-edits` < `auto`).
   """
   @spec decide(String.t(), map(), map(), map()) :: :allow | {:block, String.t()}
   def decide(tool_name, args, agent_cfg, settings) do
+    case evaluate(tool_name, args, agent_cfg, settings) do
+      {:prompt, reason, _risk} -> {:block, reason}
+      other -> other
+    end
+  end
+
+  @doc """
+  Like `decide/4`, with a third answer: `{:prompt, reason, risk}` for a block that a human may lift.
+  Exactly two blocks are promptable: a shell command that is not in `permissions.allow`, and a tool
+  that `accept-edits` does not allow by default (every MCP tool among them). A `permissions.deny`
+  match, a mode block, a workspace boundary and a network policy block are never promptable.
+  """
+  @spec evaluate(String.t(), map(), map(), map()) :: :allow | {:block, String.t()} | {:prompt, String.t(), String.t()}
+  def evaluate(tool_name, args, agent_cfg, settings) do
     skip_perms? = Map.get(agent_cfg, "dangerouslySkipPermissions", false) == true
     raw_mode = Map.get(agent_cfg, "executionMode", "auto")
     mode = raw_mode |> to_string() |> String.trim() |> String.downcase()
@@ -187,6 +280,9 @@ defmodule SuperPi.Plugins.Permissions do
 
       tool_name in ["bash", "run_command"] and command_denied?(args, settings) ->
         {:block, "Command is blocked by `permissions.deny`."}
+
+      tool_name in permission_list(settings, "denyTools") ->
+        {:block, "Tool `#{tool_name}` is blocked by `permissions.denyTools`."}
 
       mode == "plan" and not plan_allowed?(tool_name, effects, settings, args) ->
         {:block, "Tool `#{tool_name}` is blocked in `--mode plan` (read-only planning mode)."}
@@ -210,19 +306,26 @@ defmodule SuperPi.Plugins.Permissions do
         if mode == "auto" or command_allowed?(cmd_str, allow_list) do
           :allow
         else
-          {:block, "Command `#{cmd_str}` is not in `permissions.allow` under mode `#{mode}`."}
+          {:prompt, "Command `#{cmd_str}` is not in `permissions.allow` under mode `#{mode}`.", "high"}
         end
 
       safe_effects?(effects) ->
         :allow
 
       mode == "accept-edits" ->
-        {:block, "Tool `#{tool_name}` is not allowed by default in mode `accept-edits`."}
+        if tool_name in permission_list(settings, "allowTools") do
+          :allow
+        else
+          {:prompt, "Tool `#{tool_name}` is not allowed by default in mode `accept-edits`.", risk(effects)}
+        end
 
       true ->
         :allow
     end
   end
+
+  defp risk(nil), do: "high"
+  defp risk(effects), do: if(Enum.any?(effects, &(&1 in ["exec", "net_write"])), do: "high", else: "medium")
 
   # What a tool with these effects may do in plan mode. Reading is always allowed. Reading the
   # network is allowed unless `network_in_plan_mode` is false, because a GET changes nothing.
@@ -381,8 +484,18 @@ defmodule SuperPi.Plugins.Permissions do
 
     session_override = Map.get(agent_cfg, "settingsOverride", %{})
     app_policy = app_policy()
-    app_policy |> Map.merge(file_settings) |> Map.merge(session_override)
+    app_policy |> Map.merge(file_settings) |> Map.merge(session_override, &merge_setting/3)
   end
+
+  # `permissions` lists add up across the layers, so a session entry never drops the file's entries.
+  defp merge_setting("permissions", %{} = low, %{} = high) do
+    Map.merge(low, high, fn
+      _k, l, h when is_list(l) and is_list(h) -> Enum.uniq(l ++ h)
+      _k, _l, h -> h
+    end)
+  end
+
+  defp merge_setting(_key, _low, high), do: high
 
   defp app_policy do
     case Application.get_env(:super_pi, :permissions, []) do

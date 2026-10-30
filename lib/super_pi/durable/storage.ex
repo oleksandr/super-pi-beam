@@ -269,19 +269,30 @@ defmodule SuperPi.Durable.Storage do
   Updates the conversation's `pi.agent` rewindable document (`Conversation.configure()`).
   """
   def configure_agent!(conversation_id, changes) when is_map(changes) do
-    commit(fn seq ->
-      # Read the database, not the cache: another node may have written the document.
-      current = Doc.snapshot_for_update("conversation", conversation_id, "pi.agent") || %{}
+    mode_before = (Doc.snapshot("conversation", conversation_id, "pi.agent") || %{})["executionMode"]
 
-      updated =
-        Enum.reduce(changes, current, fn
-          {k, nil}, acc -> Map.delete(acc, to_string(k))
-          {k, v}, acc -> Map.put(acc, to_string(k), v)
-        end)
+    updated =
+      commit(fn seq ->
+        # Read the database, not the cache: another node may have written the document.
+        current = Doc.snapshot_for_update("conversation", conversation_id, "pi.agent") || %{}
 
-      {:ok, val} = Doc.put_doc("conversation", conversation_id, "pi.agent", updated, seq)
-      val
-    end)
+        updated =
+          Enum.reduce(changes, current, fn
+            {k, nil}, acc -> Map.delete(acc, to_string(k))
+            {k, v}, acc -> Map.put(acc, to_string(k), v)
+          end)
+
+        {:ok, val} = Doc.put_doc("conversation", conversation_id, "pi.agent", updated, seq)
+        val
+      end)
+
+    # `mode_changed` tells a watcher that the permission mode moved (a client switched it, or a
+    # handoff did), so a mode picker can follow.
+    with %{"executionMode" => mode} = agent when is_binary(mode) and mode != mode_before <- updated do
+      SuperPi.Event.publish(SuperPi.Event.mode_changed(conversation_id, mode, agent["maxExecutionMode"]))
+    end
+
+    updated
   end
 
   defp init_builtin_docs!(conv_id, initial_agent, seq) do

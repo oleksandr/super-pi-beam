@@ -26,6 +26,7 @@ defmodule SuperPi.Plugins.Hooks do
 
   alias SuperPi.Discovery
   alias SuperPi.Durable.Doc
+  alias SuperPi.UI.PermissionPrompt
 
   @impl true
   def before_agent_start(agent_cfg, ctx) do
@@ -109,9 +110,17 @@ defmodule SuperPi.Plugins.Hooks do
           reason = Map.get(out, "reason", "Denied by PreToolUse hook")
           {:halt, {:block, reason}}
 
+        # `ask` and `force_ask` ask a human. With a client that can answer, the call goes on and
+        # `wrap_tool` asks. Without one the call is blocked, as before.
         {:ok, %{"decision" => decision} = out} when decision in ["ask", "force_ask"] ->
           reason = Map.get(out, "reason", "User confirmation required by PreToolUse hook (#{decision})")
-          {:halt, {:block, reason}}
+
+          if PermissionPrompt.available?(Map.get(ctx, :conversation_id), SuperPi.Plugins.Permissions.load_effective_settings(agent_cfg)) do
+            SuperPi.UI.Pending.put(ctx.conversation_id, Map.get(ctx, :tool_call_id), {:hook_ask, reason})
+            {:cont, {:allow, acc_overwrite}}
+          else
+            {:halt, {:block, reason}}
+          end
 
         {:ok, %{"overwrite" => ow}} when is_map(ow) and map_size(ow) > 0 ->
           {:cont, {:allow, Map.merge(acc_overwrite, ow)}}
@@ -133,6 +142,25 @@ defmodule SuperPi.Plugins.Hooks do
       {:block, reason} -> {:block, reason}
       {:allow, ow} when map_size(ow) > 0 -> {:overwrite, ow}
       {:allow, _} -> :allow
+    end
+  end
+
+  # Runs in the tool task. A PreToolUse hook that answered `ask` left a note for this call.
+  @impl true
+  def wrap_tool(tool_name, args, next, ctx) do
+    case SuperPi.UI.Pending.take(ctx.conversation_id, Map.get(ctx, :tool_call_id)) do
+      {:hook_ask, reason} ->
+        fields = %{"tool_name" => tool_name, "arguments" => args, "reason" => reason, "risk" => "high"}
+
+        # `allow_always` does not stick for a hook: the hook decides again on the next call.
+        if PermissionPrompt.ask(ctx, fields) in [:allow_once, :allow_always] do
+          next.(args)
+        else
+          %{"is_error" => true, "output" => "Blocked by extension: #{reason}", "structured_output" => nil, "details" => %{"blocked" => true}}
+        end
+
+      _ ->
+        next.(args)
     end
   end
 

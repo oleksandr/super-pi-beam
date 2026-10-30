@@ -167,7 +167,10 @@ defmodule SuperPi.Plugins.Todo do
       updated = Map.put(doc, "todos", todos)
       Doc.put_doc("conversation", conv_id, "pi.live", updated, seq)
     end) do
-      {:ok, _} -> :ok
+      {:ok, _} ->
+        SuperPi.Event.publish(SuperPi.Event.plan_updated(conv_id, Enum.map(todos, &%{"id" => &1["id"], "text" => &1["text"], "completed" => &1["done"] == true})))
+        :ok
+
       {:error, reason} -> {:error, reason}
       error -> {:error, error}
     end

@@ -295,7 +295,14 @@ defmodule SuperPi.RPC.Server do
 
       {:conversation_event, conv_id, event_payload} ->
         if MapSet.member?(client_state.watched_conversations, conv_id) do
-          {next_state, notifications} = enqueue_watch_event(client_state, event_payload)
+          # The RPC renderer is the identity on the wire form, with the envelope (`v`, `turn_id`) filled in.
+          {wires, _} = SuperPi.Event.Renderer.RPC.render(SuperPi.Event.from_wire(event_payload), nil)
+
+          {next_state, notifications} =
+            Enum.reduce(wires, {client_state, []}, fn wire, {st, notifs} ->
+              {st, more} = enqueue_watch_event(st, wire)
+              {st, notifs ++ more}
+            end)
 
           Enum.each(notifications, fn notif ->
             send_line(sock, Jason.encode!(notif) <> "\n")
@@ -648,6 +655,14 @@ defmodule SuperPi.RPC.Server do
     end
   end
 
+  # `safe_submit` turns an exit of the machine into `{:error, {reason, {:gen_statem, :call, _}}}`.
+  # A machine that is gone publishes nothing, so the server does.
+  defp publish_machine_death(conv_id, {_reason, {:gen_statem, :call, _}} = reason) do
+    SuperPi.Event.publish(SuperPi.Event.turn_error(conv_id, nil, reason, Storage.current_seq()))
+  end
+
+  defp publish_machine_death(_conv_id, _reason), do: :ok
+
   # --- Method Dispatch ---
 
   defp dispatch_method("auth.login", params, id, client_state) do
@@ -677,34 +692,13 @@ defmodule SuperPi.RPC.Server do
 
     pid = SuperPi.Conversation.Locator.ensure_started!(conv_id, extensions)
 
+    # The machine publishes `turn_started`, `turn_completed`, `turn_error` and `turn_cancelled`
+    # (`SuperPi.Event`), so a watcher sees them whoever submitted. Only a machine that died cannot say so.
     if async? do
       Task.Supervisor.start_child(SuperPi.ToolTaskSupervisor, fn ->
         case Machine.safe_submit(pid, text, mode: mode, timeout: 120_000) do
-          {:ok, res} ->
-            Phoenix.PubSub.broadcast(
-              SuperPi.PubSub,
-              "conversation:#{conv_id}",
-              {:conversation_event, conv_id,
-               %{
-                 "type" => "turn_completed",
-                 "conversation_id" => conv_id,
-                 "result" => res,
-                 "seq" => Storage.current_seq()
-               }}
-            )
-
-          {:error, reason} ->
-            Phoenix.PubSub.broadcast(
-              SuperPi.PubSub,
-              "conversation:#{conv_id}",
-              {:conversation_event, conv_id,
-               %{
-                 "type" => "turn_error",
-                 "conversation_id" => conv_id,
-                 "error" => inspect(reason),
-                 "seq" => Storage.current_seq()
-               }}
-            )
+          {:ok, _res} -> :ok
+          {:error, reason} -> publish_machine_death(conv_id, reason)
         end
       end)
 
@@ -713,31 +707,10 @@ defmodule SuperPi.RPC.Server do
     else
       case Machine.safe_submit(pid, text, mode: mode, timeout: 120_000) do
         {:ok, res} ->
-          event = %{
-            "type" => "turn_completed",
-            "conversation_id" => conv_id,
-            "result" => res,
-            "seq" => Storage.current_seq()
-          }
-
-          {next_client, notifs} =
-            cond do
-              not MapSet.member?(client_state.watched_conversations, conv_id) ->
-                {client_state, []}
-
-              # Running in a task on a snapshot of the client state: the connection process
-              # owns the backpressure window, so it enqueues the event itself.
-              Map.get(client_state, :defer_events) ->
-                {client_state, [{:deferred_event, event}]}
-
-              true ->
-                enqueue_watch_event(client_state, event)
-            end
-
-          {jsonrpc_result(id, %{"status" => "ok", "result" => res, "seq" => Storage.current_seq()}), next_client,
-           notifs}
+          {jsonrpc_result(id, %{"status" => "ok", "result" => res, "seq" => Storage.current_seq()}), client_state, []}
 
         {:error, reason} ->
+          publish_machine_death(conv_id, reason)
           {jsonrpc_error(id, -32000, inspect(reason)), client_state, []}
       end
     end
@@ -834,11 +807,7 @@ defmodule SuperPi.RPC.Server do
     next_state = Map.put(client_state, :watched_conversations, watched)
 
     {next_state, notifs} =
-      enqueue_watch_event(next_state, %{
-        "type" => "watch_started",
-        "conversation_id" => conv_id,
-        "seq" => Storage.current_seq()
-      })
+      enqueue_watch_event(next_state, SuperPi.Event.to_wire(SuperPi.Event.watch_started(conv_id, Storage.current_seq())))
 
     {jsonrpc_result(id, %{"watching" => conv_id, "max_in_flight" => @max_in_flight_batches}), next_state, notifs}
   end
@@ -877,16 +846,10 @@ defmodule SuperPi.RPC.Server do
         :ok
     end
 
-    Phoenix.PubSub.broadcast(
-      SuperPi.PubSub,
-      "conversation:#{conv_id}",
-      {:conversation_event, conv_id,
-       %{
-         "type" => "turn_cancelled",
-         "conversation_id" => conv_id,
-         "seq" => Storage.current_seq()
-       }}
-    )
+    # A running machine publishes `turn_cancelled` itself. Without one, say so here.
+    if SuperPi.Conversation.Locator.whereis(conv_id) == nil do
+      SuperPi.Event.publish(SuperPi.Event.turn_cancelled(conv_id, nil, Storage.current_seq()))
+    end
 
     {jsonrpc_result(id, %{"cancelled" => conv_id, "status" => "ok"}), client_state, []}
   end

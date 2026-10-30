@@ -24,6 +24,7 @@ defmodule SuperPi.Conversation.Machine do
   alias SuperPi.Durable.{Context, DeferredFlusher, Doc, Storage, TaskEngine}
   alias SuperPi.Durable.Schemas.Task, as: TaskSchema
   alias SuperPi.Env.SandboxRunner
+  alias SuperPi.Event
   alias SuperPi.Extension
 
   defstruct [
@@ -188,6 +189,7 @@ defmodule SuperPi.Conversation.Machine do
       turn_span = SuperPi.Telemetry.turn_start(data.conversation_id, running.id)
 
       next_data = %__MODULE__{data | active_task_id: running.id, turn_task_id: running.id, turn_span: turn_span, turn_status: :ok}
+      Event.publish(Event.turn_started(data.conversation_id, running.id, Storage.current_seq()))
       {:next_state, :preparing_request, next_data, [{:next_event, :internal, :prepare}]}
     else
       _ -> {:next_state, :idle, data}
@@ -231,7 +233,7 @@ defmodule SuperPi.Conversation.Machine do
 
   @impl :gen_statem
   def handle_event(:enter, _old_state, :recovering, data) do
-    publish_live_state(data.conversation_id, "recovering")
+    publish_live_state(data, "recovering")
     :keep_state_and_data
   end
 
@@ -257,7 +259,8 @@ defmodule SuperPi.Conversation.Machine do
   # --- State: :idle ---
 
   def handle_event(:enter, _old_state, :idle, %__MODULE__{} = data) do
-    publish_live_state(data.conversation_id, "idle")
+    publish_live_state(data, "idle")
+    publish_turn_end(data)
     Logger.metadata(task_id: nil)
     SuperPi.Telemetry.turn_stop(data.turn_span, data.turn_status)
     # The task ended, so its scratch workspace is no longer needed.
@@ -378,6 +381,7 @@ defmodule SuperPi.Conversation.Machine do
             steer_preempted: false
         }
 
+        Event.publish(Event.turn_started(data.conversation_id, running_task.id, Storage.current_seq()))
         {:next_state, :preparing_request, next_data, [{:next_event, :internal, :prepare}]}
     end
   end
@@ -430,7 +434,7 @@ defmodule SuperPi.Conversation.Machine do
   # --- State: :preparing_request ---
 
   def handle_event(:enter, _old_state, :preparing_request, %__MODULE__{} = data) do
-    publish_live_state(data.conversation_id, "preparing_request")
+    publish_live_state(data, "preparing_request")
     :keep_state_and_data
   end
 
@@ -490,7 +494,7 @@ defmodule SuperPi.Conversation.Machine do
   # --- State: :streaming_llm ---
 
   def handle_event(:enter, _old_state, :streaming_llm, %__MODULE__{} = data) do
-    publish_live_state(data.conversation_id, "streaming_llm")
+    publish_live_state(data, "streaming_llm")
     :keep_state_and_data
   end
 
@@ -526,7 +530,9 @@ defmodule SuperPi.Conversation.Machine do
     case task_res do
       {:ok, assistant_msg} ->
         usage = Map.get(assistant_msg, "usage") || %{}
-        record_usage!(next_data.conversation_id, usage)
+        with {:ok, totals} <- record_usage!(next_data.conversation_id, usage) do
+          Event.publish(Event.usage_updated(next_data.conversation_id, next_data.turn_task_id, totals))
+        end
 
         # `after_response` runs before tool dispatch: what it returns is stored and dispatched.
         assistant_msg =
@@ -550,6 +556,8 @@ defmodule SuperPi.Conversation.Machine do
           "content" => content,
           "usage" => usage
         })
+
+        Event.publish(Event.message_completed(next_data.conversation_id, next_data.turn_task_id, "assistant", content, usage))
 
         tool_calls =
           content
@@ -581,7 +589,8 @@ defmodule SuperPi.Conversation.Machine do
 
       {:retry_after, delay_ms} ->
         # Watchers may already hold text deltas of this attempt. The next attempt streams its own.
-        publish_stream_event(next_data.conversation_id, %{"type" => "stream_reset", "retry_in_ms" => delay_ms})
+        Event.publish(Event.stream_reset(next_data.conversation_id, next_data.turn_task_id, delay_ms))
+        Event.publish(Event.notice(next_data.conversation_id, next_data.turn_task_id, "warning", "Rate limited, retrying in #{delay_ms} ms"))
 
         if next_data.retry_count < 3 do
           wake_at = DateTime.add(DateTime.utc_now(), delay_ms, :millisecond)
@@ -654,7 +663,7 @@ defmodule SuperPi.Conversation.Machine do
   # --- State: :sleeping_backoff ---
 
   def handle_event(:enter, _old_state, :sleeping_backoff, %__MODULE__{} = data) do
-    publish_live_state(data.conversation_id, "sleeping_backoff")
+    publish_live_state(data, "sleeping_backoff")
     :keep_state_and_data
   end
 
@@ -673,7 +682,7 @@ defmodule SuperPi.Conversation.Machine do
   # --- State: :executing_tools ---
 
   def handle_event(:enter, _old_state, :executing_tools, %__MODULE__{} = data) do
-    publish_live_state(data.conversation_id, "executing_tools")
+    publish_live_state(data, "executing_tools")
     :keep_state_and_data
   end
 
@@ -730,9 +739,9 @@ defmodule SuperPi.Conversation.Machine do
 
   def handle_event(event_type, :next_tool, :executing_tools, %__MODULE__{pending_tool_calls: [tc | rest], active_tool: nil} = data)
       when event_type in [:internal, :info] do
-    ctx = hook_ctx(data)
     tool_name = Map.get(tc, "name", "unknown")
     tool_id = Map.get(tc, "id", "call_0")
+    ctx = data |> hook_ctx() |> Map.put(:tool_call_id, tool_id)
     raw_args = Map.get(tc, "arguments", %{})
     data = %__MODULE__{data | pending_tool_calls: rest}
 
@@ -745,12 +754,7 @@ defmodule SuperPi.Conversation.Machine do
 
     case before_tool_res do
       {:block, reason} ->
-        publish_stream_event(data.conversation_id, %{
-          "type" => "tool_blocked",
-          "tool_call_id" => tool_id,
-          "name" => tool_name,
-          "reason" => reason
-        })
+        Event.publish(Event.tool_blocked(data.conversation_id, data.turn_task_id, tool_id, tool_name, reason))
 
         finish_tool(data, %{
           "tool_call_id" => tool_id,
@@ -768,13 +772,7 @@ defmodule SuperPi.Conversation.Machine do
             {:allow_overwritten, a, keys} -> {a, keys}
           end
 
-        publish_stream_event(data.conversation_id, %{
-          "type" => "tool_started",
-          "tool_call_id" => tool_id,
-          "name" => tool_name,
-          "arguments" => validated_args,
-          "overwritten_keys" => overwritten_keys
-        })
+        Event.publish(Event.tool_started(data.conversation_id, data.turn_task_id, tool_id, tool_name, validated_args, overwritten_keys))
 
         log_metadata = Logger.metadata()
         otel_ctx = SuperPi.Telemetry.current_ctx()
@@ -792,7 +790,7 @@ defmodule SuperPi.Conversation.Machine do
 
   def handle_event(:info, {ref, tool_result}, :executing_tools, %__MODULE__{active_tool: %{task: %Task{ref: ref}}} = data) do
     Process.demonitor(ref, [:flush])
-    publish_tool_completed(data.conversation_id, tool_result)
+    publish_tool_completed(data, tool_result)
     finish_tool(%__MODULE__{data | active_tool: nil}, tool_result)
   end
 
@@ -807,14 +805,14 @@ defmodule SuperPi.Conversation.Machine do
       "details" => %{"crashed" => true}
     }
 
-    publish_tool_completed(data.conversation_id, tool_result)
+    publish_tool_completed(data, tool_result)
     finish_tool(%__MODULE__{data | active_tool: nil}, tool_result)
   end
 
   # --- State: :compacting ---
 
   def handle_event(:enter, _old_state, :compacting, %__MODULE__{} = data) do
-    publish_live_state(data.conversation_id, "compacting")
+    publish_live_state(data, "compacting")
     :keep_state_and_data
   end
 
@@ -857,6 +855,8 @@ defmodule SuperPi.Conversation.Machine do
           end
       end
 
+    publish_compaction(data.conversation_id, compaction_reply)
+
     actions =
       if data.reply_from do
         [{:reply, data.reply_from, compaction_reply}]
@@ -870,7 +870,7 @@ defmodule SuperPi.Conversation.Machine do
   # --- State: :settling_run ---
 
   def handle_event(:enter, _old_state, :settling_run, %__MODULE__{} = data) do
-    publish_live_state(data.conversation_id, "settling_run")
+    publish_live_state(data, "settling_run")
     :keep_state_and_data
   end
 
@@ -917,7 +917,7 @@ defmodule SuperPi.Conversation.Machine do
     end
 
     case SuperPi.Compaction.check_policy(data.conversation_id) do
-      {:threshold, _} -> SuperPi.Compaction.compact!(data.conversation_id, :threshold)
+      {:threshold, _} -> data.conversation_id |> SuperPi.Compaction.compact!(:threshold) |> then(&publish_compaction(data.conversation_id, &1))
       {:background, _} -> SuperPi.Compaction.compact!(data.conversation_id, :background, enqueue: true)
       :none -> :ok
     end
@@ -926,6 +926,11 @@ defmodule SuperPi.Conversation.Machine do
 
     {:next_state, :idle, %__MODULE__{data | active_task_id: nil, reply_from: nil, pending_tool_calls: [], completed_tool_results: []}, actions}
   end
+
+  defp publish_compaction(conv_id, {:ok, %{head_entry_id: head, summary: summary}}),
+    do: Event.publish(Event.compaction_completed(conv_id, head, summary))
+
+  defp publish_compaction(_conv_id, _other), do: :ok
 
   defp finish_run_with_error(%__MODULE__{} = data, reason) do
     if data.active_task_id do
@@ -977,7 +982,12 @@ defmodule SuperPi.Conversation.Machine do
       end
     end
 
-    wrapped_res = Extension.run_wrap_tool(data.extensions, tool_name, args, core_fn, ctx)
+    # A plugin that answers in `wrap_tool` without calling the tool (a question, a permission refusal)
+    # returns a result with no ids. The result of every call carries them.
+    wrapped_res =
+      %{"tool_call_id" => tool_id, "name" => tool_name, "is_error" => false, "output" => "", "structured_output" => nil, "details" => %{}}
+      |> Map.merge(Extension.run_wrap_tool(data.extensions, tool_name, args, core_fn, ctx))
+
     final_res = Extension.run_after_tool(data.extensions, tool_name, args, wrapped_res, ctx)
 
     if overwritten_keys != [] do
@@ -988,14 +998,17 @@ defmodule SuperPi.Conversation.Machine do
     end
   end
 
-  defp publish_tool_completed(conv_id, tool_result) do
-    publish_stream_event(conv_id, %{
-      "type" => "tool_completed",
-      "tool_call_id" => tool_result["tool_call_id"],
-      "name" => tool_result["name"],
-      "is_error" => Map.get(tool_result, "is_error", false),
-      "output" => Map.get(tool_result, "output", "")
-    })
+  defp publish_tool_completed(%__MODULE__{} = data, tool_result) do
+    Event.publish(
+      Event.tool_completed(
+        data.conversation_id,
+        data.turn_task_id,
+        tool_result["tool_call_id"],
+        tool_result["name"],
+        Map.get(tool_result, "is_error", false),
+        Map.get(tool_result, "output", "")
+      )
+    )
   end
 
   # Stores the result, applies its control directive and moves to the next call of the batch.
@@ -1091,7 +1104,7 @@ defmodule SuperPi.Conversation.Machine do
     List.last(visible).id
   end
 
-  defp publish_live_state(conv_id, status) do
+  defp publish_live_state(%__MODULE__{conversation_id: conv_id} = data, status) do
     DeferredFlusher.stage_deferred("conversation", conv_id, "pi.live", %{
       "status" => status,
       "updatedAt" => System.system_time(:millisecond)
@@ -1103,20 +1116,24 @@ defmodule SuperPi.Conversation.Machine do
       {:conversation_state, conv_id, status}
     )
 
-    publish_stream_event(conv_id, %{"type" => "state_changed", "status" => status})
+    Event.publish(Event.state_changed(conv_id, data.turn_task_id, status))
   end
 
-  defp publish_stream_event(conv_id, event_map) when is_map(event_map) do
-    enriched =
-      event_map
-      |> Map.put_new("conversation_id", conv_id)
-      |> Map.put_new("timestamp_ms", System.system_time(:millisecond))
+  # The end of a turn is announced once, when the machine is idle again. `turn_status` says how it
+  # ended. A conversation that never ran a turn (a manual compaction, a start-up) has no turn id.
+  defp publish_turn_end(%__MODULE__{turn_task_id: nil}), do: :ok
 
-    Phoenix.PubSub.broadcast(
-      SuperPi.PubSub,
-      "conversation:#{conv_id}",
-      {:conversation_event, conv_id, enriched}
-    )
+  defp publish_turn_end(%__MODULE__{conversation_id: conv_id, turn_task_id: turn_id, turn_status: status} = data) do
+    seq = Storage.current_seq()
+
+    event =
+      case status do
+        {:error, :cancelled} -> Event.turn_cancelled(conv_id, turn_id, seq)
+        {:error, reason} -> Event.turn_error(conv_id, turn_id, reason, seq)
+        _ok -> Event.turn_completed(conv_id, turn_id, data.last_assistant_message, seq)
+      end
+
+    Event.publish(event)
   end
 
   defp hook_ctx(data) do
@@ -1128,7 +1145,8 @@ defmodule SuperPi.Conversation.Machine do
       conversation_id: data.conversation_id,
       active_task_id: data.active_task_id,
       workspace_root: ws_root,
-      emit_event: fn ev -> publish_stream_event(data.conversation_id, ev) end
+      turn_id: data.turn_task_id,
+      emit_event: fn ev -> Event.publish(Event.from_extension(data.conversation_id, data.turn_task_id, ev)) end
     }
   end
 
@@ -1138,45 +1156,22 @@ defmodule SuperPi.Conversation.Machine do
 
     case SuperPi.AI.Providers.resolve(model) do
       {:ok, provider, effective_model} ->
-        provider.generate(Map.put(payload, :model, effective_model), on_delta: &publish_delta(conv_id, &1))
+        provider.generate(Map.put(payload, :model, effective_model), on_delta: &publish_delta(conv_id, Map.get(ctx, :turn_id), &1))
 
       {:error, reason} ->
         {:error, SuperPi.AI.Providers.format_error(reason)}
     end
   end
 
-  defp publish_delta(conv_id, event) do
+  defp publish_delta(conv_id, turn_id, event) do
     case event do
-      {:text_delta, %{index: idx, delta: delta}} ->
-        publish_stream_event(conv_id, %{"type" => "text_delta", "index" => idx, "delta" => delta})
-
-      {:text_delta, idx, delta} ->
-        publish_stream_event(conv_id, %{"type" => "text_delta", "index" => idx, "delta" => delta})
-
-      {:thinking_delta, %{index: idx, delta: delta}} ->
-        publish_stream_event(conv_id, %{"type" => "thinking_delta", "index" => idx, "delta" => delta})
-
-      {:thinking_delta, idx, delta} ->
-        publish_stream_event(conv_id, %{"type" => "thinking_delta", "index" => idx, "delta" => delta})
-
-      {:toolcall_delta, %{index: idx, raw_json_delta: delta, partial_args: partial_args}} ->
-        publish_stream_event(conv_id, %{
-          "type" => "toolcall_delta",
-          "index" => idx,
-          "delta" => delta,
-          "partial_args" => partial_args
-        })
-
-      {:toolcall_delta, idx, delta, partial_args} ->
-        publish_stream_event(conv_id, %{
-          "type" => "toolcall_delta",
-          "index" => idx,
-          "delta" => delta,
-          "partial_args" => partial_args
-        })
-
-      _ ->
-        :ok
+      {:text_delta, %{index: idx, delta: delta}} -> Event.publish(Event.text_delta(conv_id, turn_id, idx, delta))
+      {:text_delta, idx, delta} -> Event.publish(Event.text_delta(conv_id, turn_id, idx, delta))
+      {:thinking_delta, %{index: idx, delta: delta}} -> Event.publish(Event.thinking_delta(conv_id, turn_id, idx, delta))
+      {:thinking_delta, idx, delta} -> Event.publish(Event.thinking_delta(conv_id, turn_id, idx, delta))
+      {:toolcall_delta, %{index: idx, raw_json_delta: delta, partial_args: args}} -> Event.publish(Event.toolcall_delta(conv_id, turn_id, idx, delta, args))
+      {:toolcall_delta, idx, delta, args} -> Event.publish(Event.toolcall_delta(conv_id, turn_id, idx, delta, args))
+      _ -> :ok
     end
   end
 
@@ -1203,8 +1198,23 @@ defmodule SuperPi.Conversation.Machine do
       }
 
       SuperPi.Durable.Doc.put_doc("conversation", conversation_id, "pi.usage", updated, seq)
+      updated
     end)
+    |> case do
+      {:ok, updated} when is_map(updated) -> {:ok, usage_totals(updated, in_tok, out_tok)}
+      %{} = updated -> {:ok, usage_totals(updated, in_tok, out_tok)}
+      _ -> :error
+    end
   rescue
-    _ -> :ok
+    _ -> :error
+  end
+
+  defp usage_totals(updated, in_tok, out_tok) do
+    %{
+      "input_tokens" => in_tok,
+      "output_tokens" => out_tok,
+      "total_input_tokens" => updated["inputTokens"],
+      "total_output_tokens" => updated["outputTokens"]
+    }
   end
 end

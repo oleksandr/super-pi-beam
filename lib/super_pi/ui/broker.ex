@@ -7,6 +7,10 @@ defmodule SuperPi.UI.Broker do
   conversation topic and blocks the caller until a client calls `respond/2`, the conversation is
   cancelled (`cancel_pending/1`), every responder has left, or the timeout passes.
 
+  `ask/4` can publish a `permission_request` event instead of a `ui_request` (`event: :permission_request`).
+  Either way, `ui_resolved` follows when the question ends, so a second watcher can dismiss a prompt
+  that someone else answered, or that was cancelled or timed out.
+
   Only a client that has registered with `register_responder/1` can answer. The CLI chat and an RPC
   client that watches a conversation register. The HTTP gateway cannot prompt a user, so with no
   responder `ask/3` returns `{:error, :no_interactive_client}` at once instead of waiting.
@@ -46,8 +50,11 @@ defmodule SuperPi.UI.Broker do
 
   Returns `{:ok, value}`, `{:error, :no_interactive_client}`, `{:error, :cancelled}` or
   `{:error, :timeout}`.
+
+  Options: `event: :permission_request` publishes a `permission_request` event (the request map
+  holds its fields, see `SuperPi.Event.permission_request/3`); `turn_id:` sets the turn id of the event.
   """
-  def ask(conversation_id, request, timeout) when is_map(request) do
+  def ask(conversation_id, request, timeout, opts \\ []) when is_map(request) do
     if responder?(conversation_id) do
       request_id = "ui-#{conversation_id}-" <> Base.url_encode64(:crypto.strong_rand_bytes(9), padding: false)
       pending = {:ui_pending, request_id}
@@ -57,24 +64,35 @@ defmodule SuperPi.UI.Broker do
       {monitor, _members} = :pg.monitor(@scope, {:ui_responder, conversation_id})
 
       event =
-        request
-        |> Map.merge(%{"type" => "ui_request", "request_id" => request_id, "conversation_id" => conversation_id})
-        |> Map.put_new("timestamp_ms", System.system_time(:millisecond))
+        case Keyword.get(opts, :event) do
+          :permission_request ->
+            SuperPi.Event.permission_request(conversation_id, Keyword.get(opts, :turn_id), Map.put(request, "request_id", request_id))
 
-      Phoenix.PubSub.broadcast(SuperPi.PubSub, "conversation:#{conversation_id}", {:conversation_event, conversation_id, event})
+          _ ->
+            SuperPi.Event.ui_request(conversation_id, request_id, request)
+        end
 
-      try do
-        await(request_id, conversation_id, monitor, deadline(timeout))
-      after
-        :pg.leave(@scope, pending, self())
-        :pg.leave(@scope, asking, self())
-        :pg.demonitor(@scope, monitor)
-        flush(monitor)
-      end
+      SuperPi.Event.publish(event)
+
+      result =
+        try do
+          await(request_id, conversation_id, monitor, deadline(timeout))
+        after
+          :pg.leave(@scope, pending, self())
+          :pg.leave(@scope, asking, self())
+          :pg.demonitor(@scope, monitor)
+          flush(monitor)
+        end
+
+      SuperPi.Event.publish(SuperPi.Event.ui_resolved(conversation_id, request_id, outcome(result)))
+      result
     else
       {:error, :no_interactive_client}
     end
   end
+
+  defp outcome({:ok, _}), do: "answered"
+  defp outcome({:error, reason}), do: to_string(reason)
 
   defp deadline(:infinity), do: :infinity
   defp deadline(timeout), do: System.monotonic_time(:millisecond) + timeout

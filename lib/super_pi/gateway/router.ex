@@ -13,6 +13,8 @@ defmodule SuperPi.Gateway.Router do
   alias SuperPi.Conversation.Machine
   alias SuperPi.Auth
   alias SuperPi.Durable.Storage
+  alias SuperPi.Event
+  alias SuperPi.Event.Renderer
   alias SuperPi.Gateway.Sessions
   alias SuperPi.Durable.Schemas.Conversation
   alias SuperPi.Harness
@@ -841,19 +843,8 @@ defmodule SuperPi.Gateway.Router do
       |> put_resp_header("x-accel-buffering", "no")
       |> send_chunked(200)
 
-    first_chunk = %{
-      "id" => cmpl_id,
-      "object" => "chat.completion.chunk",
-      "created" => created,
-      "model" => model,
-      "choices" => [
-        %{
-          "index" => 0,
-          "delta" => %{"role" => "assistant"},
-          "finish_reason" => nil
-        }
-      ]
-    }
+    rstate = Renderer.OpenAI.init(id: cmpl_id, created: created, model: model)
+    first_chunk = Renderer.OpenAI.role_chunk(rstate)
 
     conn =
       case chunk(conn, "data: " <> Jason.encode!(first_chunk) <> "\n\n") do
@@ -868,7 +859,7 @@ defmodule SuperPi.Gateway.Router do
       end)
 
     try do
-      stream_sse_loop(conn, conv_id, task.ref, cmpl_id, created, model, pid)
+      stream_sse_loop(conn, conv_id, task.ref, rstate, pid)
     after
       # Always unsubscribe immediately so subsequent turns on this connection never multiply deltas
       Phoenix.PubSub.unsubscribe(SuperPi.PubSub, "conversation:#{conv_id}")
@@ -885,148 +876,18 @@ defmodule SuperPi.Gateway.Router do
     end
   end
 
-  defp stream_sse_loop(conn, conv_id, task_ref, cmpl_id, created, model, pid) do
+  # Events become chunks through `SuperPi.Event.Renderer.OpenAI`. A write error means the client left,
+  # so the turn is cancelled (TCP is the backpressure).
+  defp stream_sse_loop(conn, conv_id, task_ref, rstate, pid) do
     receive do
-      {:conversation_event, ^conv_id, %{"type" => "text_delta", "delta" => delta}} ->
-        Logger.debug("[Gateway] ⚡ Turn ##{conv_id} text delta: #{inspect(delta)}")
+      {:conversation_event, ^conv_id, %{} = wire} ->
+        {chunks, rstate} = Renderer.OpenAI.render(Event.from_wire(wire), rstate)
 
-        chunk_obj = %{
-          "id" => cmpl_id,
-          "object" => "chat.completion.chunk",
-          "created" => created,
-          "model" => model,
-          "choices" => [
-            %{
-              "index" => 0,
-              "delta" => %{"content" => delta},
-              "finish_reason" => nil
-            }
-          ]
-        }
-
-        case chunk(conn, "data: " <> Jason.encode!(chunk_obj) <> "\n\n") do
+        case send_chunks(conn, chunks) do
           {:ok, updated_conn} ->
-            stream_sse_loop(updated_conn, conv_id, task_ref, cmpl_id, created, model, pid)
+            stream_sse_loop(updated_conn, conv_id, task_ref, rstate, pid)
 
-          {:error, _} ->
-            Machine.cancel(pid)
-            conn
-        end
-
-      {:conversation_event, ^conv_id, %{"type" => "thinking_delta", "delta" => delta}} ->
-        Logger.debug("[Gateway] 🤔 Turn ##{conv_id} thinking delta: #{inspect(delta)}")
-
-        chunk_obj = %{
-          "id" => cmpl_id,
-          "object" => "chat.completion.chunk",
-          "created" => created,
-          "model" => model,
-          "choices" => [
-            %{
-              "index" => 0,
-              "delta" => %{"reasoning_content" => delta},
-              "finish_reason" => nil
-            }
-          ]
-        }
-
-        case chunk(conn, "data: " <> Jason.encode!(chunk_obj) <> "\n\n") do
-          {:ok, updated_conn} ->
-            stream_sse_loop(updated_conn, conv_id, task_ref, cmpl_id, created, model, pid)
-
-          {:error, _} ->
-            Machine.cancel(pid)
-            conn
-        end
-
-      {:conversation_event, ^conv_id, %{"type" => "tool_started", "name" => name} = ev} ->
-        Logger.info("[Gateway] ⚙️  Turn ##{conv_id} tool starting: '#{name}'")
-        raw_args = Map.get(ev, "args") || Map.get(ev, "arguments") || %{}
-
-        arg_preview =
-          case raw_args do
-            %{"command" => cmd} when is_binary(cmd) -> "$ #{cmd}\n"
-            %{"path" => p} when is_binary(p) -> "#{p}\n"
-            %{"query" => q} when is_binary(q) -> "query: #{q}\n"
-            m when is_map(m) ->
-              case Jason.encode(m) do
-                {:ok, json} -> "#{json}\n"
-                _ -> "#{inspect(m)}\n"
-              end
-            other ->
-              case Jason.encode(other) do
-                {:ok, json} -> "#{json}\n"
-                _ -> "#{inspect(other)}\n"
-              end
-          end
-
-        progress_text = "⚙️ Executing #{name}: #{arg_preview}"
-
-        chunk_obj = %{
-          "id" => cmpl_id,
-          "object" => "chat.completion.chunk",
-          "created" => created,
-          "model" => model,
-          "choices" => [
-            %{
-              "index" => 0,
-              "delta" => %{"reasoning_content" => progress_text},
-              "finish_reason" => nil
-            }
-          ]
-        }
-
-        case chunk(conn, "data: " <> Jason.encode!(chunk_obj) <> "\n\n") do
-          {:ok, updated_conn} ->
-            stream_sse_loop(updated_conn, conv_id, task_ref, cmpl_id, created, model, pid)
-
-          {:error, _} ->
-            Machine.cancel(pid)
-            conn
-        end
-
-      {:conversation_event, ^conv_id, %{"type" => "tool_completed", "name" => name} = ev} ->
-        err? = Map.get(ev, "is_error", false)
-        status_label = if err?, do: "❌", else: "✅"
-        out_raw =
-          case Map.get(ev, "output", "") do
-            s when is_binary(s) -> s
-            other ->
-              case Jason.encode(other) do
-                {:ok, json} -> json
-                _ -> inspect(other)
-              end
-          end
-          |> String.trim()
-
-        out_preview =
-          if out_raw != "" do
-            " -> " <> String.slice(out_raw, 0..80) <> (if String.length(out_raw) > 80, do: "...", else: "")
-          else
-            ""
-          end
-
-        progress_text = "#{status_label} #{name} completed#{out_preview}\n\n"
-
-        chunk_obj = %{
-          "id" => cmpl_id,
-          "object" => "chat.completion.chunk",
-          "created" => created,
-          "model" => model,
-          "choices" => [
-            %{
-              "index" => 0,
-              "delta" => %{"reasoning_content" => progress_text},
-              "finish_reason" => nil
-            }
-          ]
-        }
-
-        case chunk(conn, "data: " <> Jason.encode!(chunk_obj) <> "\n\n") do
-          {:ok, updated_conn} ->
-            stream_sse_loop(updated_conn, conv_id, task_ref, cmpl_id, created, model, pid)
-
-          {:error, _} ->
+          :error ->
             Machine.cancel(pid)
             conn
         end
@@ -1034,20 +895,14 @@ defmodule SuperPi.Gateway.Router do
       {^task_ref, {:ok, _result}} ->
         Process.demonitor(task_ref, [:flush])
         Logger.info("[Gateway] 🏁 Turn ##{conv_id} finished execution, emitting stop chunk")
-        drain_and_finish_sse(conn, conv_id, cmpl_id, created, model)
+        drain_and_finish_sse(conn, conv_id, rstate)
 
       {^task_ref, {:error, reason}} ->
         Process.demonitor(task_ref, [:flush])
         Logger.warning("[Gateway] ⚠️ Turn ##{conv_id} error: #{inspect(reason)}")
 
-        err_chunk = %{
-          "id" => cmpl_id,
-          "object" => "chat.completion.chunk",
-          "created" => created,
-          "model" => model,
-          "choices" => [%{"index" => 0, "delta" => %{}, "finish_reason" => "error"}],
-          "error" => %{"message" => "Turn error: #{inspect(reason)}", "type" => "turn_error"}
-        }
+        err_chunk =
+          Map.put(Renderer.OpenAI.finish_chunk(rstate, "error"), "error", %{"message" => "Turn error: #{inspect(reason)}", "type" => "turn_error"})
 
         with {:ok, conn} <- chunk(conn, "data: " <> Jason.encode!(err_chunk) <> "\n\n"),
              {:ok, conn} <- chunk(conn, "data: [DONE]\n\n") do
@@ -1059,14 +914,8 @@ defmodule SuperPi.Gateway.Router do
       {:DOWN, ^task_ref, :process, _pid, reason} ->
         Logger.warning("[Gateway] ⚠️ Turn ##{conv_id} worker task terminated: #{inspect(reason)}")
 
-        err_chunk = %{
-          "id" => cmpl_id,
-          "object" => "chat.completion.chunk",
-          "created" => created,
-          "model" => model,
-          "choices" => [%{"index" => 0, "delta" => %{}, "finish_reason" => "error"}],
-          "error" => %{"message" => "Worker crashed: #{inspect(reason)}", "type" => "turn_error"}
-        }
+        err_chunk =
+          Map.put(Renderer.OpenAI.finish_chunk(rstate, "error"), "error", %{"message" => "Worker crashed: #{inspect(reason)}", "type" => "turn_error"})
 
         with {:ok, conn} <- chunk(conn, "data: " <> Jason.encode!(err_chunk) <> "\n\n"),
              {:ok, conn} <- chunk(conn, "data: [DONE]\n\n") do
@@ -1076,17 +925,17 @@ defmodule SuperPi.Gateway.Router do
         end
 
       _other ->
-        stream_sse_loop(conn, conv_id, task_ref, cmpl_id, created, model, pid)
+        stream_sse_loop(conn, conv_id, task_ref, rstate, pid)
     after
       300_000 ->
         Logger.warning("[Gateway] ⏱️ Turn ##{conv_id} hit 300s timeout, closing SSE stream")
-        drain_and_finish_sse(conn, conv_id, cmpl_id, created, model)
+        drain_and_finish_sse(conn, conv_id, rstate)
     end
   end
 
-  defp drain_and_finish_sse(conn, conv_id, cmpl_id, created, model) do
+  defp drain_and_finish_sse(conn, conv_id, rstate) do
     # Drain any remaining deltas in mailbox
-    conn = drain_mailbox_deltas(conn, conv_id, cmpl_id, created, model)
+    conn = drain_mailbox_deltas(conn, conv_id, rstate)
 
     snap = SuperPi.Durable.Doc.snapshot("conversation", conv_id, "pi.usage") || %{}
     prompt_tok = Map.get(snap, "lastTurnInputTokens", 0)
@@ -1098,31 +947,8 @@ defmodule SuperPi.Gateway.Router do
       "total_tokens" => prompt_tok + comp_tok
     }
 
-    stop_chunk = %{
-      "id" => cmpl_id,
-      "object" => "chat.completion.chunk",
-      "created" => created,
-      "model" => model,
-      "choices" => [
-        %{
-          "index" => 0,
-          "delta" => %{},
-          "finish_reason" => "stop"
-        }
-      ]
-    }
-
-    usage_chunk = %{
-      "id" => cmpl_id,
-      "object" => "chat.completion.chunk",
-      "created" => created,
-      "model" => model,
-      "choices" => [],
-      "usage" => usage_map
-    }
-
-    with {:ok, conn} <- chunk(conn, "data: " <> Jason.encode!(stop_chunk) <> "\n\n"),
-         {:ok, conn} <- chunk(conn, "data: " <> Jason.encode!(usage_chunk) <> "\n\n"),
+    with {:ok, conn} <- chunk(conn, "data: " <> Jason.encode!(Renderer.OpenAI.finish_chunk(rstate, "stop")) <> "\n\n"),
+         {:ok, conn} <- chunk(conn, "data: " <> Jason.encode!(Renderer.OpenAI.usage_chunk(rstate, usage_map)) <> "\n\n"),
          {:ok, conn} <- chunk(conn, "data: [DONE]\n\n") do
       conn
     else
@@ -1130,27 +956,31 @@ defmodule SuperPi.Gateway.Router do
     end
   end
 
-  defp drain_mailbox_deltas(conn, conv_id, cmpl_id, created, model) do
+  # After the turn ends, text that is still queued is sent. Other events are dropped.
+  defp drain_mailbox_deltas(conn, conv_id, rstate) do
     receive do
-      {:conversation_event, ^conv_id, %{"type" => "text_delta", "delta" => delta}} ->
-        chunk_obj = %{
-          "id" => cmpl_id,
-          "object" => "chat.completion.chunk",
-          "created" => created,
-          "model" => model,
-          "choices" => [%{"index" => 0, "delta" => %{"content" => delta}, "finish_reason" => nil}]
-        }
+      {:conversation_event, ^conv_id, %{"type" => "text_delta"} = wire} ->
+        {chunks, rstate} = Renderer.OpenAI.render(Event.from_wire(wire), rstate)
 
-        case chunk(conn, "data: " <> Jason.encode!(chunk_obj) <> "\n\n") do
-          {:ok, next_conn} -> drain_mailbox_deltas(next_conn, conv_id, cmpl_id, created, model)
-          {:error, _} -> conn
+        case send_chunks(conn, chunks) do
+          {:ok, next_conn} -> drain_mailbox_deltas(next_conn, conv_id, rstate)
+          :error -> conn
         end
 
       {:conversation_event, ^conv_id, _} ->
-        drain_mailbox_deltas(conn, conv_id, cmpl_id, created, model)
+        drain_mailbox_deltas(conn, conv_id, rstate)
     after
       0 -> conn
     end
+  end
+
+  defp send_chunks(conn, chunks) do
+    Enum.reduce_while(chunks, {:ok, conn}, fn obj, {:ok, c} ->
+      case chunk(c, "data: " <> Jason.encode!(obj) <> "\n\n") do
+        {:ok, next} -> {:cont, {:ok, next}}
+        {:error, _} -> {:halt, :error}
+      end
+    end)
   end
 
   defp extract_assistant_msg_text(%{"content" => blocks}) when is_list(blocks) do

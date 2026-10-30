@@ -160,7 +160,8 @@ defmodule SuperPi.RPC.ServerMoreDefectsTest do
       {_reply, _, _} = handle("session.cancel", %{"conversation_id" => conv.id})
       assert_receive {:conversation_event, _, %{"type" => "turn_cancelled"}}, 1_000
 
-      assert_receive {:conversation_event, _, %{"type" => type}} when type in ["turn_completed", "turn_error"],
+      # The machine is idle again: the turn did not keep running.
+      assert_receive {:conversation_event, _, %{"type" => "state_changed", "status" => "idle"}},
                      1_000,
                      "the turn kept running after session.cancel"
 

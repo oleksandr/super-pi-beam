@@ -413,15 +413,27 @@ defmodule SuperPi.CLI do
 
   defp await_turn(%Task{ref: ref} = task, conv_id, read, write, streamed?) do
     receive do
-      {:conversation_event, _id, %{"type" => "text_delta", "delta" => delta}} when is_binary(delta) ->
-        write.(delta)
-        await_turn(task, conv_id, read, write, true)
+      {:conversation_event, _id, %{} = wire} ->
+        {items, _} = SuperPi.Event.Renderer.TUI.render(SuperPi.Event.from_wire(wire), nil)
 
-      {:conversation_event, _id, %{"type" => "ui_request", "kind" => "questionnaire"} = request} ->
-        answer_questionnaire(conv_id, request, read, write)
-        await_turn(task, conv_id, read, write, streamed?)
+        streamed? =
+          Enum.reduce(items, streamed?, fn
+            {:text, delta}, _ ->
+              write.(delta)
+              true
 
-      {:conversation_event, _id, _other} ->
+            {:ask, request}, acc ->
+              answer_questionnaire(conv_id, request, read, write)
+              acc
+
+            {:permission, request}, acc ->
+              answer_permission(request, read, write)
+              acc
+
+            _other, acc ->
+              acc
+          end)
+
         await_turn(task, conv_id, read, write, streamed?)
 
       {^ref, result} ->
@@ -448,6 +460,30 @@ defmodule SuperPi.CLI do
       :eof -> SuperPi.UI.Broker.cancel_pending(conv_id)
       list -> SuperPi.UI.Broker.respond(request_id, Enum.reverse(list))
     end
+  end
+
+  # Asks whether a blocked tool call may run. Anything but a clear yes rejects it once. End of input
+  # answers with a reject, never an allow.
+  defp answer_permission(%{"request_id" => request_id} = request, read, write) do
+    write.("\n? Allow #{request["tool_name"]}? (#{request["reason"]})\n")
+    write.("  #{inspect(request["arguments"])}\n")
+    write.("  [o] allow once  [a] always allow  [r] reject  [n] always reject\n")
+
+    choice =
+      case read.("permission> ") do
+        line when is_binary(line) ->
+          case line |> String.trim() |> String.downcase() do
+            "o" -> "allow_once"
+            "a" -> "allow_always"
+            "n" -> "reject_always"
+            _ -> "reject_once"
+          end
+
+        _ ->
+          "reject_once"
+      end
+
+    SuperPi.UI.Broker.respond(request_id, choice)
   end
 
   defp ask_one(q, read, write) do

@@ -97,7 +97,7 @@ defmodule SuperPi.RPCAndTUITest do
       assert watch_reply["result"]["max_in_flight"] == 2
       assert watch_notif["method"] == "session.event"
 
-      {submit_reply, st, [turn_notif]} =
+      {submit_reply, st, []} =
         Server.handle_rpc_payload(
           Jason.encode!(%{
             "jsonrpc" => "2.0",
@@ -109,7 +109,10 @@ defmodule SuperPi.RPCAndTUITest do
         )
 
       assert submit_reply["result"]["status"] == "ok"
-      assert turn_notif["method"] == "session.event"
+
+      # The machine publishes the turn events, so a watcher gets them from the conversation topic.
+      assert_receive {:conversation_event, ^conv_id, %{"type" => "turn_started", "v" => 1, "turn_id" => turn_id}}
+      assert_receive {:conversation_event, ^conv_id, %{"type" => "turn_completed", "stop_reason" => "end_turn", "turn_id" => ^turn_id}}
 
       {ctx_reply, _st, []} =
         Server.handle_rpc_payload(
