@@ -274,18 +274,17 @@ defmodule SuperPi.PluginsTest do
   end
 
   describe "Subagent Plugin" do
-    test "does not advertise the delegate_subagent tool" do
+    test "advertises the delegate_subagent tool once" do
       {:ok, cfg} = Subagent.before_agent_start(%{"tools" => []}, %{})
-      refute Enum.any?(cfg["tools"], &(&1["name"] == "delegate_subagent"))
+      assert Enum.count(cfg["tools"], &(&1["name"] == "delegate_subagent")) == 1
+
+      {:ok, again} = Subagent.before_agent_start(cfg, %{})
+      assert Enum.count(again["tools"], &(&1["name"] == "delegate_subagent")) == 1
     end
 
-    test "returns a not_implemented error instead of a fabricated success" do
-      res =
-        Subagent.wrap_tool("delegate_subagent", %{"role" => "scout", "prompt" => "Scan project dependencies"}, fn _ -> %{} end, %{})
-
-      assert res["is_error"] == true
-      assert res["structured_output"]["status"] == "not_implemented"
-      refute res["output"] =~ "finished successfully"
+    test "does not advertise the tool to a subagent at the depth limit" do
+      {:ok, cfg} = Subagent.before_agent_start(%{"tools" => [], "subagentDepth" => 1}, %{})
+      refute Enum.any?(cfg["tools"], &(&1["name"] == "delegate_subagent"))
     end
   end
 

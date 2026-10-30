@@ -272,15 +272,19 @@ defmodule SuperPi.Plugins.SecurityDefectsTest do
 
   # --- Subagent ---
 
-  describe "Subagent (subagent.ex:63-110)" do
-    test "does not return a fabricated success for work it did not do" do
+  describe "Subagent (subagent.ex)" do
+    test "a child that fails is reported as failed, never as a success" do
+      conv = SuperPi.Durable.Storage.create_conversation!()
+
       res =
         Subagent.wrap_tool("delegate_subagent", %{"role" => "reviewer", "prompt" => "audit the repo"}, fn _ -> %{} end, %{
-          config: []
+          conversation_id: conv.id,
+          config: [machine_opts: [llm_responder: fn _p, _c -> {:error, "provider down"} end]]
         })
 
-      assert res["is_error"] == true, "the stub reports success for work that never ran"
-      assert res["structured_output"]["status"] == "not_implemented"
+      assert res["is_error"] == true
+      assert [%{"status" => "failed", "error" => error}] = res["structured_output"]["subagents"]
+      assert error =~ "provider down"
     end
   end
 

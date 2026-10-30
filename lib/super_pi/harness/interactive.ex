@@ -7,7 +7,7 @@ defmodule SuperPi.Harness.Interactive do
   - `InlineBash`: Zero-turn prompt shell expansion (`!{cmd}`) with 10s execution bound.
   - `StructuredOutput`: Terminating tool for emitting machine-readable results without extra turn cost.
   - `Handoff`: Stores a child session seeded with a model-supplied summary. Does not run it.
-  - `Subagent`: Not implemented: calls return a `not_implemented` error.
+  - `Subagent`: Delegates tasks to child conversations with their own model loop (read-only roles, or a worker with the parent's permissions).
   """
 
   @behaviour SuperPi.Harness
