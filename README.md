@@ -1098,3 +1098,7 @@ examples/
 └── rpc_showcase_client.exs        # External JSON-RPC 2.0 client showcase
 test/                              # ExUnitProperties property-based & integration test suites
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).

@@ -11,6 +11,7 @@ defmodule SuperPi.MixProject do
       aliases: aliases(),
       deps: deps(),
       dialyzer: dialyzer(),
+      package: [licenses: ["MIT"]],
       releases: [
         super_pi: [
           include_executables_for: [:unix],
