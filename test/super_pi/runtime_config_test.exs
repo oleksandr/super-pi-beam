@@ -4,7 +4,8 @@ defmodule SuperPi.RuntimeConfigTest do
 
   @vars ~w(SUPER_PI_STORAGE_BACKEND DATABASE_URL SUPER_PI_DB_SSL SUPER_PI_DB_SSL_CA SUPER_PI_DB_SSL_SNI
            SUPER_PI_DB_SSL_CERT SUPER_PI_DB_SSL_KEY POOL_SIZE SUPER_PI_DB_QUEUE_TARGET
-           SUPER_PI_DB_QUEUE_INTERVAL SUPER_PI_DB_IPV6 SUPER_PI_SQLITE_PATH SUPER_PI_AUTO_MIGRATE)
+           SUPER_PI_DB_QUEUE_INTERVAL SUPER_PI_DB_IPV6 SUPER_PI_SQLITE_PATH SUPER_PI_AUTO_MIGRATE
+           SUPER_PI_OPENAI_MODEL SUPER_PI_OPENAI_BASE_URL SUPER_PI_OPENAI_AUTH_COMMAND)
 
   setup do
     saved = Enum.map(@vars, &{&1, System.get_env(&1)})
@@ -25,6 +26,27 @@ defmodule SuperPi.RuntimeConfigTest do
 
   defp pg(config), do: config[:super_pi][SuperPi.Repo.Postgres]
   @url "ecto://app:secret@db.example.com:5432/super_pi"
+
+  test "gateway shell settings apply in dev and prod but do not change tests" do
+    vars = %{
+      "SUPER_PI_OPENAI_MODEL" => "gpt-6-astra",
+      "SUPER_PI_OPENAI_BASE_URL" => "https://gateway.example/v1",
+      "SUPER_PI_OPENAI_AUTH_COMMAND" => "/path/to/token"
+    }
+
+    for env <- [:dev, :prod] do
+      config = read(env, vars)[:super_pi]
+      assert config[:default_model] == "gpt-6-astra"
+      assert config[:openai_models] == ["gpt-6-astra"]
+      assert config[:openai_base_url] == vars["SUPER_PI_OPENAI_BASE_URL"]
+      assert config[:openai_auth_command] == vars["SUPER_PI_OPENAI_AUTH_COMMAND"]
+    end
+
+    config = read(:test, vars)[:super_pi] || []
+
+    for key <- [:default_model, :openai_models, :openai_base_url, :openai_auth_command],
+        do: refute(Keyword.has_key?(config, key))
+  end
 
   describe "postgres" do
     test "DATABASE_URL is required" do

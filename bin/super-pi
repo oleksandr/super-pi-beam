@@ -86,7 +86,8 @@ case "${CMD}" in
   acp)
     # An editor starts this as a subprocess. stdout carries protocol messages only; logs go to stderr.
     export SUPER_PI_LOG_STDERR=1
-    exec mise exec -- mix run -e "SuperPi.ACP.Server.run_stdio(); System.halt(0)"
+    mise exec -- mix compile >&2
+    exec mise exec -- mix run --no-compile -e "SuperPi.ACP.Server.run_stdio(); System.halt(0)"
     ;;
 
   rpc)

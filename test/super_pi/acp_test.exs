@@ -417,6 +417,38 @@ defmodule SuperPi.ACPTest do
   end
 
   describe "session/prompt" do
+    test "ACP notifications escape Unicode on stdout" do
+      test_pid = self()
+
+      {:ok, server} =
+        Server.start_link(
+          send: fn line ->
+            if String.contains?(line, "agent_message_chunk"),
+              do: send(test_pid, {:raw_acp_chunk, line})
+
+            send(test_pid, {:acp_out, Jason.decode!(line)})
+          end
+        )
+
+      on_exit(fn -> if Process.alive?(server), do: GenServer.stop(server) end)
+      {sid, _, _} = new_session(server)
+
+      scripted(sid, fn _payload, ctx ->
+        ctx.emit_event.(%{"type" => "text_delta", "index" => 0, "delta" => "I’m “ready”"})
+        {:ok, Faults.text_msg("I’m “ready”")}
+      end)
+
+      rpc(server, 10, "session/prompt", %{
+        "sessionId" => sid,
+        "prompt" => [%{"type" => "text", "text" => "hi"}]
+      })
+
+      assert {%{"result" => %{"stopReason" => "end_turn"}}, _} = await_response(10)
+      assert_receive {:raw_acp_chunk, line}
+      assert Enum.all?(:binary.bin_to_list(line), &(&1 < 128))
+      assert get_in(Jason.decode!(line), ["params", "update", "content", "text"]) == "I’m “ready”"
+    end
+
     test "streams message chunks and answers end_turn", %{server: server} do
       {sid, _, _} = new_session(server)
 

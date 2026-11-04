@@ -317,10 +317,22 @@ The machine publishes the turn events itself, so every consumer sees them, whoev
 ```json
 {
   "agent_servers": {
-    "Super-Pi": { "command": "/path/to/super-pi-beam/bin/super-pi", "args": ["acp"] }
+    "Super-Pi": { "command": "/path/to/super-pi-beam/bin/super-pi", "args": ["acp"], "type": "custom" }
   }
 }
 ```
+
+For a Zed GUI launch, use a small wrapper script that exports `SUPER_PI_OPENAI_MODEL`, `SUPER_PI_OPENAI_BASE_URL`, and `SUPER_PI_OPENAI_AUTH_COMMAND`, then executes `bin/super-pi acp`. Point the agent entry's `command` at that script. Keep the script's stdout free of shell startup messages; ACP uses stdout for JSON-RPC only.
+
+```sh
+#!/bin/sh
+export SUPER_PI_OPENAI_MODEL=gpt-6-astra
+export SUPER_PI_OPENAI_BASE_URL=https://gateway.example/v1
+export SUPER_PI_OPENAI_AUTH_COMMAND=/absolute/path/to/token-command
+exec /absolute/path/to/super-pi-beam/bin/super-pi acp
+```
+
+Make the wrapper executable with `chmod +x /path/to/wrapper` and use `"args": []` for that agent entry. Set any PATH entries needed by the token command in the wrapper itself.
 
 ACP is bidirectional: the agent also sends requests to the editor and waits. `SuperPi.ACP.Server` keeps a table of outstanding requests for that. It does not reuse the JSON-RPC server, which only answers.
 
@@ -627,11 +639,26 @@ A provider owns one model API. `SuperPi.AI.Providers` picks the provider for a m
 |---|---|---|---|
 | Gemini | `gemini-*`, `google/*`, harness aliases | `GEMINI_API_KEY` | Live-tested. |
 | Anthropic | `claude-*`, `anthropic/*` | `ANTHROPIC_API_KEY` | Messages API. Extended thinking is **off**; thinking blocks in the history are dropped. `--json-schema` is ignored. Not tested against the live API. |
-| OpenAI | `gpt-*`, `o1*`, `o3*`, `o4*`, `openai/*` | `OPENAI_API_KEY` | Chat Completions. `openai_base_url` points it at any compatible server (Azure OpenAI, vLLM, Ollama, a proxy). Not tested against the live API. |
+| OpenAI | `gpt-*`, `o1*`, `o3*`, `o4*`, `openai/*` | `OPENAI_API_KEY` | Chat Completions, except GPT-6 Astra uses Responses for tool calls. `openai_base_url` points it at a compatible server (Azure OpenAI, vLLM, Ollama, a proxy). |
 
 Anthropic and OpenAI settings are `anthropic_base_url`, `anthropic_models`, `anthropic_max_tokens` (default 8192), `anthropic_version`, `openai_base_url`, `openai_models` and `openai_max_tokens`. A model is listed in `/v1/models` and the CLI only when its provider has a key.
 
-Both providers read the stream with `SuperPi.AI.StreamNormalizer`, map text, tool calls and token usage, turn a 429 or 529 into a backoff (`Retry-After`, capped at 60 s), and report the provider's own error message for other failures. They are tested against a local server that replays the documented stream formats (`test/super_pi/ai/anthropic_openai_test.exs`, `provider_turn_test.exs`). The opt-in live tests (`--include live`) have never run with a real key.
+For an OpenAI-compatible gateway with short-lived bearer tokens, set `SUPER_PI_OPENAI_MODEL`, `SUPER_PI_OPENAI_BASE_URL` (including `/v1`), and `SUPER_PI_OPENAI_AUTH_COMMAND` (the path to an executable that prints the token to stdout). These shell settings apply outside the test environment. `OPENAI_API_KEY` takes precedence when set.
+
+The auth command has a 10-second timeout and reports failures with the exit status and diagnostic output. Successful tokens are cached for at most 60 seconds, shortened to 30 seconds before a JWT's `exp` timestamp. Opaque tokens use the configured TTL because they contain no expiry information. Set `openai_auth_timeout_ms` and `openai_auth_cache_ttl_ms` in application config to adjust these values; a cache TTL of `0` disables caching. Diagnostic text on stderr is kept separate from the token on stdout.
+
+By default, `gpt-6-sol` uses Chat Completions with `reasoning_effort: none`, and `gpt-6-astra` uses `/responses`. Configure model aliases, API selection, and reasoning effort without changing provider code:
+
+```elixir
+config :super_pi,
+  openai_models: ["astra-latest", "gpt-6-sol"],
+  openai_responses_models: ["gpt-6-astra", "astra-latest"],
+  openai_reasoning_effort: %{"gpt-6-sol" => "none", "astra-latest" => "high"}
+```
+
+The lists and effort map replace their defaults. Model names use the spelling sent to the gateway, without the optional `openai/` prefix. Responses tools explicitly use `strict: false` to retain optional fields in the existing tool schemas.
+
+Both providers read the stream with `SuperPi.AI.StreamNormalizer`, map text, tool calls and token usage, turn a 429 or 529 into a backoff (`Retry-After`, capped at 60 s), and report the provider's own error message for other failures. They are tested against a local server that replays the documented stream formats (`test/super_pi/ai/anthropic_openai_test.exs`, `provider_turn_test.exs`). The opt-in live tests (`--include live`) require credentials.
 
 To serve an unsupported or exotic model, implement the `SuperPi.AI.Provider` behaviour and register it first in the list:
 

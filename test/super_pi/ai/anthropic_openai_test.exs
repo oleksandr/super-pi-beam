@@ -15,13 +15,19 @@ defmodule SuperPi.AI.AnthropicOpenAITest do
     :anthropic_base_url,
     :anthropic_max_tokens,
     :openai_api_key,
+    :openai_auth_command,
     :openai_base_url,
+    :openai_models,
+    :openai_responses_models,
+    :openai_reasoning_effort,
     :openai_max_tokens,
     :ai_req_options
   ]
 
   setup do
     saved = Enum.map(@keys, &{&1, Application.fetch_env(:super_pi, &1)})
+    Application.delete_env(:super_pi, :openai_auth_command)
+    Application.delete_env(:super_pi, :openai_models)
     System.delete_env("ANTHROPIC_API_KEY")
     System.delete_env("OPENAI_API_KEY")
 
@@ -510,6 +516,245 @@ defmodule SuperPi.AI.AnthropicOpenAITest do
   end
 
   describe "OpenAI" do
+    test "Astra uses Responses with function calls and accepts the tool result on the next request" do
+      call = %{
+        "type" => "function_call",
+        "call_id" => "call_1",
+        "name" => "read",
+        "arguments" => ~s({"path":"README.md"})
+      }
+
+      serve(:openai, [
+        {200,
+         MockLLM.sse([
+           %{"type" => "response.output_item.added", "output_index" => 0, "item" => call},
+           %{
+             "type" => "response.function_call_arguments.delta",
+             "output_index" => 0,
+             "delta" => call["arguments"]
+           },
+           %{"type" => "response.output_item.done", "output_index" => 0, "item" => call},
+           %{
+             "type" => "response.completed",
+             "response" => %{"usage" => %{"input_tokens" => 10, "output_tokens" => 5}}
+           }
+         ])},
+        {200,
+         MockLLM.sse([
+           %{"type" => "response.output_text.delta", "output_index" => 0, "delta" => "OK"},
+           %{"type" => "response.completed", "response" => %{}}
+         ])}
+      ])
+
+      Application.put_env(:super_pi, :openai_max_tokens, 500)
+      assert {:ok, first} = OpenAI.generate(payload(%{model: "gpt-6-astra"}), [])
+      assert_receive {:llm_request, %{path: "/v1/responses", body: first_body}}
+      assert first_body["model"] == "gpt-6-astra"
+      assert first_body["instructions"] == "You are a test agent.\n\nBe brief."
+      assert first_body["max_output_tokens"] == 500
+
+      assert first_body["input"] == [
+               %{"role" => "user", "content" => [%{"type" => "input_text", "text" => "hello"}]}
+             ]
+
+      assert [%{"type" => "function", "name" => "read", "strict" => false}] = first_body["tools"]
+
+      assert first["content"] == [
+               %{
+                 "type" => "tool_call",
+                 "id" => "call_1",
+                 "name" => "read",
+                 "arguments" => %{"path" => "README.md"}
+               }
+             ]
+
+      assert first["usage"]["input_tokens"] == 10
+
+      history =
+        payload(%{model: "gpt-6-astra"}).messages ++
+          [
+            %{"role" => "assistant", "content" => first["content"]},
+            %{"role" => "tool", "tool_call_id" => "call_1", "content" => "file text"}
+          ]
+
+      assert {:ok, second} =
+               OpenAI.generate(payload(%{model: "gpt-6-astra", messages: history}), [])
+
+      assert_receive {:llm_request, %{path: "/v1/responses", body: second_body}}
+      assert Enum.at(second_body["input"], 1) == call
+
+      assert Enum.at(second_body["input"], 2) == %{
+               "type" => "function_call_output",
+               "call_id" => "call_1",
+               "output" => "file text"
+             }
+
+      assert second["content"] == [%{"type" => "text", "text" => "OK"}]
+    end
+
+    test "Responses error events return the provider's cause and retry only transient errors" do
+      serve(:openai, [
+        {200,
+         MockLLM.sse([
+           %{
+             "type" => "error",
+             "code" => "context_length_exceeded",
+             "message" => "Context is too long"
+           }
+         ])},
+        {200,
+         MockLLM.sse([
+           %{"type" => "error", "code" => "rate_limit_exceeded", "message" => "Try later"}
+         ])}
+      ])
+
+      assert {:error,
+              {:stream_error,
+               %{
+                 reason: %{
+                   "code" => "context_length_exceeded",
+                   "message" => "Context is too long"
+                 },
+                 retryable: false
+               }}} =
+               OpenAI.generate(payload(%{model: "gpt-6-astra"}), [])
+
+      assert {:retry_after, 2_000} = OpenAI.generate(payload(%{model: "gpt-6-astra"}), [])
+    end
+
+    test "Responses output limits keep partial text and usage with a length stop reason" do
+      serve(:openai, [
+        {200,
+         MockLLM.sse([
+           %{"type" => "response.output_text.delta", "delta" => "Partial answer"},
+           %{
+             "type" => "response.incomplete",
+             "response" => %{
+               "incomplete_details" => %{"reason" => "max_output_tokens"},
+               "usage" => %{"input_tokens" => 10, "output_tokens" => 20}
+             }
+           }
+         ])}
+      ])
+
+      assert {:ok, message} = OpenAI.generate(payload(%{model: "gpt-6-astra"}), [])
+      assert message["content"] == [%{"type" => "text", "text" => "Partial answer"}]
+      assert message["stop_reason"] == "length"
+      assert message["usage"]["output_tokens"] == 20
+    end
+
+    test "sparse Responses done items preserve the streamed tool call" do
+      serve(:openai, [
+        {200,
+         MockLLM.sse([
+           %{
+             "type" => "response.output_item.added",
+             "output_index" => 0,
+             "item" => %{"type" => "function_call", "call_id" => "server-call", "name" => "read"}
+           },
+           %{
+             "type" => "response.function_call_arguments.delta",
+             "output_index" => 0,
+             "delta" => ~s({"path":"README.md"})
+           },
+           %{
+             "type" => "response.output_item.done",
+             "output_index" => 0,
+             "item" => %{"type" => "function_call"}
+           },
+           %{"type" => "response.completed", "response" => %{}}
+         ])}
+      ])
+
+      assert {:ok, message} = OpenAI.generate(payload(%{model: "gpt-6-astra"}), [])
+
+      assert message["content"] == [
+               %{
+                 "type" => "tool_call",
+                 "id" => "server-call",
+                 "name" => "read",
+                 "arguments" => %{"path" => "README.md"}
+               }
+             ]
+    end
+
+    test "gateway aliases can select Responses and reasoning effort through configuration" do
+      Application.put_env(:super_pi, :openai_models, ["astra-latest"])
+      Application.put_env(:super_pi, :openai_responses_models, ["astra-latest"])
+
+      Application.put_env(:super_pi, :openai_reasoning_effort, %{
+        "astra-latest" => "high",
+        "gpt-6-sol" => "low"
+      })
+
+      serve(:openai, [{200, MockLLM.sse([%{"type" => "response.completed", "response" => %{}}])}])
+
+      assert OpenAI.handles?("astra-latest")
+      assert {:ok, _} = OpenAI.generate(payload(%{model: "openai/astra-latest"}), [])
+      assert_receive {:llm_request, %{path: "/v1/responses", body: body}}
+      assert body["model"] == "astra-latest"
+      assert body["reasoning"] == %{"effort" => "high"}
+      assert OpenAI.build_body(payload(%{model: "openai/gpt-6-sol"}))["reasoning_effort"] == "low"
+    end
+
+    test "both API formats preserve image content and the same tool schema defaults" do
+      request =
+        payload(%{
+          model: "gpt-6-astra",
+          tools: [%{"name" => "read"}],
+          messages: [
+            %{
+              "role" => "user",
+              "content" => [
+                %{"type" => "text", "text" => "look"},
+                %{"type" => "image", "source" => %{"data" => "YWJj"}}
+              ]
+            }
+          ]
+        })
+
+      responses = OpenAI.build_responses_body(request)
+      chat = OpenAI.build_body(request)
+
+      assert responses["input"] == [
+               %{
+                 "role" => "user",
+                 "content" => [
+                   %{"type" => "input_text", "text" => "look"},
+                   %{"type" => "input_image", "image_url" => "data:image/png;base64,YWJj"}
+                 ]
+               }
+             ]
+
+      assert List.last(chat["messages"])["content"] == [
+               %{"type" => "text", "text" => "look"},
+               %{"type" => "image_url", "image_url" => %{"url" => "data:image/png;base64,YWJj"}}
+             ]
+
+      assert Map.drop(hd(responses["tools"]), ["type", "strict"]) == hd(chat["tools"])["function"]
+      assert hd(responses["tools"])["description"] == "Execute read"
+    end
+
+    test "a token command authenticates GPT-6 Sol requests with compatible reasoning effort" do
+      serve(:openai, [{200, MockLLM.sse(openai_text(["ok"]))}])
+      Application.delete_env(:super_pi, :openai_api_key)
+
+      command =
+        Path.join(System.tmp_dir!(), "super_pi_auth_#{System.unique_integer([:positive])}")
+
+      File.write!(command, "#!/bin/sh\nprintf token-from-command")
+      File.chmod!(command, 0o700)
+      on_exit(fn -> File.rm(command) end)
+      Application.put_env(:super_pi, :openai_auth_command, command)
+
+      assert OpenAI.configured?()
+      assert {:ok, _} = OpenAI.generate(payload(%{model: "gpt-6-sol"}), [])
+      assert_receive {:llm_request, %{headers: headers, body: body}}
+      assert headers["authorization"] == "Bearer token-from-command"
+      assert body["reasoning_effort"] == "none"
+      assert body["model"] == "gpt-6-sol"
+    end
+
     test "text: request shape, content and usage" do
       serve(:openai, [{200, MockLLM.sse(openai_text(["Hel", "lo ", "there"]))}])
       {on_delta, deltas} = collect_deltas()
