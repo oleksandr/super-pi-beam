@@ -29,6 +29,7 @@ defmodule SuperPi.Application do
         # Process groups across the connected nodes (UI broker).
         SuperPi.UI.Broker,
         SuperPi.UI.Pending,
+        SuperPi.AI.Providers.OpenAI.Auth,
         SuperPi.Durable.DocCache,
         {Registry, keys: :unique, name: SuperPi.Registry},
         {DynamicSupervisor, strategy: :one_for_one, name: SuperPi.FileLockSupervisor},

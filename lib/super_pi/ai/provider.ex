@@ -47,6 +47,14 @@ defmodule SuperPi.AI.Provider do
   def format_error({:http_error, status, message}), do: "HTTP #{status}: #{format_error(message)}"
   def format_error({:request_failed, message}), do: "Request failed: #{format_error(message)}"
 
+  def format_error({:openai_auth_failed, status, output}),
+    do: "OpenAI auth command failed (exit #{status}): #{output}"
+
+  def format_error({:openai_auth_timeout, timeout_ms}),
+    do: "OpenAI auth command timed out after #{timeout_ms} ms"
+
+  def format_error(:openai_auth_expired), do: "OpenAI auth command returned an expired token"
+
   def format_error({:stream_error, %{reason: reason}}),
     do: "Stream error: #{format_error(reason)}"
 

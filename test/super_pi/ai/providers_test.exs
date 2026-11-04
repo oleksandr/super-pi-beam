@@ -14,20 +14,38 @@ defmodule SuperPi.AI.ProvidersTest do
   end
 
   setup do
-    keys = [:mock_llm, :providers, :gemini_api_key]
+    keys = [
+      :mock_llm,
+      :providers,
+      :gemini_api_key,
+      :anthropic_api_key,
+      :openai_api_key,
+      :openai_auth_command
+    ]
+
     saved = Enum.map(keys, &{&1, Application.fetch_env(:super_pi, &1)})
-    System.delete_env("GEMINI_API_KEY")
+    env_keys = ["GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]
+    saved_env = Enum.map(env_keys, &{&1, System.get_env(&1)})
+    Enum.each(env_keys, &System.delete_env/1)
 
     on_exit(fn ->
       Enum.each(saved, fn
         {k, {:ok, v}} -> Application.put_env(:super_pi, k, v)
         {k, :error} -> Application.delete_env(:super_pi, k)
       end)
+
+      Enum.each(saved_env, fn
+        {k, nil} -> System.delete_env(k)
+        {k, v} -> System.put_env(k, v)
+      end)
     end)
 
     Application.put_env(:super_pi, :mock_llm, false)
     Application.delete_env(:super_pi, :providers)
     Application.delete_env(:super_pi, :gemini_api_key)
+    Application.delete_env(:super_pi, :anthropic_api_key)
+    Application.delete_env(:super_pi, :openai_api_key)
+    Application.delete_env(:super_pi, :openai_auth_command)
     :ok
   end
 
@@ -38,8 +56,6 @@ defmodule SuperPi.AI.ProvidersTest do
     end
 
     test "claude and gpt models have a provider, which is not configured without a key" do
-      System.delete_env("ANTHROPIC_API_KEY")
-      System.delete_env("OPENAI_API_KEY")
       assert {:error, {:not_configured, "anthropic"}} = Providers.resolve("claude-sonnet-5-5")
       assert {:error, {:not_configured, "openai"}} = Providers.resolve("gpt-5")
     end
@@ -47,11 +63,6 @@ defmodule SuperPi.AI.ProvidersTest do
     test "a configured key makes them resolvable" do
       Application.put_env(:super_pi, :anthropic_api_key, "k")
       Application.put_env(:super_pi, :openai_api_key, "k")
-
-      on_exit(fn ->
-        Application.delete_env(:super_pi, :anthropic_api_key) &&
-          Application.delete_env(:super_pi, :openai_api_key)
-      end)
 
       assert {:ok, SuperPi.AI.Providers.Anthropic, "claude-sonnet-5-5"} =
                Providers.resolve("claude-sonnet-5-5")

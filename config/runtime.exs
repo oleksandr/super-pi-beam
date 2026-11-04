@@ -1,5 +1,19 @@
 import Config
 
+if config_env() != :test do
+  if model = System.get_env("SUPER_PI_OPENAI_MODEL") do
+    config :super_pi, default_model: model, openai_models: [model]
+  end
+
+  if base_url = System.get_env("SUPER_PI_OPENAI_BASE_URL") do
+    config :super_pi, openai_base_url: base_url
+  end
+
+  if command = System.get_env("SUPER_PI_OPENAI_AUTH_COMMAND") do
+    config :super_pi, openai_auth_command: command
+  end
+end
+
 # stdio servers (`rpc --stdio`, `mcp`) use stdout for protocol messages only. Logs go to stderr.
 if System.get_env("SUPER_PI_LOG_STDERR") in ["1", "true"] do
   config :logger, :default_handler, config: %{type: :standard_error}

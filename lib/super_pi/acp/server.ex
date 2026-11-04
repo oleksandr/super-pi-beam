@@ -72,6 +72,7 @@ defmodule SuperPi.ACP.Server do
 
   @doc "Starts the server on standard input and output and returns when the input ends."
   def run_stdio(opts \\ []) do
+    :ok = :io.setopts(:standard_io, encoding: :unicode)
     {:ok, pid} = start_link(Keyword.put_new(opts, :send, fn line -> IO.puts(:stdio, line) end))
     ref = Process.monitor(pid)
 
@@ -509,7 +510,9 @@ defmodule SuperPi.ACP.Server do
     do: emit(st, %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => params})
 
   defp emit(st, map) do
-    st.send.(Jason.encode!(map))
+    # Keep the JSON representation ASCII; run_stdio also sets Unicode encoding for input
+    # and any other stdio writes, including when the editor starts without a UTF-8 locale.
+    st.send.(Jason.encode!(map, escape: :unicode_safe))
     st
   end
 

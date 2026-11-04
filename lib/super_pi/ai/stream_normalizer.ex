@@ -331,6 +331,10 @@ defmodule SuperPi.AI.StreamNormalizer do
 
     # Support both OpenAI Chat Completions deltas and Responses API events
     cond do
+      Map.get(event, "type") == "error" ->
+        err = event["error"] || Map.take(event, ["code", "message", "param"])
+        {start_events ++ [{:error, %{reason: err, retryable: retryable_error?(err)}}], state}
+
       # An error sent inside a 200 stream.
       is_map(Map.get(event, "error")) ->
         err = event["error"]
@@ -344,6 +348,26 @@ defmodule SuperPi.AI.StreamNormalizer do
         st = if finish, do: %__MODULE__{st | stop_reason: finish}, else: st
         {start_events ++ delta_events, st}
 
+      Map.get(event, "type") == "response.incomplete" and
+          get_in(event, ["response", "incomplete_details", "reason"]) == "max_output_tokens" ->
+        resp_usage = get_in(event, ["response", "usage"])
+
+        st =
+          if is_map(resp_usage),
+            do: %__MODULE__{state | usage: merge_usage(state.usage, resp_usage)},
+            else: state
+
+        {done_events, final_st} = finalize_stream(%__MODULE__{st | stop_reason: "length"})
+        {start_events ++ done_events, final_st}
+
+      Map.get(event, "type") in ["response.failed", "response.incomplete"] ->
+        reason =
+          get_in(event, ["response", "error"]) ||
+            get_in(event, ["response", "incomplete_details"]) || event
+
+        {start_events ++ [{:error, %{reason: reason, retryable: retryable_error?(reason)}}],
+         state}
+
       Map.get(event, "type") == "response.completed" ->
         resp_usage = get_in(event, ["response", "usage"])
 
@@ -356,16 +380,18 @@ defmodule SuperPi.AI.StreamNormalizer do
         {start_events ++ done_events, final_st}
 
       Map.get(event, "type") == "response.output_text.delta" ->
-        idx = Map.get(event, "content_index", 0)
+        idx = Map.get(event, "output_index", 0)
+        key = {idx, Map.get(event, "content_index", 0)}
         text = Map.get(event, "delta") || ""
-        block = Map.get(state.blocks, idx, %{"type" => "text", "text" => ""})
+        block = Map.get(state.blocks, key, %{"type" => "text", "text" => ""})
         updated = Map.put(block, "text", (block["text"] || "") <> text)
-        st = %__MODULE__{state | blocks: Map.put(state.blocks, idx, updated)}
+        st = %__MODULE__{state | blocks: Map.put(state.blocks, key, updated)}
         {start_events ++ [{:text_delta, %{index: idx, delta: text}}], st}
 
       Map.get(event, "type") == "response.output_item.added" ->
         item = Map.get(event, "item", %{})
         output_idx = Map.get(event, "output_index", 0)
+        key = {output_idx, 0}
 
         case Map.get(item, "type") do
           "function_call" ->
@@ -380,7 +406,56 @@ defmodule SuperPi.AI.StreamNormalizer do
               "arguments" => %{}
             }
 
-            {start_events, %__MODULE__{state | blocks: Map.put(state.blocks, output_idx, block)}}
+            {start_events, %__MODULE__{state | blocks: Map.put(state.blocks, key, block)}}
+
+          _ ->
+            {start_events, state}
+        end
+
+      Map.get(event, "type") == "response.output_item.done" ->
+        item = Map.get(event, "item", %{})
+        output_idx = Map.get(event, "output_index", 0)
+        key = {output_idx, 0}
+
+        case Map.get(item, "type") do
+          "function_call" ->
+            existing = Map.get(state.blocks, key, %{})
+            raw = item["arguments"] || existing["raw_json"] || ""
+
+            block = %{
+              "type" => "tool_call",
+              "id" => item["call_id"] || existing["id"] || "call_#{output_idx}",
+              "name" => item["name"] || existing["name"] || "",
+              "raw_json" => raw,
+              "arguments" => parse_partial_json(raw)
+            }
+
+            {start_events, %__MODULE__{state | blocks: Map.put(state.blocks, key, block)}}
+
+          "message" ->
+            if Map.has_key?(state.blocks, key) do
+              {start_events, state}
+            else
+              text =
+                item
+                |> Map.get("content", [])
+                |> Enum.flat_map(fn
+                  %{"type" => "output_text", "text" => value} when is_binary(value) ->
+                    [value]
+
+                  _ ->
+                    []
+                end)
+                |> Enum.join("")
+
+              if text == "" do
+                {start_events, state}
+              else
+                block = %{"type" => "text", "text" => text}
+                st = %__MODULE__{state | blocks: Map.put(state.blocks, key, block)}
+                {start_events ++ [{:text_delta, %{index: output_idx, delta: text}}], st}
+              end
+            end
 
           _ ->
             {start_events, state}
@@ -388,10 +463,11 @@ defmodule SuperPi.AI.StreamNormalizer do
 
       Map.get(event, "type") == "response.function_call_arguments.delta" ->
         output_idx = Map.get(event, "output_index", 0)
+        key = {output_idx, 0}
         delta = Map.get(event, "delta") || ""
 
         block =
-          Map.get(state.blocks, output_idx, %{
+          Map.get(state.blocks, key, %{
             "type" => "tool_call",
             "id" => "call_#{output_idx}",
             "name" => "",
@@ -413,8 +489,7 @@ defmodule SuperPi.AI.StreamNormalizer do
              partial_args: partial
            }}
 
-        {start_events ++ [ev],
-         %__MODULE__{state | blocks: Map.put(state.blocks, output_idx, updated)}}
+        {start_events ++ [ev], %__MODULE__{state | blocks: Map.put(state.blocks, key, updated)}}
 
       true ->
         {start_events, state}
