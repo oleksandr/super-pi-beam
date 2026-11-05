@@ -1,8 +1,26 @@
 # Super-Pi-BEAM
 
+[![Hex.pm](https://img.shields.io/hexpm/v/super_pi.svg)](https://hex.pm/packages/super_pi)
+[![Hex Docs](https://img.shields.io/badge/hex-docs-lightgreen.svg)](https://hexdocs.pm/super_pi/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 **Super-Pi-BEAM** is a durable, fault-tolerant, general-purpose agent framework built on **Erlang/OTP 28** and **Elixir 1.20**. It implements an always-durable, crash-resilient agent architecture natively on the BEAM virtual machine.
 
 Four built-in harnesses show what the engine does. `super-pi-code` changes a repository and can undo the change. `super-pi-assistant` works with a person, reaches the web and third-party services, and has no filesystem. `super-pi-librarian` runs with no person present and remembers across sessions. `super-pi-planner` cannot write. Three optional capability blocks (web access, scheduling, durable memory) can join any harness. Every interface (OpenAI gateway, JSON-RPC, MCP, ACP, AG-UI, terminal) renders one typed event stream.
+
+---
+
+## Installation
+
+Add `super_pi` to your list of dependencies in `mix.exs`:
+
+```elixir
+def deps do
+  [
+    {:super_pi, "~> 0.1.0"}
+  ]
+end
+```
 
 ---
 

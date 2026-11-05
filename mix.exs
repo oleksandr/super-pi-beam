@@ -1,17 +1,24 @@
 defmodule SuperPi.MixProject do
   use Mix.Project
 
+  @version "0.1.0"
+  @source_url "https://github.com/oleksandr/super-pi-beam"
+
   def project do
     [
       app: :super_pi,
-      version: "0.1.0",
+      version: @version,
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
       dialyzer: dialyzer(),
-      package: [licenses: ["MIT"]],
+      description: "Durable, crash-resilient general-purpose agent framework for Elixir and the BEAM.",
+      package: package(),
+      docs: docs(),
+      homepage_url: @source_url,
+      source_url: @source_url,
       releases: [
         super_pi: [
           include_executables_for: [:unix],
@@ -74,9 +81,31 @@ defmodule SuperPi.MixProject do
       # Testing & Property-Based Verification
       {:stream_data, "~> 1.1", only: [:dev, :test]},
 
-      # Linting
+      # Linting & Documentation
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.2", only: [:dev], runtime: false}
+      {:dialyxir, "~> 1.2", only: [:dev], runtime: false},
+      {:ex_doc, "~> 0.37", only: :dev, runtime: false}
+    ]
+  end
+
+  defp package do
+    [
+      name: :super_pi,
+      licenses: ["MIT"],
+      files: ~w(lib priv/repo .formatter.exs mix.exs README* LICENSE* CHANGELOG*),
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
+      }
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      source_ref: "v#{@version}",
+      source_url: @source_url,
+      extras: ["README.md", "CHANGELOG.md"]
     ]
   end
 
