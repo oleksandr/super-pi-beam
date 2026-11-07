@@ -20,7 +20,7 @@ defmodule SuperPi.Event.Renderer.ACP do
   | `tool_blocked` | `tool_call_update`, status `failed` |
   | `subagent_started`, `subagent_finished` | a `tool_call` of kind `other` and its update |
   | `plan_updated` | `plan` |
-  | `mode_changed` | `current_mode_update` |
+  | `mode_changed` | `current_mode_update` and `config_option_update` |
   | `turn_*` | nothing. The server answers `session/prompt` with a stop reason. |
 
   A tool call is `pending` from `tool_started` until it is approved, or until it completes when no
@@ -79,6 +79,9 @@ defmodule SuperPi.Event.Renderer.ACP do
         "title" => title(data["tool_name"], data["arguments"] || %{}),
         "kind" => kind(data["tool_name"]),
         "status" => Map.get(known, :status, "pending"),
+        "content" => [
+          %{"type" => "content", "content" => %{"type" => "text", "text" => data["reason"] || ""}}
+        ],
         "rawInput" => data["arguments"] || %{}
       },
       "options" =>
@@ -188,6 +191,19 @@ defmodule SuperPi.Event.Renderer.ACP do
     {[{:update, %{"sessionUpdate" => "plan", "entries" => plan}}], st}
   end
 
+  def render(%Event{type: "mode_changed", data: %{"configOptions" => options} = data} = event, st) do
+    {updates, st} = render(%{event | data: Map.delete(data, "configOptions")}, st)
+
+    {updates ++
+       [{:update, %{"sessionUpdate" => "config_option_update", "configOptions" => options}}], st}
+  end
+
+  def render(%Event{type: "mode_changed", data: %{"profile" => mode}}, st),
+    do: {[{:update, %{"sessionUpdate" => "current_mode_update", "currentModeId" => mode}}], st}
+
+  def render(%Event{type: "mode_changed", data: %{"workflow_mode" => mode}}, st),
+    do: {[{:update, %{"sessionUpdate" => "current_mode_update", "currentModeId" => mode}}], st}
+
   def render(%Event{type: "mode_changed", data: %{"mode" => mode}}, st),
     do: {[{:update, %{"sessionUpdate" => "current_mode_update", "currentModeId" => mode}}], st}
 
@@ -238,6 +254,11 @@ defmodule SuperPi.Event.Renderer.ACP do
 
   defp chunk(kind, text),
     do: %{"sessionUpdate" => kind, "content" => %{"type" => "text", "text" => text}}
+
+  defp title("request_command_approval", %{"prefixes" => prefixes}) when is_list(prefixes),
+    do: "Approve command prefixes: " <> Enum.map_join(prefixes, ", ", &Enum.join(&1, " "))
+
+  defp title("git_inspect", args), do: SuperPi.GitInspection.command(args)
 
   defp title(name, %{"command" => cmd}) when is_binary(cmd),
     do: "#{name}: #{String.slice(cmd, 0, 80)}"

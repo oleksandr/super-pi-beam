@@ -54,10 +54,13 @@ defmodule SuperPi.Harness.Defaults do
       "systemSections" => sections(opts[:system_sections], spec[:prompt], module)
     }
 
-    case workspace_config(spec[:workspace]) do
-      nil -> base
-      ws -> Map.put(base, "workspace", ws)
-    end
+    base =
+      case workspace_config(spec[:workspace]) do
+        nil -> base
+        ws -> Map.put(base, "workspace", ws)
+      end
+
+    SuperPi.Extension.configure_agent(module.extensions([]), base, %{initial_options: opts})
   end
 
   @doc """

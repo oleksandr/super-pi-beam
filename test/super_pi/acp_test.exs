@@ -237,6 +237,7 @@ defmodule SuperPi.ACPTest do
 
       assert result["protocolVersion"] == 1
       assert result["agentCapabilities"]["loadSession"] == true
+      assert result["agentCapabilities"]["sessionCapabilities"]["additionalDirectories"] == %{}
       assert result["authMethods"] == []
 
       assert Enum.map(result["_meta"]["superPi"]["harnesses"], & &1["id"]) |> Enum.sort() == [
@@ -291,6 +292,81 @@ defmodule SuperPi.ACPTest do
   end
 
   describe "session/new" do
+    test "Zed additional directories are trusted and loads replace editor roots", %{
+      server: server
+    } do
+      primary = File.cwd!()
+      secondary = Path.join(System.tmp_dir!(), "acp-secondary")
+      approved = Path.join(System.tmp_dir!(), "acp-approved")
+
+      {sid, _, _} =
+        new_session(server, %{"additionalDirectories" => [secondary, primary, secondary]})
+
+      id = conv_of(sid)
+
+      assert SuperPi.Durable.Doc.snapshot("conversation", id, "pi.agent")["workspacePaths"] ==
+               [primary, secondary]
+
+      Storage.configure_agent!(id, %{"approvedWorkspacePaths" => [approved]})
+
+      rpc(server, 3, "session/load", %{
+        "sessionId" => sid,
+        "cwd" => secondary,
+        "additionalDirectories" => [primary]
+      })
+
+      assert {%{"result" => _}, _} = await_response(3)
+      agent = SuperPi.Durable.Doc.snapshot("conversation", id, "pi.agent")
+      assert agent["workspacePaths"] == [secondary, primary, approved]
+      assert {:ok, %{root: ^secondary}} = SuperPi.Env.Workspace.resolve(%{conversation_id: id})
+
+      rpc(server, 4, "session/load", %{"sessionId" => sid, "cwd" => primary})
+      assert {%{"result" => _}, _} = await_response(4)
+
+      assert SuperPi.Durable.Doc.snapshot("conversation", id, "pi.agent")["workspacePaths"] == [
+               primary,
+               approved
+             ]
+
+      Storage.append_entry!(id, "pi.message", %{
+        "role" => "user",
+        "content" => [%{"type" => "text", "text" => "q"}]
+      })
+
+      rpc(server, 5, "_superpi/session/fork", %{"sessionId" => sid})
+      assert {%{"result" => %{"sessionId" => fork}}, _} = await_response(5)
+      forked = SuperPi.Durable.Doc.snapshot("conversation", conv_of(fork), "pi.agent")
+      assert forked["workspacePaths"] == [primary, approved]
+      assert forked["approvedWorkspacePaths"] == [approved]
+    end
+
+    test "malformed additional directories are rejected on create and load", %{server: server} do
+      {sid, _, _} = new_session(server)
+
+      for directories <- [
+            false,
+            "not-an-array",
+            ["relative/path"],
+            [nil],
+            [42],
+            [%{"path" => "/tmp"}],
+            ["/tmp/" <> <<0>>]
+          ],
+          method <- ["session/new", "session/load"] do
+        rpc(server, 3, method, %{
+          "sessionId" => sid,
+          "cwd" => File.cwd!(),
+          "additionalDirectories" => directories
+        })
+
+        assert {%{"error" => %{"code" => -32602}}, _} = await_response(3)
+      end
+
+      assert SuperPi.Durable.Doc.snapshot("conversation", conv_of(sid), "pi.agent")[
+               "workspacePaths"
+             ] == [File.cwd!()]
+    end
+
     test "creates a conversation with the cwd as workspace, an opaque id, modes and commands", %{
       server: server
     } do
@@ -303,11 +379,15 @@ defmodule SuperPi.ACPTest do
       assert agent["workspacePaths"] == [File.cwd!()]
       assert agent["harness"] == "super-pi-code"
 
-      assert %{"currentModeId" => "accept-edits", "availableModes" => modes} =
+      assert %{"currentModeId" => "ask", "availableModes" => modes} =
                resp["result"]["modes"]
 
-      assert Enum.map(modes, & &1["id"]) == ["plan", "accept-edits"],
-             "remote ceiling is accept-edits"
+      assert Enum.map(modes, & &1["id"]) == ["ask", "plan", "build"]
+      assert agent["profile"] == "ask"
+      assert agent["executionMode"] == "plan"
+
+      assert [%{"currentValue" => "ask", "category" => "mode", "type" => "select"}] =
+               resp["result"]["configOptions"]
 
       cmds =
         Enum.find(
@@ -364,6 +444,121 @@ defmodule SuperPi.ACPTest do
 
       rpc(server, 4, "session/set_mode", %{"sessionId" => sid, "modeId" => "auto"})
       assert {%{"error" => %{"code" => -32602}}, _} = await_response(4)
+    end
+
+    test "Ask and Plan emit distinct mode updates and survive session reload", %{server: server} do
+      {sid, _, _} = new_session(server)
+
+      for {mode, id} <- [{"plan", 3}, {"ask", 4}, {"build", 5}, {"ask", 6}] do
+        rpc(server, id, "session/set_mode", %{"sessionId" => sid, "modeId" => mode})
+        assert {%{"result" => %{}}, notes} = await_response(id)
+
+        unless Enum.any?(notes, &(get_in(&1, ["params", "update", "currentModeId"]) == mode)) do
+          assert_receive {:acp_out,
+                          %{
+                            "params" => %{
+                              "update" => %{
+                                "sessionUpdate" => "current_mode_update",
+                                "currentModeId" => ^mode
+                              }
+                            }
+                          }}
+        end
+
+        agent = SuperPi.Durable.Doc.snapshot("conversation", conv_of(sid), "pi.agent")
+        assert agent["profile"] == mode
+        assert agent["executionMode"] == if(mode == "build", do: "accept-edits", else: "plan")
+      end
+
+      rpc(server, 7, "session/load", %{"sessionId" => sid, "cwd" => File.cwd!()})
+      assert {%{"result" => %{"modes" => %{"currentModeId" => "ask"}}}, _} = await_response(7)
+    end
+
+    test "config options and legacy modes share a selector and synchronized notifications", %{
+      server: server
+    } do
+      {sid, _, _} = new_session(server)
+
+      rpc(server, 3, "session/set_config_option", %{
+        "sessionId" => sid,
+        "configId" => "mode",
+        "type" => "id",
+        "value" => "build"
+      })
+
+      assert {%{"result" => %{"configOptions" => [%{"currentValue" => "build"}]}}, notes} =
+               await_response(3)
+
+      updates = notes ++ drain()
+
+      for kind <- ["current_mode_update", "config_option_update"] do
+        unless Enum.any?(updates, &(get_in(&1, ["params", "update", "sessionUpdate"]) == kind)) do
+          assert_receive {:acp_out, %{"params" => %{"update" => %{"sessionUpdate" => ^kind}}}}
+        end
+      end
+
+      assert SuperPi.ACP.Session.modes(conv_of(sid))["currentModeId"] == "build"
+
+      rpc(server, 4, "session/set_config_option", %{
+        "sessionId" => sid,
+        "configId" => "mode",
+        "value" => "plan"
+      })
+
+      assert {%{"result" => %{"configOptions" => [%{"currentValue" => "plan"}]}}, _} =
+               await_response(4)
+
+      rpc(server, 5, "session/set_config_option", %{
+        "sessionId" => sid,
+        "configId" => "invalid",
+        "value" => "build"
+      })
+
+      assert {%{"error" => _}, _} = await_response(5)
+      assert SuperPi.ACP.Session.modes(conv_of(sid))["currentModeId"] == "plan"
+    end
+
+    test "loading a legacy auto session adopts Build with command approvals", %{server: server} do
+      {sid, _, _} = new_session(server)
+
+      Storage.configure_agent!(conv_of(sid), %{
+        "workflowMode" => nil,
+        "profile" => nil,
+        "profilePolicy" => nil,
+        "profilesConfig" => nil,
+        "executionMode" => "auto"
+      })
+
+      rpc(server, 3, "session/load", %{"sessionId" => sid, "cwd" => File.cwd!()})
+      assert {%{"result" => %{"modes" => %{"currentModeId" => "build"}}}, _} = await_response(3)
+
+      assert SuperPi.Durable.Doc.snapshot("conversation", conv_of(sid), "pi.agent")[
+               "executionMode"
+             ] == "accept-edits"
+    end
+
+    test "a read-only remote ceiling hides Build and prevents slash-command elevation", %{
+      server: server
+    } do
+      saved = Application.fetch_env(:super_pi, :permissions)
+      Application.put_env(:super_pi, :permissions, remote_max_mode: "plan")
+
+      on_exit(fn ->
+        case saved do
+          {:ok, value} -> Application.put_env(:super_pi, :permissions, value)
+          :error -> Application.delete_env(:super_pi, :permissions)
+        end
+      end)
+
+      {sid, resp, _} = new_session(server)
+      assert Enum.map(resp["result"]["modes"]["availableModes"], & &1["id"]) == ["ask", "plan"]
+      rpc(server, 3, "session/set_mode", %{"sessionId" => sid, "modeId" => "build"})
+      assert {%{"error" => %{"code" => -32602}}, _} = await_response(3)
+
+      assert {:error, _} =
+               SuperPi.Plugins.SlashCommands.on_input("/workflow build", %{
+                 conversation_id: conv_of(sid)
+               })
     end
   end
 
@@ -542,11 +737,28 @@ defmodule SuperPi.ACPTest do
       send(responder, :release)
     end
 
+    test "mode changes wait for an active prompt to finish", %{server: server} do
+      {sid, _, _} = new_session(server)
+      scripted(sid, Faults.blocking_responder(self(), "done"))
+
+      rpc(server, 10, "session/prompt", %{
+        "sessionId" => sid,
+        "prompt" => [%{"type" => "text", "text" => "go"}]
+      })
+
+      assert_receive {:responder_started, pid}, 5_000
+      rpc(server, 11, "session/set_mode", %{"sessionId" => sid, "modeId" => "ask"})
+      assert {%{"error" => %{"code" => -32602}}, _} = await_response(11)
+      send(pid, :release)
+      assert {%{"result" => %{"stopReason" => "end_turn"}}, _} = await_response(10)
+    end
+
     test "a tool that needs approval sends session/request_permission, and the answer decides", %{
       server: server
     } do
       {sid, _, _} = new_session(server, %{"_meta" => %{"harness" => "super-pi-code"}})
       conv_id = conv_of(sid)
+      :ok = SuperPi.ACP.Session.set_mode(conv_id, "build")
 
       SuperPi.Durable.Storage.configure_agent!(conv_id, %{
         "tools" => [%{"name" => "mcp__x__y", "effects" => ["net_write"]}]
@@ -590,6 +802,7 @@ defmodule SuperPi.ACPTest do
 
     test "rejecting a permission blocks the tool", %{server: server} do
       {sid, _, _} = new_session(server)
+      :ok = SuperPi.ACP.Session.set_mode(conv_of(sid), "build")
 
       SuperPi.Durable.Storage.configure_agent!(conv_of(sid), %{
         "tools" => [%{"name" => "mcp__x__y", "effects" => ["net_write"]}]
@@ -686,6 +899,40 @@ defmodule SuperPi.ACPTest do
 
   describe "client file system" do
     alias SuperPi.Env.ClientFS
+
+    test "an editor buffer in an additional directory is delegated", %{server: server} do
+      rpc(server, 1, "initialize", %{
+        "protocolVersion" => 1,
+        "clientCapabilities" => %{"fs" => %{"readTextFile" => true}}
+      })
+
+      await_response(1)
+      secondary = Path.join(System.tmp_dir!(), "acp-buffer-secondary")
+
+      rpc(server, 2, "session/new", %{
+        "cwd" => File.cwd!(),
+        "additionalDirectories" => [secondary]
+      })
+
+      {%{"result" => %{"sessionId" => sid}}, _} = await_response(2)
+      path = Path.join(secondary, "unsaved.ex")
+
+      task =
+        Task.async(fn ->
+          SuperPi.Tools.execute("read", %{"path" => path}, %{conversation_id: conv_of(sid)})
+        end)
+
+      assert_receive {:acp_out,
+                      %{
+                        "method" => "fs/read_text_file",
+                        "id" => id,
+                        "params" => %{"path" => ^path}
+                      }},
+                     2000
+
+      respond(server, id, %{"content" => "secondary unsaved buffer"})
+      assert Task.await(task)["output"] == "secondary unsaved buffer"
+    end
 
     test "an unsaved buffer is served by the client, a failure falls back, :never skips", %{
       server: server

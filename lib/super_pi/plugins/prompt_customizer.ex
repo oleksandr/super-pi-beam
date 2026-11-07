@@ -9,6 +9,9 @@ defmodule SuperPi.Plugins.PromptCustomizer do
 
   use SuperPi.Extension
 
+  @impl true
+  def agent_start_phase, do: :request
+
   def id, do: "prompt_customizer"
   def name, do: "Adaptive Tool Guidance & Prompt Customizer"
   def description, do: "Injects modular operational rules dynamically based on active tools"

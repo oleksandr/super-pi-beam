@@ -117,13 +117,13 @@ defmodule SuperPi.AI.Providers.OpenAI do
     |> put_tools(Map.get(payload, :tools, []))
     |> put_max_tokens("max_completion_tokens")
     |> put_response_format(Map.get(payload, :json_schema))
-    |> put_reasoning_effort(model || Map.get(payload, :model), :chat)
+    |> put_reasoning_effort(model || Map.get(payload, :model), :chat, Map.get(payload, :effort))
   end
 
-  defp put_reasoning_effort(body, model, api) do
+  defp put_reasoning_effort(body, model, api, override) do
     efforts = Application.get_env(:super_pi, :openai_reasoning_effort, @default_reasoning_effort)
 
-    case Map.get(efforts, normalize_model(model)) do
+    case override || Map.get(efforts, normalize_model(model)) do
       nil -> body
       effort when api == :chat -> Map.put(body, "reasoning_effort", effort)
       effort -> Map.put(body, "reasoning", %{"effort" => effort})
@@ -143,7 +143,11 @@ defmodule SuperPi.AI.Providers.OpenAI do
     |> put_responses_tools(Map.get(payload, :tools, []))
     |> put_max_tokens("max_output_tokens")
     |> put_responses_format(Map.get(payload, :json_schema))
-    |> put_reasoning_effort(model || Map.get(payload, :model), :responses)
+    |> put_reasoning_effort(
+      model || Map.get(payload, :model),
+      :responses,
+      Map.get(payload, :effort)
+    )
   end
 
   defp system_prompt(payload) do

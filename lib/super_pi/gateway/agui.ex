@@ -425,7 +425,11 @@ defmodule SuperPi.Gateway.AGUI do
 
   defp configure(conv_id, new?, harness, params) do
     requested = get_in(params, ["forwardedProps", "executionMode"])
-    agent = harness.agent_defaults() |> Permissions.apply_remote_mode(requested)
+
+    agent =
+      harness.agent_defaults(mode: Permissions.remote_mode(requested))
+      |> Permissions.apply_remote_mode(requested)
+
     if new?, do: Storage.configure_agent!(conv_id, agent)
   end
 

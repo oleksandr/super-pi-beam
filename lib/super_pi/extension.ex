@@ -2,6 +2,13 @@ defmodule SuperPi.Extension do
   @moduledoc """
   Unified 12-Hook Extension Pipeline behaviour (`09 - Data Flows and Extension Injection Points.md`).
 
+  Configuration also supports `configure_agent/2` (durable defaults) and `lifecycle_effects/0`
+  (declare effects outside the tool pipeline; mutating lifecycle extensions are disabled in plan).
+  A `before_agent_start/2` hook may return `{:request, agent}` to start a request-only phase:
+  its changes and subsequent prompt transformations are not saved in `pi.agent`.
+  `agent_start_phase/0` orders configuration providers before request transformations; within
+  the request phase, put profile filtering before prompt customization.
+
   Every callback is optional; modules that `use SuperPi.Extension` inherit pass-through default
   implementations and can override only the hooks they need.
 
@@ -22,11 +29,15 @@ defmodule SuperPi.Extension do
 
   @type context :: map()
 
+  @callback configure_agent(map(), context()) :: map()
+  @callback lifecycle_effects() :: [atom()]
+  @callback agent_start_phase() :: :configure | :request
+
   @callback on_input(input :: String.t(), context()) ::
-              :continue | {:transform, String.t(), list()} | :handled
+              :continue | {:transform, String.t(), list()} | :handled | {:error, String.t()}
 
   @callback before_agent_start(agent_config :: map(), context()) ::
-              {:ok, map()}
+              {:ok, map()} | {:request, map()}
 
   @callback before_compact(compaction_req :: map(), context()) ::
               :default | {:compacted, String.t(), map()} | :cancel
@@ -62,6 +73,9 @@ defmodule SuperPi.Extension do
               :accept | {:continue, String.t()}
 
   @optional_callbacks [
+    configure_agent: 2,
+    lifecycle_effects: 0,
+    agent_start_phase: 0,
     on_input: 2,
     before_agent_start: 2,
     before_compact: 2,
@@ -79,6 +93,15 @@ defmodule SuperPi.Extension do
   defmacro __using__(_opts) do
     quote do
       @behaviour SuperPi.Extension
+
+      @impl true
+      def configure_agent(agent, _ctx), do: agent
+
+      @impl true
+      def lifecycle_effects, do: []
+
+      @impl true
+      def agent_start_phase, do: :configure
 
       @impl true
       def on_input(_input, _ctx), do: :continue
@@ -116,7 +139,10 @@ defmodule SuperPi.Extension do
       @impl true
       def after_run(_summary, _ctx), do: :accept
 
-      defoverridable on_input: 2,
+      defoverridable configure_agent: 2,
+                     lifecycle_effects: 0,
+                     agent_start_phase: 0,
+                     on_input: 2,
                      before_agent_start: 2,
                      before_compact: 2,
                      before_request: 2,
@@ -132,6 +158,28 @@ defmodule SuperPi.Extension do
   end
 
   # --- Pipeline Runners ---
+
+  def configure_agent(extensions, agent, ctx \\ %{}) do
+    Enum.reduce(extensions, agent, fn ext, acc ->
+      {mod, _} = unpack_ext(ext)
+
+      if function_exported?(mod, :configure_agent, 2),
+        do: mod.configure_agent(acc, ext_ctx(ext, ctx)),
+        else: acc
+    end)
+  end
+
+  # Lifecycle effects bypass the tool permission gate, so disable mutating hooks in read-only modes.
+  def active(extensions, agent) do
+    if agent["executionMode"] == "plan" do
+      Enum.reject(extensions, fn ext ->
+        {mod, _} = unpack_ext(ext)
+        function_exported?(mod, :lifecycle_effects, 0) and mod.lifecycle_effects() != []
+      end)
+    else
+      extensions
+    end
+  end
 
   defp unpack_ext({mod, opts}) when is_atom(mod) do
     Code.ensure_loaded(mod)
@@ -169,6 +217,9 @@ defmodule SuperPi.Extension do
 
           :handled ->
             {:halt, :handled}
+
+          {:error, message} ->
+            {:halt, {:error, message}}
         end
       else
         {:cont, {:continue, cur_input, cur_media}}
@@ -177,19 +228,39 @@ defmodule SuperPi.Extension do
   end
 
   def run_before_agent_start(extensions, agent_cfg, ctx) do
-    Enum.reduce(extensions, agent_cfg, fn ext, acc ->
-      {mod, _opts} = unpack_ext(ext)
-      mod_ctx = ext_ctx(ext, ctx)
+    {_stored, request} = run_agent_start(extensions, agent_cfg, ctx)
+    request
+  end
 
-      if function_exported?(mod, :before_agent_start, 2) do
-        case mod.before_agent_start(acc, mod_ctx) do
-          {:ok, next} -> next
-          other -> other
+  @doc "Request-only transformations leave the durable tool loadout and base model intact."
+  def run_agent_start(extensions, agent_cfg, ctx) do
+    # Tool-provider plugins may be supplied via extra_plugins, after the harness's prompt hooks.
+    # Assemble their durable loadout before request-only profile filtering.
+    extensions =
+      Enum.sort_by(extensions, fn ext ->
+        {mod, _} = unpack_ext(ext)
+
+        if function_exported?(mod, :agent_start_phase, 0) and mod.agent_start_phase() == :request,
+          do: 1,
+          else: 0
+      end)
+
+    {stored, request, _} =
+      Enum.reduce(extensions, {agent_cfg, agent_cfg, false}, fn ext, {stored, acc, transient?} ->
+        {mod, _opts} = unpack_ext(ext)
+        mod_ctx = ext_ctx(ext, ctx)
+
+        if function_exported?(mod, :before_agent_start, 2) do
+          case mod.before_agent_start(acc, mod_ctx) do
+            {:ok, next} -> {if(transient?, do: stored, else: next), next, transient?}
+            {:request, next} -> {stored, next, true}
+          end
+        else
+          {stored, acc, transient?}
         end
-      else
-        acc
-      end
-    end)
+      end)
+
+    {stored, request}
   end
 
   def run_before_compact(extensions, req, ctx) do

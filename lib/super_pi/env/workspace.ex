@@ -60,7 +60,7 @@ defmodule SuperPi.Env.Workspace do
   @type t :: %__MODULE__{}
 
   @file_tools ~w(read read_file write write_file edit edit_file grep search_files find find_files ls list_dir list_directory)
-  @exec_tools ~w(bash sh terminal run_command exec)
+  @exec_tools ~w(bash sh terminal run_command exec git_inspect)
 
   @doc "Resolves the workspace for a tool call. `ctx` has `:conversation_id` and, in a turn, `:active_task_id`."
   @spec resolve(map()) :: {:ok, t()} | {:error, String.t()}
@@ -71,16 +71,20 @@ defmodule SuperPi.Env.Workspace do
         id -> Doc.snapshot("conversation", id, "pi.agent") || %{}
       end
 
-    build(Map.get(agent, "workspace") || %{"kind" => "local"}, ctx)
+    build(
+      Map.get(agent, "workspace") || %{"kind" => "local"},
+      Map.put(ctx, :workspace_root, SuperPi.WorkspacePaths.primary(agent))
+    )
   end
 
   @doc "Resolves a workspace from its configuration map."
   def build(cfg, ctx \\ %{})
 
-  def build(%{"kind" => "local"} = cfg, _ctx) do
+  def build(%{"kind" => "local"} = cfg, ctx) do
     {:ok,
      %__MODULE__{
        kind: "local",
+       root: Map.get(ctx, :workspace_root),
        env: SuperPi.Env.Local,
        capabilities: caps(cfg, [:fs, :exec]),
        artifacts?: cfg["artifacts"] == true
