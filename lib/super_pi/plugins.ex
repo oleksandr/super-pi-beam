@@ -8,6 +8,8 @@ defmodule SuperPi.Plugins do
   """
 
   alias SuperPi.Plugins.{
+    Approvals,
+    Profiles,
     AutoCommit,
     ConfirmDestructive,
     CustomCompaction,
@@ -33,6 +35,8 @@ defmodule SuperPi.Plugins do
   }
 
   @built_in_plugins [
+    Approvals,
+    Profiles,
     AutoCommit,
     ConfirmDestructive,
     CustomCompaction,
@@ -52,6 +56,8 @@ defmodule SuperPi.Plugins do
   ]
 
   @aliases %{
+    "profiles" => Profiles,
+    "approvals" => Approvals,
     "auto_commit" => AutoCommit,
     "auto-commit" => AutoCommit,
     "confirm_destructive" => ConfirmDestructive,

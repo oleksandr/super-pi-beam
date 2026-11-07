@@ -17,7 +17,7 @@ defmodule SuperPi.CLI do
   alias SuperPi.Harness
   alias SuperPi.Plugins.TranscriptLogger
   alias SuperPi.TUI.Owl, as: OwlTUI
-  alias SuperPi.Workflow
+  alias SuperPi.Plugins.Profiles
 
   # `--agent` values of earlier releases and the harness each one selects.
   @agent_aliases %{"self" => "super-pi-code", "research" => "super-pi-planner"}
@@ -70,7 +70,11 @@ defmodule SuperPi.CLI do
     %{"name" => "/boost", "description" => "Maximize reasoning effort (effort=max)"},
     %{"name" => "/compact", "description" => "Compact conversation context"},
     %{"name" => "/model", "description" => "Switch active LLM model (/model <name>)"},
-    %{"name" => "/mode", "description" => "Switch execution mode (/mode auto|plan|accept-edits)"},
+    %{
+      "name" => "/mode",
+      "description" =>
+        "Switch profile (/mode ask|plan|build|<id>); legacy permission modes also work"
+    },
     %{"name" => "/fork", "description" => "Fork current conversation branch"},
     %{"name" => "/help", "description" => "Display keyboard shortcuts and slash commands"}
   ]
@@ -387,21 +391,34 @@ defmodule SuperPi.CLI do
         do: Map.put(agent, "settingsOverride", previous["settingsOverride"] || %{}),
         else: agent
 
-    inherited = if Workflow.supported?(agent), do: previous["workflowMode"]
-    mode = flags.workflow || inherited
+    inherited = if Profiles.supported?(agent), do: previous["profile"] || previous["workflowMode"]
+    mode = flags.workflow || flags.mode || inherited
+    profile = Enum.find(agent["profiles"] || [], &(&1["id"] == flags.workflow))
 
     cond do
-      is_nil(mode) ->
-        {:ok, Map.put(agent, "workflowMode", nil)}
+      not Profiles.supported?(agent) and flags.workflow ->
+        {:error, "This harness does not include Profiles."}
 
-      flags.dangerously_skip_permissions ->
-        {:error, "--dangerously-skip-permissions conflicts with workflow permissions."}
+      flags.workflow &&
+          (flags.dangerously_skip_permissions or
+             (flags.mode && profile && flags.mode != profile["execution_mode"])) ->
+        {:error, "Permission flags conflict with the selected profile."}
 
-      flags.mode && flags.mode != Workflow.permission(mode) ->
-        {:error, "--mode conflicts with --workflow #{mode}. Select a workflow without --mode."}
+      Profiles.supported?(agent) and flags.dangerously_skip_permissions ->
+        Profiles.select(agent, "auto")
+
+      Profiles.supported?(agent) and is_nil(flags.workflow) and is_nil(flags.mode) and
+          is_map(previous["profilePolicy"]) ->
+        {:ok,
+         agent
+         |> Map.merge(Map.take(previous, ["profile", "profilePolicy"]))
+         |> SuperPi.ExecutionMode.enforce_workflow()}
+
+      not Profiles.supported?(agent) or is_nil(mode) ->
+        {:ok, agent}
 
       true ->
-        Workflow.select(agent, mode)
+        Profiles.select(agent, mode)
     end
   end
 
@@ -1026,7 +1043,7 @@ defmodule SuperPi.CLI do
       --conversation <id>             Resume a previous conversation by numeric ID
       --model <model>                 Active LLM model
       --mode <mode>                   Execution mode (auto, accept-edits, plan)
-      --workflow <ask|plan|build>      Coding workflow (code harness only)
+      --workflow <id>                 Profile ID (requires Profiles plugin)
       --effort <level>                Reasoning effort (low, medium, high, xhigh, max)
       --agent <profile>               Deprecated alias of --harness (self is code, research is planner)
       --add-dir <path>                Add a directory to the workspace (repeatable)

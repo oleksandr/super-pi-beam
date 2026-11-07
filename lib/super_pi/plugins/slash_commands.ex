@@ -21,7 +21,7 @@ defmodule SuperPi.Plugins.SlashCommands do
 
   alias SuperPi.Durable.{Doc, Storage}
   alias SuperPi.Plugins.Permissions
-  alias SuperPi.Workflow
+  alias SuperPi.Plugins.Profiles
 
   @impl true
   def on_input(input, ctx) do
@@ -33,17 +33,9 @@ defmodule SuperPi.Plugins.SlashCommands do
       trimmed = String.trim(input)
 
       cond do
-        trimmed == "/workflow" or String.starts_with?(trimmed, "/workflow ") ->
-          mode = trimmed |> String.replace_prefix("/workflow", "") |> String.trim()
-
-          with {:ok, updated} <- Workflow.select(agent_cfg, mode) do
-            Storage.configure_agent!(
-              ctx.conversation_id,
-              Map.take(updated, ["workflowMode", "executionMode", "dangerouslySkipPermissions"])
-            )
-
-            :handled
-          end
+        Profiles.supported?(agent_cfg) and
+            (String.starts_with?(trimmed, "/mode ") or String.starts_with?(trimmed, "/workflow ")) ->
+          Profiles.on_input(input, ctx)
 
         String.starts_with?(trimmed, "/model ") ->
           new_model = trimmed |> String.replace_prefix("/model ", "") |> String.trim()
@@ -58,10 +50,6 @@ defmodule SuperPi.Plugins.SlashCommands do
             new_mode not in ["auto", "accept-edits", "plan"] ->
               {:error, "Unknown permission mode #{inspect(new_mode)}."}
 
-            Workflow.valid?(agent_cfg["workflowMode"]) and
-                new_mode != Workflow.permission(agent_cfg["workflowMode"]) ->
-              {:error, "Use /workflow ask|plan|build to change this workflow's permissions."}
-
             Permissions.rank_of(new_mode) >
                 Permissions.rank_of(agent_cfg["maxExecutionMode"] || "auto") ->
               {:error, "Permission mode exceeds this harness's ceiling."}
@@ -75,9 +63,9 @@ defmodule SuperPi.Plugins.SlashCommands do
           rest = trimmed |> String.replace_prefix("/plan", "") |> String.trim()
 
           changes =
-            if Workflow.supported?(agent_cfg) do
-              {:ok, updated} = Workflow.select(agent_cfg, "plan")
-              Map.take(updated, ["workflowMode", "executionMode", "dangerouslySkipPermissions"])
+            if Profiles.supported?(agent_cfg) do
+              {:ok, updated} = Profiles.select(agent_cfg, "plan")
+              Profiles.changes(updated)
             else
               %{"executionMode" => "plan", "dangerouslySkipPermissions" => false}
             end

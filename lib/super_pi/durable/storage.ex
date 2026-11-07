@@ -299,13 +299,15 @@ defmodule SuperPi.Durable.Storage do
     # handoff did), so a mode picker can follow.
     if is_binary(updated["executionMode"]) and
          (updated["executionMode"] != before["executionMode"] or
+            updated["maxExecutionMode"] != before["maxExecutionMode"] or
+            updated["profile"] != before["profile"] or
             updated["workflowMode"] != before["workflowMode"]) do
       SuperPi.Event.publish(
         SuperPi.Event.mode_changed(
           conversation_id,
           updated["executionMode"],
           updated["maxExecutionMode"],
-          updated["workflowMode"]
+          updated["profile"] || updated["workflowMode"]
         )
       )
     end

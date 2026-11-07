@@ -274,19 +274,13 @@ defmodule SuperPi.Conversation.Machine do
   defp maybe_start_mcp(%{mcp_started: true} = data), do: data
 
   defp maybe_start_mcp(data) do
-    agent = Doc.snapshot("conversation", data.conversation_id, "pi.agent") || %{}
-
-    if agent["workflowMode"] == "ask" do
-      data
-    else
-      start_mcp_clients(data.conversation_id)
-      %{data | mcp_started: true}
-    end
+    start_mcp_clients(data.conversation_id)
+    %{data | mcp_started: true}
   end
 
   defp active_extensions(data) do
     agent = Doc.snapshot("conversation", data.conversation_id, "pi.agent") || %{}
-    SuperPi.Workflow.extensions(data.extensions, agent)
+    Extension.active(data.extensions, agent)
   end
 
   # --- State: :recovering ---
@@ -298,6 +292,10 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   def handle_event(:internal, :reconcile, :recovering, data) do
+    agent = Doc.snapshot("conversation", data.conversation_id, "pi.agent") || %{}
+    configured = Extension.configure_agent(data.extensions, agent)
+    if configured != agent, do: Storage.configure_agent!(data.conversation_id, configured)
+
     # MCP servers start here, not in `init/1`: `init` runs inside the supervisor's start call, and
     # a slow server would block every other machine start. The first request still waits for it.
     try do
@@ -582,10 +580,12 @@ defmodule SuperPi.Conversation.Machine do
     ctx = hook_ctx(data)
 
     agent_doc = Doc.snapshot("conversation", data.conversation_id, "pi.agent") || %{}
-    mutated_agent = Extension.run_before_agent_start(active_extensions(data), agent_doc, ctx)
 
-    if mutated_agent != agent_doc do
-      Storage.configure_agent!(data.conversation_id, mutated_agent)
+    {stored_agent, mutated_agent} =
+      Extension.run_agent_start(active_extensions(data), agent_doc, ctx)
+
+    if stored_agent != agent_doc do
+      Storage.configure_agent!(data.conversation_id, stored_agent)
     end
 
     sections =
@@ -594,13 +594,10 @@ defmodule SuperPi.Conversation.Machine do
         _ -> [%{"id" => "core", "content" => "You are Super-Pi-BEAM."}]
       end
 
-    sections = SuperPi.Workflow.sections(sections, mutated_agent)
-
     # Only tools that the workspace can serve are offered (`SuperPi.Env.Workspace`).
     tools =
       Map.get(mutated_agent, "tools", [])
       |> SuperPi.Env.Workspace.offered_tools(mutated_agent)
-      |> SuperPi.Workflow.offered_tools(mutated_agent)
 
     # One read of the history serves the system-state check and the derivation.
     {visible, graph} = Context.visible_entries_with_graph(data.conversation_id)
@@ -997,12 +994,7 @@ defmodule SuperPi.Conversation.Machine do
 
     before_tool_res =
       try do
-        agent = Doc.snapshot("conversation", data.conversation_id, "pi.agent") || %{}
-
-        case SuperPi.Workflow.check_tool(tool_name, agent) do
-          :allow -> Extension.run_before_tool(active_extensions(data), tool_name, raw_args, ctx)
-          blocked -> blocked
-        end
+        Extension.run_before_tool(active_extensions(data), tool_name, raw_args, ctx)
       rescue
         e -> {:block, "Extension error: #{Exception.message(e)}"}
       end

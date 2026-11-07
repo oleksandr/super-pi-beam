@@ -25,6 +25,9 @@ defmodule SuperPi.CommandApprovalTest do
       "executionMode" => "accept-edits"
     }
 
+    agent = SuperPi.Plugins.Profiles.configure_agent(agent, %{config: []})
+    {:ok, agent} = SuperPi.Plugins.Profiles.select(agent, "build")
+
     %{agent: agent, dir: dir}
   end
 
@@ -52,7 +55,7 @@ defmodule SuperPi.CommandApprovalTest do
       {:ok, machine} =
         Machine.start_link(
           conversation_id: conv.id,
-          extensions: [Permissions],
+          extensions: [Permissions, SuperPi.Plugins.Approvals, SuperPi.Plugins.Profiles],
           tool_executor: fn _, _, _ ->
             flunk("Approval must wait in the permission wrapper, outside the command timeout")
           end,
@@ -78,8 +81,7 @@ defmodule SuperPi.CommandApprovalTest do
       assert_receive {:payload, payload}
       assert Enum.any?(payload.tools, &(&1["name"] == "request_command_approval"))
 
-      if unquote(mode) == "ask",
-        do: assert(Enum.map(payload.tools, & &1["name"]) == ["request_command_approval"])
+      assert Enum.any?(payload.tools, &(&1["name"] == "switch_mode"))
 
       assert CommandRules.load(agent) == @prefixes
 
@@ -91,8 +93,8 @@ defmodule SuperPi.CommandApprovalTest do
                  conversation_id: other.id
                })
 
-      assert config["workflowMode"] ==
-               Doc.snapshot("conversation", conv.id, "pi.agent")["workflowMode"]
+      assert config["profile"] ==
+               Doc.snapshot("conversation", conv.id, "pi.agent")["profile"]
 
       GenServer.stop(machine)
     end
@@ -175,7 +177,7 @@ defmodule SuperPi.CommandApprovalTest do
     {:ok, ask} = Workflow.select(agent, "ask")
     {:ok, plan} = Workflow.select(agent, "plan")
 
-    assert {:block, _} =
+    assert :allow =
              Permissions.evaluate("git_inspect", %{"operation" => "diff"}, ask, settings)
 
     assert {:block, _} = Permissions.evaluate("bash", %{"command" => "git diff"}, plan, settings)

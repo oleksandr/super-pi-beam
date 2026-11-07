@@ -196,7 +196,13 @@ defmodule SuperPi.Gateway.Router do
           end
 
         agent_cfg =
-          harness.agent_defaults(agent_opts)
+          harness.agent_defaults(
+            Keyword.put(
+              agent_opts,
+              :mode,
+              SuperPi.Plugins.Permissions.remote_mode(requested_mode)
+            )
+          )
           |> SuperPi.Plugins.Permissions.apply_remote_mode(requested_mode)
 
         current_agent = SuperPi.Durable.Doc.snapshot("conversation", conv_id, "pi.agent") || %{}

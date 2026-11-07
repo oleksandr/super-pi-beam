@@ -373,7 +373,8 @@ defmodule SuperPi.PluginsTest do
 
       defaults = SuperPi.Harness.Code.agent_defaults()
       assert defaults["effort"] == "high"
-      assert defaults["executionMode"] == "accept-edits"
+      assert defaults["executionMode"] == "plan"
+      assert defaults["profile"] == "ask"
       assert defaults["maxExecutionMode"] == "auto"
     end
 

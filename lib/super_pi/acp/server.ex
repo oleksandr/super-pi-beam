@@ -19,7 +19,7 @@ defmodule SuperPi.ACP.Server do
   | `_superpi/session/fork` | Fork at the latest entry into a new session (ACP's `_` convention for custom methods) |
   | `session/prompt` | Submits in a supervised task, so `session/cancel` can arrive during the prompt |
   | `session/cancel` | `UI.Broker.cancel_pending/1`, then `Machine.cancel/1`, in that order |
-  | `session/set_mode` | Selects Ask, Plan or Build for Code; permission modes for other harnesses. Respects both ceilings |
+  | `session/set_mode` | Selects configured profiles, with a permission-mode fallback. Respects both ceilings |
 
   `stopReason`: `end_turn` for a finished turn, `cancelled` for a cancel, `refusal` for an error (the
   error text goes to the client as a message chunk first).
@@ -247,6 +247,7 @@ defmodule SuperPi.ACP.Server do
               "session/load",
               "session/prompt",
               "session/set_mode",
+              "session/set_config_option",
               "_superpi/session/fork"
             ] do
     reply_error(st, id, -32000, "Authentication required")
@@ -261,7 +262,11 @@ defmodule SuperPi.ACP.Server do
       st = attach(st, session)
 
       st
-      |> reply(id, %{"sessionId" => session.id, "modes" => Session.modes(session.conversation_id)})
+      |> reply(id, %{
+        "sessionId" => session.id,
+        "modes" => Session.modes(session.conversation_id),
+        "configOptions" => Session.config_options(session.conversation_id)
+      })
       |> send_commands(session)
     else
       {:error, message} -> reply_error(st, id, -32602, message)
@@ -280,7 +285,10 @@ defmodule SuperPi.ACP.Server do
       st = Enum.reduce(Session.replay(session), st, &notify_update(&2, session.id, &1))
 
       st
-      |> reply(id, %{"modes" => Session.modes(session.conversation_id)})
+      |> reply(id, %{
+        "modes" => Session.modes(session.conversation_id),
+        "configOptions" => Session.config_options(session.conversation_id)
+      })
       |> send_commands(session)
     else
       {:error, :not_found, message} -> reply_error(st, id, -32002, message)
@@ -324,6 +332,29 @@ defmodule SuperPi.ACP.Server do
          :ok <- Session.set_mode(session.conversation_id, params["modeId"]) do
       reply(st, id, %{})
     else
+      %{} ->
+        reply_error(
+          st,
+          id,
+          -32602,
+          "Wait for the current prompt to finish before switching modes"
+        )
+
+      {:error, message} ->
+        reply_error(st, id, -32602, message)
+    end
+  end
+
+  defp handle_message("session/set_config_option", id, params, st) do
+    with true <- params["configId"] == "mode" and params["type"] in [nil, "id"],
+         {:ok, session} <- fetch_session(st, params),
+         nil <- session.prompt,
+         :ok <- Session.set_mode(session.conversation_id, params["value"]) do
+      reply(st, id, %{"configOptions" => Session.config_options(session.conversation_id)})
+    else
+      false ->
+        reply_error(st, id, -32602, "Unknown config option or type")
+
       %{} ->
         reply_error(
           st,
@@ -486,6 +517,16 @@ defmodule SuperPi.ACP.Server do
 
   defp render_event(st, session_id, ev) do
     session = Map.fetch!(st.sessions, session_id)
+
+    ev =
+      if ev.type == "mode_changed",
+        do: %{
+          ev
+          | data:
+              Map.put(ev.data, "configOptions", Session.config_options(session.conversation_id))
+        },
+        else: ev
+
     {items, renderer} = Renderer.ACP.render(ev, session.renderer)
     st = put_session(st, %{Map.fetch!(st.sessions, session_id) | renderer: renderer})
 

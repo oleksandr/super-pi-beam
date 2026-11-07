@@ -364,7 +364,12 @@ defmodule SuperPi.Plugins.Subagent do
     workspace_opts =
       if paths = parent_agent["workspacePaths"], do: [workspace_paths: paths], else: []
 
-    defaults = harness.agent_defaults(model_opts ++ workspace_opts)
+    mode_opts =
+      if role in @read_only_roles,
+        do: [],
+        else: [mode: Map.get(parent_agent, "executionMode", "accept-edits")]
+
+    defaults = harness.agent_defaults(model_opts ++ workspace_opts ++ mode_opts)
 
     mode =
       if role in @read_only_roles,

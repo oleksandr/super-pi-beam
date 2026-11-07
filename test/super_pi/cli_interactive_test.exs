@@ -170,6 +170,8 @@ defmodule SuperPi.CLIInteractiveTest do
   end
 
   describe "--workflow" do
+    setup %{opts: opts}, do: %{opts: Keyword.put(opts, :extensions, [SuperPi.Plugins.Profiles])}
+
     test "selects a workflow and preserves it on resume", %{opts: opts} do
       me = self()
 
@@ -180,9 +182,11 @@ defmodule SuperPi.CLIInteractiveTest do
         end)
 
       assert {0, "pong"} = CLI.run(["--workflow", "ask", "-p", "hi"], opts)
-      assert_receive {:workflow_payload, %{tools: []}}
+      assert_receive {:workflow_payload, payload}
+      assert Enum.any?(payload.tools, &(&1["name"] == "read"))
+      refute Enum.any?(payload.tools, &(&1["name"] == "write"))
       conv = Storage.latest_conversation()
-      assert Doc.snapshot("conversation", conv.id, "pi.agent")["workflowMode"] == "ask"
+      assert Doc.snapshot("conversation", conv.id, "pi.agent")["profile"] == "ask"
 
       Storage.configure_agent!(conv.id, %{
         "approvedWorkspacePaths" => [System.tmp_dir!()],
@@ -190,8 +194,10 @@ defmodule SuperPi.CLIInteractiveTest do
       })
 
       assert {0, "pong"} = CLI.run(["--conversation", to_string(conv.id), "-p", "again"], opts)
-      assert_receive {:workflow_payload, %{tools: []}}
-      assert Doc.snapshot("conversation", conv.id, "pi.agent")["workflowMode"] == "ask"
+      assert_receive {:workflow_payload, payload}
+      assert Enum.any?(payload.tools, &(&1["name"] == "read"))
+      refute Enum.any?(payload.tools, &(&1["name"] == "write"))
+      assert Doc.snapshot("conversation", conv.id, "pi.agent")["profile"] == "ask"
 
       resumed = Doc.snapshot("conversation", conv.id, "pi.agent")
       assert System.tmp_dir!() in resumed["workspacePaths"]
@@ -218,11 +224,11 @@ defmodule SuperPi.CLIInteractiveTest do
       end
 
       assert {0, "pong"} = CLI.run(["--workflow", "plan", "--mode", "plan", "-p", "hi"], opts)
-      assert {1, _} = CLI.run(["--continue", "--mode", "auto", "-p", "hi"], opts)
+      assert {0, "pong"} = CLI.run(["--continue", "--mode", "auto", "-p", "hi"], opts)
 
       assert Doc.snapshot("conversation", Storage.latest_conversation().id, "pi.agent")[
-               "workflowMode"
-             ] == "plan"
+               "profile"
+             ] == "auto"
     end
 
     test "interactive workflow commands report errors and preserve mode", %{opts: opts} do
@@ -235,12 +241,12 @@ defmodule SuperPi.CLIInteractiveTest do
         ])
 
       assert out =~ "error:"
-      assert out =~ "Unknown workflow"
+      assert out =~ "Unknown profile"
       assert out =~ "pong"
 
       assert Doc.snapshot("conversation", Storage.latest_conversation().id, "pi.agent")[
-               "workflowMode"
-             ] == "ask"
+               "profile"
+             ] == "auto"
     end
   end
 

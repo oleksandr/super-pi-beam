@@ -379,12 +379,15 @@ defmodule SuperPi.ACPTest do
       assert agent["workspacePaths"] == [File.cwd!()]
       assert agent["harness"] == "super-pi-code"
 
-      assert %{"currentModeId" => "build", "availableModes" => modes} =
+      assert %{"currentModeId" => "ask", "availableModes" => modes} =
                resp["result"]["modes"]
 
       assert Enum.map(modes, & &1["id"]) == ["ask", "plan", "build"]
-      assert agent["workflowMode"] == "build"
-      assert agent["executionMode"] == "accept-edits"
+      assert agent["profile"] == "ask"
+      assert agent["executionMode"] == "plan"
+
+      assert [%{"currentValue" => "ask", "category" => "mode", "type" => "select"}] =
+               resp["result"]["configOptions"]
 
       cmds =
         Enum.find(
@@ -446,7 +449,7 @@ defmodule SuperPi.ACPTest do
     test "Ask and Plan emit distinct mode updates and survive session reload", %{server: server} do
       {sid, _, _} = new_session(server)
 
-      for {mode, id} <- [{"ask", 3}, {"plan", 4}, {"build", 5}, {"ask", 6}] do
+      for {mode, id} <- [{"plan", 3}, {"ask", 4}, {"build", 5}, {"ask", 6}] do
         rpc(server, id, "session/set_mode", %{"sessionId" => sid, "modeId" => mode})
         assert {%{"result" => %{}}, notes} = await_response(id)
 
@@ -463,7 +466,7 @@ defmodule SuperPi.ACPTest do
         end
 
         agent = SuperPi.Durable.Doc.snapshot("conversation", conv_of(sid), "pi.agent")
-        assert agent["workflowMode"] == mode
+        assert agent["profile"] == mode
         assert agent["executionMode"] == if(mode == "build", do: "accept-edits", else: "plan")
       end
 
@@ -471,9 +474,61 @@ defmodule SuperPi.ACPTest do
       assert {%{"result" => %{"modes" => %{"currentModeId" => "ask"}}}, _} = await_response(7)
     end
 
+    test "config options and legacy modes share a selector and synchronized notifications", %{
+      server: server
+    } do
+      {sid, _, _} = new_session(server)
+
+      rpc(server, 3, "session/set_config_option", %{
+        "sessionId" => sid,
+        "configId" => "mode",
+        "type" => "id",
+        "value" => "build"
+      })
+
+      assert {%{"result" => %{"configOptions" => [%{"currentValue" => "build"}]}}, notes} =
+               await_response(3)
+
+      updates = notes ++ drain()
+
+      for kind <- ["current_mode_update", "config_option_update"] do
+        unless Enum.any?(updates, &(get_in(&1, ["params", "update", "sessionUpdate"]) == kind)) do
+          assert_receive {:acp_out, %{"params" => %{"update" => %{"sessionUpdate" => ^kind}}}}
+        end
+      end
+
+      assert SuperPi.ACP.Session.modes(conv_of(sid))["currentModeId"] == "build"
+
+      rpc(server, 4, "session/set_config_option", %{
+        "sessionId" => sid,
+        "configId" => "mode",
+        "value" => "plan"
+      })
+
+      assert {%{"result" => %{"configOptions" => [%{"currentValue" => "plan"}]}}, _} =
+               await_response(4)
+
+      rpc(server, 5, "session/set_config_option", %{
+        "sessionId" => sid,
+        "configId" => "invalid",
+        "value" => "build"
+      })
+
+      assert {%{"error" => _}, _} = await_response(5)
+      assert SuperPi.ACP.Session.modes(conv_of(sid))["currentModeId"] == "plan"
+    end
+
     test "loading a legacy auto session adopts Build with command approvals", %{server: server} do
       {sid, _, _} = new_session(server)
-      Storage.configure_agent!(conv_of(sid), %{"workflowMode" => nil, "executionMode" => "auto"})
+
+      Storage.configure_agent!(conv_of(sid), %{
+        "workflowMode" => nil,
+        "profile" => nil,
+        "profilePolicy" => nil,
+        "profilesConfig" => nil,
+        "executionMode" => "auto"
+      })
+
       rpc(server, 3, "session/load", %{"sessionId" => sid, "cwd" => File.cwd!()})
       assert {%{"result" => %{"modes" => %{"currentModeId" => "build"}}}, _} = await_response(3)
 
@@ -703,6 +758,7 @@ defmodule SuperPi.ACPTest do
     } do
       {sid, _, _} = new_session(server, %{"_meta" => %{"harness" => "super-pi-code"}})
       conv_id = conv_of(sid)
+      :ok = SuperPi.ACP.Session.set_mode(conv_id, "build")
 
       SuperPi.Durable.Storage.configure_agent!(conv_id, %{
         "tools" => [%{"name" => "mcp__x__y", "effects" => ["net_write"]}]
@@ -746,6 +802,7 @@ defmodule SuperPi.ACPTest do
 
     test "rejecting a permission blocks the tool", %{server: server} do
       {sid, _, _} = new_session(server)
+      :ok = SuperPi.ACP.Session.set_mode(conv_of(sid), "build")
 
       SuperPi.Durable.Storage.configure_agent!(conv_of(sid), %{
         "tools" => [%{"name" => "mcp__x__y", "effects" => ["net_write"]}]

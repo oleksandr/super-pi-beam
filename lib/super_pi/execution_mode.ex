@@ -28,6 +28,16 @@ defmodule SuperPi.ExecutionMode do
   end
 
   # A workflow may tighten permissions; a legacy override cannot loosen its boundary.
+  def enforce_workflow(%{"profilePolicy" => %{"execution_mode" => ceiling}} = agent) do
+    mode = agent["executionMode"] || ceiling
+    mode = if rank_of(mode) > rank_of(ceiling), do: ceiling, else: mode
+
+    agent
+    |> Map.put("executionMode", mode)
+    |> Map.put("dangerouslySkipPermissions", false)
+    |> clamp()
+  end
+
   def enforce_workflow(agent) do
     case workflow_permission(agent["workflowMode"]) do
       nil ->

@@ -13,7 +13,7 @@ defmodule SuperPi.ACP.Session do
   alias SuperPi.Gateway.Sessions
   alias SuperPi.Harness
   alias SuperPi.Plugins.Permissions
-  alias SuperPi.Workflow
+  alias SuperPi.Plugins.Profiles
 
   @enforce_keys [:id, :conversation_id]
   defstruct [:id, :conversation_id, :renderer, :prompt, :last_end, cwd: nil]
@@ -47,7 +47,7 @@ defmodule SuperPi.ACP.Session do
       |> Map.put("harness", harness.id())
       |> Map.put("commandRulesScope", "user")
       |> Map.put("workspaceApprovalScope", "conversation")
-      |> Workflow.for_acp()
+      |> Profiles.for_acp()
 
     {conv_id, true} =
       Sessions.fetch_or_create(principal, session_id, fn ->
@@ -79,7 +79,8 @@ defmodule SuperPi.ACP.Session do
                 (agent["approvedWorkspacePaths"] || [])
             )
           )
-          |> Workflow.for_acp()
+          |> configure_profiles()
+          |> Profiles.for_acp()
 
         if updated != agent, do: Storage.configure_agent!(conv_id, updated)
         {:ok, build(session_id, conv_id, cwd)}
@@ -123,9 +124,14 @@ defmodule SuperPi.ACP.Session do
   def modes(conversation_id) do
     agent = Doc.snapshot("conversation", conversation_id, "pi.agent") || %{}
 
-    if Workflow.supported?(agent) do
-      agent = Workflow.for_acp(agent)
-      %{"currentModeId" => agent["workflowMode"], "availableModes" => Workflow.available(agent)}
+    if Profiles.supported?(agent) do
+      agent = Profiles.for_acp(agent)
+
+      %{
+        "currentModeId" => agent["profile"],
+        "availableModes" =>
+          Enum.map(Profiles.available(agent), &Map.take(&1, ["id", "name", "description"]))
+      }
     else
       permission_modes(agent)
     end
@@ -146,15 +152,10 @@ defmodule SuperPi.ACP.Session do
       agent = Doc.snapshot("conversation", conversation_id, "pi.agent") || %{}
 
       changes =
-        if Workflow.supported?(agent) do
-          {:ok, updated} = agent |> Workflow.for_acp() |> Workflow.select(mode_id)
+        if Profiles.supported?(agent) do
+          {:ok, updated} = agent |> Profiles.for_acp() |> Profiles.select(mode_id)
 
-          Map.take(updated, [
-            "workflowMode",
-            "executionMode",
-            "maxExecutionMode",
-            "dangerouslySkipPermissions"
-          ])
+          Profiles.changes(updated)
         else
           %{"executionMode" => mode_id}
         end
@@ -163,6 +164,31 @@ defmodule SuperPi.ACP.Session do
       :ok
     else
       {:error, "Mode #{inspect(mode_id)} is not available for this session"}
+    end
+  end
+
+  def config_options(conversation_id) do
+    modes = modes(conversation_id)
+
+    [
+      %{
+        "id" => "mode",
+        "name" => "Session Mode",
+        "category" => "mode",
+        "type" => "select",
+        "currentValue" => modes["currentModeId"],
+        "options" =>
+          Enum.map(modes["availableModes"], fn mode ->
+            %{"value" => mode["id"], "name" => mode["name"], "description" => mode["description"]}
+          end)
+      }
+    ]
+  end
+
+  defp configure_profiles(agent) do
+    case Harness.fetch(agent["harness"]) do
+      {:ok, harness} -> SuperPi.Extension.configure_agent(harness.extensions(), agent)
+      _ -> agent
     end
   end
 

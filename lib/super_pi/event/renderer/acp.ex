@@ -20,7 +20,7 @@ defmodule SuperPi.Event.Renderer.ACP do
   | `tool_blocked` | `tool_call_update`, status `failed` |
   | `subagent_started`, `subagent_finished` | a `tool_call` of kind `other` and its update |
   | `plan_updated` | `plan` |
-  | `mode_changed` | `current_mode_update` |
+  | `mode_changed` | `current_mode_update` and `config_option_update` |
   | `turn_*` | nothing. The server answers `session/prompt` with a stop reason. |
 
   A tool call is `pending` from `tool_started` until it is approved, or until it completes when no
@@ -190,6 +190,16 @@ defmodule SuperPi.Event.Renderer.ACP do
 
     {[{:update, %{"sessionUpdate" => "plan", "entries" => plan}}], st}
   end
+
+  def render(%Event{type: "mode_changed", data: %{"configOptions" => options} = data} = event, st) do
+    {updates, st} = render(%{event | data: Map.delete(data, "configOptions")}, st)
+
+    {updates ++
+       [{:update, %{"sessionUpdate" => "config_option_update", "configOptions" => options}}], st}
+  end
+
+  def render(%Event{type: "mode_changed", data: %{"profile" => mode}}, st),
+    do: {[{:update, %{"sessionUpdate" => "current_mode_update", "currentModeId" => mode}}], st}
 
   def render(%Event{type: "mode_changed", data: %{"workflow_mode" => mode}}, st),
     do: {[{:update, %{"sessionUpdate" => "current_mode_update", "currentModeId" => mode}}], st}

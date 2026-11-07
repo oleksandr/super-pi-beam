@@ -29,6 +29,9 @@ defmodule SuperPi.WorkspaceApprovalTest do
       "executionMode" => "accept-edits"
     }
 
+    agent = SuperPi.Plugins.Profiles.configure_agent(agent, %{config: []})
+    {:ok, agent} = SuperPi.Plugins.Profiles.select(agent, "build")
+
     %{agent: agent, primary: primary, secondary: secondary, base: base}
   end
 
@@ -56,7 +59,7 @@ defmodule SuperPi.WorkspaceApprovalTest do
       {:ok, machine} =
         Machine.start_link(
           conversation_id: conv.id,
-          extensions: [Permissions],
+          extensions: [Permissions, SuperPi.Plugins.Approvals, SuperPi.Plugins.Profiles],
           tool_executor: fn _, _, _ ->
             flunk("Human approval must bypass the command execution timeout")
           end,
@@ -75,7 +78,7 @@ defmodule SuperPi.WorkspaceApprovalTest do
       assert Enum.any?(payload.tools, &(&1["name"] == "request_workspace_access"))
       agent = Doc.snapshot("conversation", conv.id, "pi.agent")
       assert agent["workspacePaths"] == [ctx.primary, Permissions.canonical_path(ctx.secondary)]
-      assert agent["workflowMode"] == unquote(mode)
+      assert agent["profile"] == unquote(mode)
       assert agent["approvedWorkspacePaths"] == [Permissions.canonical_path(ctx.secondary)]
 
       read =
@@ -86,9 +89,7 @@ defmodule SuperPi.WorkspaceApprovalTest do
           %{}
         )
 
-      if unquote(mode) == "ask",
-        do: assert(match?({:block, _}, read)),
-        else: assert(read == :allow)
+      assert read == :allow
 
       edit =
         Permissions.evaluate(

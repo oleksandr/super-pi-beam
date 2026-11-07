@@ -1,4 +1,4 @@
-defmodule SuperPi.WorkflowTest do
+defmodule SuperPi.ProfilesIntegrationTest do
   use SuperPi.DataCase, async: false
 
   alias SuperPi.Conversation.Machine
@@ -6,7 +6,7 @@ defmodule SuperPi.WorkflowTest do
   alias SuperPi.Harness.Code
   alias SuperPi.Plugins.{Permissions, SlashCommands}
   alias SuperPi.TestSupport.Faults
-  alias SuperPi.Workflow
+  alias SuperPi.Plugins.Profiles, as: Workflow
 
   setup do
     dir = Path.join(System.tmp_dir!(), "workflow_#{System.unique_integer([:positive])}")
@@ -59,7 +59,7 @@ defmodule SuperPi.WorkflowTest do
       end
 
       read = Permissions.evaluate("read", %{"path" => Path.join(dir, "file")}, config, %{})
-      if mode == "ask", do: assert(match?({:block, _}, read)), else: assert(read == :allow)
+      assert read == :allow
     end
 
     build = select!(agent, "build")
@@ -72,7 +72,7 @@ defmodule SuperPi.WorkflowTest do
              })
   end
 
-  test "Ask skips repository discovery and hooks, and switching restores tools without losing history",
+  test "Ask reads repository rules and skips mutating hooks, and switching restores tools without losing history",
        %{agent: agent, sentinel: sentinel} do
     conv = Storage.create_conversation!(agent: select!(agent, "ask"))
     me = self()
@@ -92,15 +92,10 @@ defmodule SuperPi.WorkflowTest do
     assert {:ok, _} = Machine.submit(pid, "Supplied context: project uses OTP")
     assert_receive {:payload, ask}
 
-    assert Enum.map(ask.tools, & &1["name"]) == [
-             "request_command_approval",
-             "request_workspace_access"
-           ]
-
-    assert Enum.map(ask.system_sections, & &1["id"]) == ["workflow"]
-
-    refute inspect(Doc.snapshot("conversation", conv.id, "pi.agent")["systemSections"]) =~
-             "REPOSITORY_RULE_SENTINEL"
+    assert Enum.any?(ask.tools, &(&1["name"] == "read"))
+    refute Enum.any?(ask.tools, &(&1["name"] in ["write", "edit", "bash"]))
+    assert inspect(ask.system_sections) =~ "REPOSITORY_RULE_SENTINEL"
+    assert inspect(ask.system_sections) =~ "cite file paths"
 
     refute File.exists?(sentinel)
 
@@ -110,8 +105,8 @@ defmodule SuperPi.WorkflowTest do
     assert Enum.any?(plan.tools, &(&1["name"] == "read"))
     refute Enum.any?(plan.tools, &(&1["name"] in ["write", "edit", "bash"]))
     assert inspect(plan.system_sections) =~ "REPOSITORY_RULE_SENTINEL"
-    assert inspect(plan.system_sections) =~ "compare viable designs"
-    assert inspect(plan.system_sections) =~ "code review"
+    assert inspect(plan.system_sections) =~ "compare designs"
+    assert inspect(plan.system_sections) =~ "switch_mode"
     assert inspect(plan.messages) =~ "project uses OTP"
     refute File.exists?(sentinel)
 
@@ -120,45 +115,42 @@ defmodule SuperPi.WorkflowTest do
     assert_receive {:payload, build}
     assert Enum.any?(build.tools, &(&1["name"] == "write"))
     assert Enum.any?(build.tools, &(&1["name"] == "bash"))
-    assert inspect(build.system_sections) =~ "Build workflow"
-    refute inspect(build.system_sections) =~ "You are in Plan workflow"
+    assert inspect(build.system_sections) =~ "You are in Build"
+    refute inspect(build.system_sections) =~ "You are in Plan"
     assert File.exists?(sentinel), "Build restores lifecycle hooks"
 
     assert {:ok, :handled_by_extension} = Machine.submit(pid, "/workflow ask")
     assert {:ok, _} = Machine.submit(pid, "Explain your previous answer")
     assert_receive {:payload, ask_again}
 
-    assert Enum.map(ask_again.tools, & &1["name"]) == [
-             "request_command_approval",
-             "request_workspace_access"
-           ]
-
-    assert Enum.map(ask_again.system_sections, & &1["id"]) == ["workflow"]
+    assert Enum.any?(ask_again.tools, &(&1["name"] == "read"))
+    refute Enum.any?(ask_again.tools, &(&1["name"] in ["write", "edit", "bash"]))
+    refute inspect(ask_again.system_sections) =~ "CUSTOM_HOOK"
     GenServer.stop(pid)
   end
 
-  test "tightening Build permissions also changes the persisted workflow to Plan", %{agent: agent} do
+  test "tightening permissions cannot be undone by the active profile", %{agent: agent} do
     for changes <- [%{"executionMode" => "plan"}, %{"maxExecutionMode" => "plan"}] do
       conv = Storage.create_conversation!(agent: select!(agent, "build"))
       Storage.configure_agent!(conv.id, changes)
       config = Doc.snapshot("conversation", conv.id, "pi.agent")
-      assert config["workflowMode"] == "plan"
+      assert config["profile"] == "build"
       assert config["executionMode"] == "plan"
     end
   end
 
-  test "unsolicited model calls cannot bypass Ask or Plan even with no permission extension", %{
+  test "unsolicited model calls cannot bypass Ask or Plan through profile enforcement", %{
     agent: agent
   } do
     me = self()
 
-    for {mode, tool} <- [{"ask", "read"}, {"plan", "write"}] do
+    for {mode, tool} <- [{"ask", "write"}, {"plan", "write"}] do
       conv = Storage.create_conversation!(agent: select!(agent, mode))
 
       {:ok, pid} =
         Machine.start_link(
           conversation_id: conv.id,
-          extensions: [],
+          extensions: [Workflow],
           llm_responder: Faults.tool_then_text_responder(tool, %{}, "done"),
           tool_executor: fn name, _, _ ->
             send(me, {:executed, name})
@@ -174,7 +166,7 @@ defmodule SuperPi.WorkflowTest do
     end
   end
 
-  test "Plan filters deferred and MCP tools by effects; Ask offers none", %{agent: agent} do
+  test "Ask and Plan filter deferred and MCP tools by effects", %{agent: agent} do
     tools = [
       %{"name" => "mcp__docs__read", "effects" => ["net_read"]},
       %{"name" => "mcp__docs__write", "effects" => ["net_write"]},
@@ -189,21 +181,23 @@ defmodule SuperPi.WorkflowTest do
              "tool_search"
            ]
 
-    assert Workflow.offered_tools(tools, select!(config, "ask")) == []
+    assert Workflow.offered_tools(tools, select!(config, "ask")) ==
+             Workflow.offered_tools(tools, config)
   end
 
   test "slash selection is durable, rejects conflicts, and /plan enters Plan", %{agent: agent} do
     conv = Storage.create_conversation!(agent: agent)
     ctx = %{conversation_id: conv.id}
     assert :handled = SlashCommands.on_input("/workflow ask", ctx)
-    assert {:error, _} = SlashCommands.on_input("/mode auto", ctx)
+    assert :handled = SlashCommands.on_input("/mode auto", ctx)
+    assert :handled = SlashCommands.on_input("/mode ask", ctx)
     assert {:error, _} = SlashCommands.on_input("/workflow invalid", ctx)
-    assert Doc.snapshot("conversation", conv.id, "pi.agent")["workflowMode"] == "ask"
+    assert Doc.snapshot("conversation", conv.id, "pi.agent")["profile"] == "ask"
 
     assert {:transform, "review this code", []} =
              SlashCommands.on_input("/plan review this code", ctx)
 
-    assert Doc.snapshot("conversation", conv.id, "pi.agent")["workflowMode"] == "plan"
+    assert Doc.snapshot("conversation", conv.id, "pi.agent")["profile"] == "plan"
 
     Storage.configure_agent!(conv.id, %{
       "executionMode" => "auto",

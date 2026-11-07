@@ -74,24 +74,6 @@ defmodule SuperPi.Plugins.Permissions do
 
   @command_tools ~w(bash sh terminal run_command exec git_inspect)
 
-  @impl true
-  def before_agent_start(agent, _ctx) do
-    if agent["harness"] in ["super-pi-code", "super-pi-workspace", "super-pi-auto"] do
-      tools = Map.get(agent, "tools", [])
-      added = [SuperPi.CommandApproval.spec(), SuperPi.GitInspection.spec()]
-
-      added =
-        if SuperPi.WorkspaceApproval.available?(agent),
-          do: added ++ [SuperPi.WorkspaceApproval.spec()],
-          else: added
-
-      names = Enum.map(added, & &1["name"])
-      {:ok, Map.put(agent, "tools", Enum.reject(tools, &(&1["name"] in names)) ++ added)}
-    else
-      {:ok, agent}
-    end
-  end
-
   @read_only_tools ["read", "grep", "find", "ls", "tool_search"]
   @edit_tools ["write", "edit"]
   @path_tools [
@@ -112,6 +94,10 @@ defmodule SuperPi.Plugins.Permissions do
   @list_tools ["grep", "find", "ls", "search_files", "find_files", "list_dir", "list_directory"]
   @max_symlink_hops 40
   @remote_forbidden_keys [
+    "profile",
+    "profilePolicy",
+    "profiles",
+    "profilesConfig",
     "commandRulesScope",
     "workspaceApprovalScope",
     "approvedWorkspacePaths",
@@ -343,13 +329,10 @@ defmodule SuperPi.Plugins.Permissions do
             {:block, "Workspace approval is available only in local CLI/ACP filesystem sessions."}
         end
 
-      tool_name == "request_command_approval" ->
+      tool_name in ["request_command_approval", "switch_mode"] ->
         if tool_name in permission_list(settings, "denyTools"),
           do: {:block, "Command approval requests are disabled by policy."},
           else: :allow
-
-      agent_cfg["workflowMode"] == "ask" ->
-        {:block, "Tools are unavailable in Ask. Select Plan to inspect the repository."}
 
       skip_perms? ->
         :allow
