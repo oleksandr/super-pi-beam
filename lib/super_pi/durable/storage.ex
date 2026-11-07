@@ -277,8 +277,7 @@ defmodule SuperPi.Durable.Storage do
   Updates the conversation's `pi.agent` rewindable document (`Conversation.configure()`).
   """
   def configure_agent!(conversation_id, changes) when is_map(changes) do
-    mode_before =
-      (Doc.snapshot("conversation", conversation_id, "pi.agent") || %{})["executionMode"]
+    before = Doc.snapshot("conversation", conversation_id, "pi.agent") || %{}
 
     updated =
       commit(fn seq ->
@@ -290,6 +289,7 @@ defmodule SuperPi.Durable.Storage do
             {k, nil}, acc -> Map.delete(acc, to_string(k))
             {k, v}, acc -> Map.put(acc, to_string(k), v)
           end)
+          |> SuperPi.ExecutionMode.enforce_workflow()
 
         {:ok, val} = Doc.put_doc("conversation", conversation_id, "pi.agent", updated, seq)
         val
@@ -297,10 +297,16 @@ defmodule SuperPi.Durable.Storage do
 
     # `mode_changed` tells a watcher that the permission mode moved (a client switched it, or a
     # handoff did), so a mode picker can follow.
-    with %{"executionMode" => mode} = agent when is_binary(mode) and mode != mode_before <-
-           updated do
+    if is_binary(updated["executionMode"]) and
+         (updated["executionMode"] != before["executionMode"] or
+            updated["workflowMode"] != before["workflowMode"]) do
       SuperPi.Event.publish(
-        SuperPi.Event.mode_changed(conversation_id, mode, agent["maxExecutionMode"])
+        SuperPi.Event.mode_changed(
+          conversation_id,
+          updated["executionMode"],
+          updated["maxExecutionMode"],
+          updated["workflowMode"]
+        )
       )
     end
 

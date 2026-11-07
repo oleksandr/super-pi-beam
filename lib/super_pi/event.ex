@@ -37,7 +37,7 @@ defmodule SuperPi.Event do
   | `ui_request` | `request_id` and the request map (for example `kind`, `questions`) |
   | `ui_resolved` | `request_id`, `outcome` |
   | `state_changed` | `status` |
-  | `mode_changed` | `mode`, `max_mode` |
+  | `mode_changed` | `mode`, `max_mode`, optional `workflow_mode` |
   | `stream_reset` | `retry_in_ms` |
   | `compaction_completed` | `head_entry_id`, `summary` |
   | `usage_updated` | `input_tokens`, `output_tokens`, `total_input_tokens`, `total_output_tokens` |
@@ -248,8 +248,12 @@ defmodule SuperPi.Event do
     do: new("state_changed", conv, turn, %{"status" => status})
 
   @spec mode_changed(integer(), String.t(), String.t() | nil) :: t()
-  def mode_changed(conv, mode, max_mode),
-    do: new("mode_changed", conv, nil, %{"mode" => mode, "max_mode" => max_mode})
+  @spec mode_changed(integer(), String.t(), String.t() | nil, String.t() | nil) :: t()
+  def mode_changed(conv, mode, max_mode, workflow \\ nil) do
+    data = %{"mode" => mode, "max_mode" => max_mode}
+    data = if workflow, do: Map.put(data, "workflow_mode", workflow), else: data
+    new("mode_changed", conv, nil, data)
+  end
 
   @spec stream_reset(integer(), integer() | nil, integer()) :: t()
   def stream_reset(conv, turn, retry_in_ms),

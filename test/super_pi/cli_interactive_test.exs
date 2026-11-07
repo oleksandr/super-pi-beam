@@ -169,6 +169,81 @@ defmodule SuperPi.CLIInteractiveTest do
     end
   end
 
+  describe "--workflow" do
+    test "selects a workflow and preserves it on resume", %{opts: opts} do
+      me = self()
+
+      opts =
+        Keyword.put(opts, :llm_responder, fn payload, _ ->
+          send(me, {:workflow_payload, payload})
+          {:ok, Faults.text_msg("pong")}
+        end)
+
+      assert {0, "pong"} = CLI.run(["--workflow", "ask", "-p", "hi"], opts)
+      assert_receive {:workflow_payload, %{tools: []}}
+      conv = Storage.latest_conversation()
+      assert Doc.snapshot("conversation", conv.id, "pi.agent")["workflowMode"] == "ask"
+
+      Storage.configure_agent!(conv.id, %{
+        "approvedWorkspacePaths" => [System.tmp_dir!()],
+        "settingsOverride" => %{"permissions" => %{"commandPrefixes" => [["git", "diff"]]}}
+      })
+
+      assert {0, "pong"} = CLI.run(["--conversation", to_string(conv.id), "-p", "again"], opts)
+      assert_receive {:workflow_payload, %{tools: []}}
+      assert Doc.snapshot("conversation", conv.id, "pi.agent")["workflowMode"] == "ask"
+
+      resumed = Doc.snapshot("conversation", conv.id, "pi.agent")
+      assert System.tmp_dir!() in resumed["workspacePaths"]
+      assert resumed["workspaceApprovalScope"] == "conversation"
+
+      assert Doc.snapshot("conversation", conv.id, "pi.agent")["settingsOverride"]["permissions"][
+               "commandPrefixes"
+             ] == [["git", "diff"]]
+
+      assert {0, "pong"} = CLI.run(["--continue", "--workflow", "build", "-p", "build"], opts)
+      assert_receive {:workflow_payload, payload}
+      assert Enum.any?(payload.tools, &(&1["name"] == "write"))
+      assert Doc.snapshot("conversation", conv.id, "pi.agent")["executionMode"] == "accept-edits"
+    end
+
+    test "rejects invalid workflows, other harnesses and permission conflicts", %{opts: opts} do
+      for args <- [
+            ["--workflow", "invalid"],
+            ["--harness", "planner", "--workflow", "build"],
+            ["--workflow", "ask", "--mode", "auto"],
+            ["--workflow", "build", "--dangerously-skip-permissions"]
+          ] do
+        assert {1, _message} = CLI.run(args ++ ["-p", "hi"], opts)
+      end
+
+      assert {0, "pong"} = CLI.run(["--workflow", "plan", "--mode", "plan", "-p", "hi"], opts)
+      assert {1, _} = CLI.run(["--continue", "--mode", "auto", "-p", "hi"], opts)
+
+      assert Doc.snapshot("conversation", Storage.latest_conversation().id, "pi.agent")[
+               "workflowMode"
+             ] == "plan"
+    end
+
+    test "interactive workflow commands report errors and preserve mode", %{opts: opts} do
+      opts = Keyword.put(opts, :extensions, [SuperPi.Plugins.SlashCommands])
+
+      {{0, ""}, out} =
+        chat(opts, ["/workflow ask", "/mode auto", "/workflow bogus", "hi"], [
+          "--workflow",
+          "build"
+        ])
+
+      assert out =~ "error:"
+      assert out =~ "Unknown workflow"
+      assert out =~ "pong"
+
+      assert Doc.snapshot("conversation", Storage.latest_conversation().id, "pi.agent")[
+               "workflowMode"
+             ] == "ask"
+    end
+  end
+
   describe "--continue" do
     test "resumes the latest top-level conversation, not conversation 1", %{opts: opts} do
       _older = Storage.create_conversation!()

@@ -45,6 +45,7 @@ defmodule SuperPi.Conversation.Machine do
     :active_tool,
     retry_count: 0,
     extensions: [],
+    mcp_started: false,
     pending_tool_calls: [],
     completed_tool_results: [],
     steer_preempted: false,
@@ -270,6 +271,24 @@ defmodule SuperPi.Conversation.Machine do
     :ok
   end
 
+  defp maybe_start_mcp(%{mcp_started: true} = data), do: data
+
+  defp maybe_start_mcp(data) do
+    agent = Doc.snapshot("conversation", data.conversation_id, "pi.agent") || %{}
+
+    if agent["workflowMode"] == "ask" do
+      data
+    else
+      start_mcp_clients(data.conversation_id)
+      %{data | mcp_started: true}
+    end
+  end
+
+  defp active_extensions(data) do
+    agent = Doc.snapshot("conversation", data.conversation_id, "pi.agent") || %{}
+    SuperPi.Workflow.extensions(data.extensions, agent)
+  end
+
   # --- State: :recovering ---
 
   @impl :gen_statem
@@ -282,7 +301,7 @@ defmodule SuperPi.Conversation.Machine do
     # MCP servers start here, not in `init/1`: `init` runs inside the supervisor's start call, and
     # a slow server would block every other machine start. The first request still waits for it.
     try do
-      start_mcp_clients(data.conversation_id)
+      data = maybe_start_mcp(data)
       _reconciled = TaskEngine.reconcile_on_open!(data.conversation_id)
       # Scratch directories left by tasks that ended while no machine ran (a crash, a failover).
       SuperPi.Env.Workspace.sweep()
@@ -427,7 +446,10 @@ defmodule SuperPi.Conversation.Machine do
       when mode in [:queue, :steer] do
     ctx = hook_ctx(data)
 
-    case Extension.run_on_input(data.extensions, raw_text, ctx) do
+    case Extension.run_on_input(active_extensions(data), raw_text, ctx) do
+      {:error, message} ->
+        {:keep_state_and_data, [{:reply, from, {:error, message}}]}
+
       :handled ->
         {:keep_state_and_data, [{:reply, from, {:ok, :handled_by_extension}}]}
 
@@ -556,10 +578,11 @@ defmodule SuperPi.Conversation.Machine do
   end
 
   def handle_event(:internal, :prepare, :preparing_request, %__MODULE__{} = data) do
+    data = maybe_start_mcp(data)
     ctx = hook_ctx(data)
 
     agent_doc = Doc.snapshot("conversation", data.conversation_id, "pi.agent") || %{}
-    mutated_agent = Extension.run_before_agent_start(data.extensions, agent_doc, ctx)
+    mutated_agent = Extension.run_before_agent_start(active_extensions(data), agent_doc, ctx)
 
     if mutated_agent != agent_doc do
       Storage.configure_agent!(data.conversation_id, mutated_agent)
@@ -571,9 +594,13 @@ defmodule SuperPi.Conversation.Machine do
         _ -> [%{"id" => "core", "content" => "You are Super-Pi-BEAM."}]
       end
 
+    sections = SuperPi.Workflow.sections(sections, mutated_agent)
+
     # Only tools that the workspace can serve are offered (`SuperPi.Env.Workspace`).
     tools =
-      SuperPi.Env.Workspace.offered_tools(Map.get(mutated_agent, "tools", []), mutated_agent)
+      Map.get(mutated_agent, "tools", [])
+      |> SuperPi.Env.Workspace.offered_tools(mutated_agent)
+      |> SuperPi.Workflow.offered_tools(mutated_agent)
 
     # One read of the history serves the system-state check and the derivation.
     {visible, graph} = Context.visible_entries_with_graph(data.conversation_id)
@@ -582,7 +609,7 @@ defmodule SuperPi.Conversation.Machine do
       Context.ensure_system_state!(data.conversation_id, sections, tools, visible)
 
     derived = Context.derive(data.conversation_id, {visible ++ List.wrap(system_entry), graph})
-    derived = Extension.run_before_request(data.extensions, derived, ctx)
+    derived = Extension.run_before_request(active_extensions(data), derived, ctx)
 
     effective_payload_model =
       Map.get(derived, :model) || Map.get(mutated_agent, "model", "claude-sonnet-4-5")
@@ -595,7 +622,7 @@ defmodule SuperPi.Conversation.Machine do
       json_schema: Map.get(mutated_agent, "jsonSchema")
     }
 
-    case Extension.run_before_provider_request(data.extensions, provider_payload, ctx) do
+    case Extension.run_before_provider_request(active_extensions(data), provider_payload, ctx) do
       {:ok, final_payload} ->
         checkpoint =
           if data.active_task_id,
@@ -673,7 +700,7 @@ defmodule SuperPi.Conversation.Machine do
         # `after_response` runs before tool dispatch: what it returns is stored and dispatched.
         assistant_msg =
           try do
-            case Extension.run_after_response(next_data.extensions, assistant_msg, ctx) do
+            case Extension.run_after_response(active_extensions(next_data), assistant_msg, ctx) do
               %{} = msg -> msg
               _ -> assistant_msg
             end
@@ -928,7 +955,7 @@ defmodule SuperPi.Conversation.Machine do
     else
       after_tools_res =
         try do
-          Extension.run_after_tools(data.extensions, results, ctx)
+          Extension.run_after_tools(active_extensions(data), results, ctx)
         rescue
           _ -> :continue
         end
@@ -970,7 +997,12 @@ defmodule SuperPi.Conversation.Machine do
 
     before_tool_res =
       try do
-        Extension.run_before_tool(data.extensions, tool_name, raw_args, ctx)
+        agent = Doc.snapshot("conversation", data.conversation_id, "pi.agent") || %{}
+
+        case SuperPi.Workflow.check_tool(tool_name, agent) do
+          :allow -> Extension.run_before_tool(active_extensions(data), tool_name, raw_args, ctx)
+          blocked -> blocked
+        end
       rescue
         e -> {:block, "Extension error: #{Exception.message(e)}"}
       end
@@ -1093,7 +1125,7 @@ defmodule SuperPi.Conversation.Machine do
     ctx = hook_ctx(data)
     summary = %{last_message: data.last_assistant_message, conversation_id: data.conversation_id}
 
-    case Extension.run_after_run(data.extensions, summary, ctx) do
+    case Extension.run_after_run(active_extensions(data), summary, ctx) do
       {:continue, verification_prompt} ->
         Storage.append_entry!(data.conversation_id, "pi.message", %{
           "role" => "user",
@@ -1166,7 +1198,11 @@ defmodule SuperPi.Conversation.Machine do
     {visible, _graph} = Context.visible_entries_with_graph(data.conversation_id)
 
     compaction_reply =
-      case Extension.run_before_compact(data.extensions, %{entries: visible, opts: opts}, ctx) do
+      case Extension.run_before_compact(
+             active_extensions(data),
+             %{entries: visible, opts: opts},
+             ctx
+           ) do
         :cancel ->
           {:ok, :cancelled}
 
@@ -1283,9 +1319,12 @@ defmodule SuperPi.Conversation.Machine do
         "structured_output" => nil,
         "details" => %{}
       }
-      |> Map.merge(Extension.run_wrap_tool(data.extensions, tool_name, args, core_fn, ctx))
+      |> Map.merge(
+        Extension.run_wrap_tool(active_extensions(data), tool_name, args, core_fn, ctx)
+      )
 
-    final_res = Extension.run_after_tool(data.extensions, tool_name, args, wrapped_res, ctx)
+    final_res =
+      Extension.run_after_tool(active_extensions(data), tool_name, args, wrapped_res, ctx)
 
     if overwritten_keys != [] do
       notice =

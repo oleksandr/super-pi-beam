@@ -37,6 +37,9 @@ defmodule SuperPi.Tools do
     "list_dir" => ["read"],
     "list_directory" => ["read"],
     "tool_search" => ["read"],
+    "git_inspect" => ["read"],
+    "request_command_approval" => ["state_write"],
+    "request_workspace_access" => ["state_write"],
     "artifact_put" => ["state_write"],
     "artifact_get" => ["read"],
     "artifact_list" => ["read"],
@@ -281,17 +284,27 @@ defmodule SuperPi.Tools do
 
   # A directory argument. In a confined workspace it must lie inside the root.
   defp ws_dir(%{confined?: true} = ws, value), do: Workspace.contain!(ws, value || ".")
-  defp ws_dir(ws, value), do: value || default_dir(ws)
+  defp ws_dir(ws, value), do: SuperPi.WorkspacePaths.absolute(value || ".", default_dir(ws))
 
   defp ws_path(%{confined?: true} = ws, path, args),
     do: Workspace.contain!(ws, path, fetch_arg(args, [:cd, "cd", :dir, "dir", :cwd, "cwd"]))
 
-  defp ws_path(_ws, path, args), do: resolve_path(path, args)
+  defp ws_path(ws, path, args), do: SuperPi.WorkspacePaths.file(path, args, default_dir(ws))
 
   defp run(tool_name, args, ws, ctx) do
     env = ws.env
 
     case tool_name do
+      "request_command_approval" ->
+        SuperPi.CommandApproval.request(args, ctx)
+
+      "request_workspace_access" ->
+        SuperPi.WorkspaceApproval.request(args, ctx)
+
+      "git_inspect" ->
+        cd = ws_dir(ws, fetch_arg(args, [:cd, "cd", :dir, "dir", :cwd, "cwd"]))
+        SuperPi.GitInspection.execute(args, env, cd)
+
       name when name in ["read", "read_file"] ->
         case fetch_arg(args, [:path, "path", :file_path, "file_path"]) do
           nil ->
@@ -506,22 +519,6 @@ defmodule SuperPi.Tools do
         error_result(other, :unknown_tool)
     end
   end
-
-  defp resolve_path(path, args) when is_binary(path) do
-    case fetch_arg(args, [:cd, "cd", :dir, "dir", :cwd, "cwd"]) do
-      cd when is_binary(cd) and cd != "" ->
-        if Path.type(path) == :relative do
-          Path.expand(path, cd)
-        else
-          path
-        end
-
-      _ ->
-        path
-    end
-  end
-
-  defp resolve_path(path, _args), do: path
 
   defp filter_files_by_pattern(files, nil), do: files
   defp filter_files_by_pattern(files, ""), do: files

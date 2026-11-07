@@ -23,7 +23,7 @@ defmodule SuperPi.Extension do
   @type context :: map()
 
   @callback on_input(input :: String.t(), context()) ::
-              :continue | {:transform, String.t(), list()} | :handled
+              :continue | {:transform, String.t(), list()} | :handled | {:error, String.t()}
 
   @callback before_agent_start(agent_config :: map(), context()) ::
               {:ok, map()}
@@ -169,6 +169,9 @@ defmodule SuperPi.Extension do
 
           :handled ->
             {:halt, :handled}
+
+          {:error, message} ->
+            {:halt, {:error, message}}
         end
       else
         {:cont, {:continue, cur_input, cur_media}}

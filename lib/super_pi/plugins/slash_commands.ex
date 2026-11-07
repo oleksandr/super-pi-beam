@@ -3,7 +3,8 @@ defmodule SuperPi.Plugins.SlashCommands do
   Interactive Slash-Command Expansion Plugin (`SuperPi.Extension` behaviour).
 
   Intercepts `on_input/2` unless `"disableSlashCommands" => true` is set (`--disable-slash-commands`):
-  - `/plan <task>` — Rewrites prompt into structured step-by-step planning mode.
+  - `/workflow <ask|plan|build>` — Selects a coding workflow.
+  - `/plan <task>` — Selects read-only Plan, optionally submitting a task.
   - `/goal <task>` — Rewrites prompt into autonomous thorough completion mode and enables goal verification.
   - `/boost <task>` — Enables deep multi-perspective reasoning and architectural verification.
   - `/model <model_id>` — Updates `pi.agent` model and handles command without calling LLM (`:handled`).
@@ -19,6 +20,8 @@ defmodule SuperPi.Plugins.SlashCommands do
     do: "Expands slash commands (/plan, /goal, /boost, /model, /mode) into runtime directives"
 
   alias SuperPi.Durable.{Doc, Storage}
+  alias SuperPi.Plugins.Permissions
+  alias SuperPi.Workflow
 
   @impl true
   def on_input(input, ctx) do
@@ -30,6 +33,18 @@ defmodule SuperPi.Plugins.SlashCommands do
       trimmed = String.trim(input)
 
       cond do
+        trimmed == "/workflow" or String.starts_with?(trimmed, "/workflow ") ->
+          mode = trimmed |> String.replace_prefix("/workflow", "") |> String.trim()
+
+          with {:ok, updated} <- Workflow.select(agent_cfg, mode) do
+            Storage.configure_agent!(
+              ctx.conversation_id,
+              Map.take(updated, ["workflowMode", "executionMode", "dangerouslySkipPermissions"])
+            )
+
+            :handled
+          end
+
         String.starts_with?(trimmed, "/model ") ->
           new_model = trimmed |> String.replace_prefix("/model ", "") |> String.trim()
           Storage.configure_agent!(ctx.conversation_id, %{"model" => new_model})
@@ -39,20 +54,36 @@ defmodule SuperPi.Plugins.SlashCommands do
           new_mode =
             trimmed |> String.replace_prefix("/mode ", "") |> String.trim() |> String.downcase()
 
-          if new_mode in ["auto", "accept-edits", "plan"] do
-            Storage.configure_agent!(ctx.conversation_id, %{"executionMode" => new_mode})
+          cond do
+            new_mode not in ["auto", "accept-edits", "plan"] ->
+              {:error, "Unknown permission mode #{inspect(new_mode)}."}
+
+            Workflow.valid?(agent_cfg["workflowMode"]) and
+                new_mode != Workflow.permission(agent_cfg["workflowMode"]) ->
+              {:error, "Use /workflow ask|plan|build to change this workflow's permissions."}
+
+            Permissions.rank_of(new_mode) >
+                Permissions.rank_of(agent_cfg["maxExecutionMode"] || "auto") ->
+              {:error, "Permission mode exceeds this harness's ceiling."}
+
+            true ->
+              Storage.configure_agent!(ctx.conversation_id, %{"executionMode" => new_mode})
+              :handled
           end
 
-          :handled
+        trimmed == "/plan" or String.starts_with?(trimmed, "/plan ") ->
+          rest = trimmed |> String.replace_prefix("/plan", "") |> String.trim()
 
-        String.starts_with?(trimmed, "/plan ") ->
-          rest = trimmed |> String.replace_prefix("/plan ", "") |> String.trim()
+          changes =
+            if Workflow.supported?(agent_cfg) do
+              {:ok, updated} = Workflow.select(agent_cfg, "plan")
+              Map.take(updated, ["workflowMode", "executionMode", "dangerouslySkipPermissions"])
+            else
+              %{"executionMode" => "plan", "dangerouslySkipPermissions" => false}
+            end
 
-          expanded =
-            "[MODE: PLAN] Create a clear, step-by-step implementation plan with verification gates before making any changes:\n" <>
-              rest
-
-          {:transform, expanded, []}
+          Storage.configure_agent!(ctx.conversation_id, changes)
+          if rest == "", do: :handled, else: {:transform, rest, []}
 
         String.starts_with?(trimmed, "/goal ") ->
           rest = trimmed |> String.replace_prefix("/goal ", "") |> String.trim()
