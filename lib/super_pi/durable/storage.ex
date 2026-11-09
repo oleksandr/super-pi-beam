@@ -289,7 +289,7 @@ defmodule SuperPi.Durable.Storage do
             {k, nil}, acc -> Map.delete(acc, to_string(k))
             {k, v}, acc -> Map.put(acc, to_string(k), v)
           end)
-          |> SuperPi.ExecutionMode.enforce_workflow()
+          |> SuperPi.ExecutionMode.enforce_policy()
 
         {:ok, val} = Doc.put_doc("conversation", conversation_id, "pi.agent", updated, seq)
         val
@@ -300,14 +300,13 @@ defmodule SuperPi.Durable.Storage do
     if is_binary(updated["executionMode"]) and
          (updated["executionMode"] != before["executionMode"] or
             updated["maxExecutionMode"] != before["maxExecutionMode"] or
-            updated["profile"] != before["profile"] or
-            updated["workflowMode"] != before["workflowMode"]) do
+            updated["sessionMode"] != before["sessionMode"]) do
       SuperPi.Event.publish(
         SuperPi.Event.mode_changed(
           conversation_id,
           updated["executionMode"],
           updated["maxExecutionMode"],
-          updated["profile"] || updated["workflowMode"]
+          updated["sessionMode"]
         )
       )
     end

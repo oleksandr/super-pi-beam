@@ -18,7 +18,7 @@ defmodule SuperPi.ProfilesTest do
       tools: {:only, ["read", "write"]},
       plugins: [
         SuperPi.Plugins.Permissions,
-        {SuperPi.Plugins.Profiles, profiles: [:ask, :plan, :build], discover: false},
+        {SuperPi.Plugins.Profiles, profiles: SuperPi.Harness.CodeProfiles.all(), discover: false},
         SuperPi.Plugins.PromptCustomizer
       ]
   end
@@ -32,6 +32,27 @@ defmodule SuperPi.ProfilesTest do
     end
   end
 
+  defmodule NonCodingHarness do
+    use SuperPi.Harness,
+      id: "non-coding-profiles",
+      name: "Guide",
+      description: "A domain-neutral Profiles composition",
+      mode: "plan",
+      max_mode: "plan",
+      workspace: %{"kind" => "none"},
+      tools: {:only, []},
+      plugins: [
+        SuperPi.Plugins.Permissions,
+        {SuperPi.Plugins.Profiles,
+         profiles: [
+           %{id: "quick", prompt: "Answer briefly.", effort: "low"},
+           %{id: "explain", prompt: "Explain step by step.", effort: "high", tools: {:only, []}}
+         ],
+         default: :quick,
+         discover: false}
+      ]
+  end
+
   setup do
     dir = Path.join(System.tmp_dir!(), "profiles_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -41,25 +62,97 @@ defmodule SuperPi.ProfilesTest do
 
   defp snapshot(conv), do: Doc.snapshot("conversation", conv.id, "pi.agent")
 
+  test "Profiles requires explicit valid definitions" do
+    assert_raise KeyError, fn -> Profiles.configure_agent(%{}, %{config: []}) end
+
+    for definitions <- [[:ask], [%{id: "invalid", execution_mode: "unsafe"}], :all] do
+      assert_raise ArgumentError, fn ->
+        Profiles.configure_agent(%{}, %{config: [profiles: definitions]})
+      end
+    end
+  end
+
+  test "noncoding profiles have only their own prompts and the declared harness loadout" do
+    agent = NonCodingHarness.agent_defaults()
+    assert agent["profile"] == "quick"
+    assert Enum.map(agent["tools"], & &1["name"]) == ["switch_mode"]
+    assert Enum.map(agent["profiles"], & &1["id"]) == ["quick", "explain"]
+    {:ok, selected} = SuperPi.SessionModes.select(agent, "explain")
+    {:ok, request} = Profiles.prepare_request(selected, %{})
+    assert request["effort"] == "high"
+    assert List.last(request["systemSections"])["content"] == "Explain step by step."
+    assert NonCodingHarness.capabilities()["sessionModes"]["currentModeId"] == "quick"
+  end
+
+  test "Profiles owns commands in either order and honors disabled slash commands", %{
+    agent: agent
+  } do
+    for extensions <- [
+          [SuperPi.Plugins.SlashCommands, Profiles],
+          [Profiles, SuperPi.Plugins.SlashCommands]
+        ] do
+      conv = Storage.create_conversation!(agent: agent)
+      ctx = %{conversation_id: conv.id}
+      assert :handled = Extension.run_on_input(extensions, "/mode build", ctx)
+      assert snapshot(conv)["profile"] == "build"
+      assert :handled = Extension.run_on_input(extensions, "/workflow ask", ctx)
+      assert snapshot(conv)["profile"] == "ask"
+
+      assert {:continue, "Review this", []} =
+               Extension.run_on_input(extensions, "/plan Review this", ctx)
+
+      assert snapshot(conv)["profile"] == "plan"
+
+      Storage.configure_agent!(conv.id, %{"disableSlashCommands" => true})
+
+      assert {:continue, "/mode build", []} =
+               Extension.run_on_input(extensions, "/mode build", ctx)
+
+      assert snapshot(conv)["profile"] == "plan"
+    end
+  end
+
+  test "existing profile snapshots migrate to the generic policy without losing approvals", %{
+    agent: agent
+  } do
+    previous =
+      agent
+      |> Map.drop(~w(toolPolicy sessionMode modeProviders toolProviders pluginToolNames))
+      |> Map.put("settingsOverride", %{
+        "permissions" => %{"commandPrefixes" => [["git", "status"]]}
+      })
+      |> Map.put("approvedWorkspacePaths", ["/tmp/trusted"])
+
+    migrated = Extension.configure_agent(CustomHarness.extensions(), previous)
+    assert migrated["profilePolicy"] == previous["profilePolicy"]
+    assert migrated["settingsOverride"] == previous["settingsOverride"]
+    assert migrated["approvedWorkspacePaths"] == previous["approvedWorkspacePaths"]
+    assert migrated["toolPolicy"]["executionMode"] == "plan"
+    assert SuperPi.SessionModes.list(migrated)["currentModeId"] == "ask"
+  end
+
   defp switch(conv, mode, plan \\ nil),
     do:
-      Profiles.wrap_tool(
+      Profiles.execute_tool(
         "switch_mode",
         %{"mode" => mode, "plan" => plan},
-        fn _ -> flunk("must not execute a shell tool") end,
         %{conversation_id: conv.id}
       )
 
   test "any harness can compose presets while its tools and permission ceiling remain the boundary",
        %{agent: agent} do
     assert agent["profile"] == "ask"
-    {:request, request} = Profiles.before_agent_start(agent, %{})
+    {:ok, request} = Profiles.prepare_request(agent, %{})
     assert Enum.map(request["tools"], & &1["name"]) == ["read", "switch_mode"]
     {:ok, build} = Profiles.select(agent, "build")
-    {:request, request} = Profiles.before_agent_start(build, %{})
+    {:ok, request} = Profiles.prepare_request(build, %{})
     assert Enum.map(request["tools"], & &1["name"]) == ["read", "write", "switch_mode"]
     refute Enum.any?(request["tools"], &(&1["name"] == "bash"))
-    planner = SuperPi.Harness.Planner.agent_defaults() |> Profiles.configure_agent(%{config: []})
+
+    planner =
+      SuperPi.Harness.Planner.agent_defaults()
+      |> Profiles.configure_agent(%{config: [profiles: SuperPi.Harness.CodeProfiles.all()]})
+
     assert {:error, _} = Profiles.select(planner, "build")
     assert {:error, _} = Profiles.select(planner, "auto")
     assert Enum.all?(Profiles.available(planner), &(&1["execution_mode"] == "plan"))
@@ -68,7 +161,7 @@ defmodule SuperPi.ProfilesTest do
   test "custom filters block forced calls and overrides are request-only", %{agent: agent} do
     config = [
       profiles: [
-        :build,
+        SuperPi.Harness.CodeProfiles.get(:build),
         %{
           id: "review",
           tools: {:except, ["write"]},
@@ -88,7 +181,7 @@ defmodule SuperPi.ProfilesTest do
       |> Profiles.configure_agent(%{config: config})
 
     conv = Storage.create_conversation!(agent: agent)
-    assert {:block, _} = Profiles.before_tool("write", %{}, %{conversation_id: conv.id})
+    assert {:block, _} = Permissions.before_tool("write", %{}, %{conversation_id: conv.id})
 
     {stored, request} =
       Extension.run_agent_start([Profiles, PromptCustomizer], agent, %{conversation_id: conv.id})
@@ -108,7 +201,7 @@ defmodule SuperPi.ProfilesTest do
     body = SuperPi.AI.Providers.OpenAI.build_responses_body(payload)
     assert body["reasoning"] == %{"effort" => "high"}
     {:ok, build} = Profiles.select(stored, "build")
-    {:request, restored} = Profiles.before_agent_start(build, %{})
+    {:ok, restored} = Profiles.prepare_request(build, %{})
     assert restored["model"] == "base-model"
     assert Enum.any?(restored["tools"], &(&1["name"] == "write"))
   end
@@ -268,7 +361,9 @@ defmodule SuperPi.ProfilesTest do
       |> Map.drop(["profile", "profilePolicy", "profilesConfig"])
       |> Map.merge(%{"workflowMode" => "plan", "settingsOverride" => %{"sentinel" => true}})
 
-    migrated = Profiles.configure_agent(legacy, %{config: []})
+    migrated =
+      Profiles.configure_agent(legacy, %{config: [profiles: SuperPi.Harness.CodeProfiles.all()]})
+
     assert migrated["profile"] == "plan"
     assert migrated["workflowMode"] == nil
     assert migrated["settingsOverride"] == %{"sentinel" => true}

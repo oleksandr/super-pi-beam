@@ -4,9 +4,12 @@ defmodule SuperPi.Workflow do
   defdelegate supported?(agent), to: Profiles
   defdelegate available(agent), to: Profiles
   defdelegate select(agent, mode), to: Profiles
-  defdelegate for_acp(agent), to: Profiles
-  defdelegate check_tool(name, agent), to: Profiles
+
+  def for_acp(agent),
+    do: SuperPi.SessionModes.with_ceiling(agent, SuperPi.Plugins.Permissions.remote_mode("auto"))
+
+  def check_tool(name, agent), do: SuperPi.Plugins.Permissions.tool_available(name, agent)
   defdelegate offered_tools(tools, agent), to: Profiles
-  defdelegate permission(mode), to: SuperPi.ExecutionMode, as: :workflow_permission
+  def permission(mode), do: %{"ask" => "plan", "plan" => "plan", "build" => "accept-edits"}[mode]
   def valid?(mode), do: permission(mode) != nil
 end

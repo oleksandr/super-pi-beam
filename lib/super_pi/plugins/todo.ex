@@ -9,6 +9,9 @@ defmodule SuperPi.Plugins.Todo do
   """
 
   use SuperPi.Extension
+
+  @impl true
+  def lifecycle_effects, do: []
   alias SuperPi.Durable.{Doc, Storage}
 
   def id, do: "todo"

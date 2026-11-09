@@ -232,7 +232,8 @@ defmodule SuperPi.CLIInteractiveTest do
     end
 
     test "interactive workflow commands report errors and preserve mode", %{opts: opts} do
-      opts = Keyword.put(opts, :extensions, [SuperPi.Plugins.SlashCommands])
+      opts =
+        Keyword.put(opts, :extensions, [SuperPi.Plugins.SlashCommands, SuperPi.Plugins.Profiles])
 
       {{0, ""}, out} =
         chat(opts, ["/workflow ask", "/mode auto", "/workflow bogus", "hi"], [

@@ -8,6 +8,9 @@ defmodule SuperPi.Plugins.Handoff do
   """
 
   use SuperPi.Extension
+
+  @impl true
+  def lifecycle_effects, do: []
   alias SuperPi.Durable.Storage
   require Logger
 

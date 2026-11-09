@@ -44,6 +44,9 @@ defmodule SuperPi.Plugins.Scheduler do
 
   use SuperPi.Extension
 
+  @impl true
+  def lifecycle_effects, do: []
+
   alias SuperPi.Durable.Doc
   alias SuperPi.Schedule
 

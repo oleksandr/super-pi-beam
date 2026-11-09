@@ -37,9 +37,6 @@ defmodule SuperPi.Tools do
     "list_dir" => ["read"],
     "list_directory" => ["read"],
     "tool_search" => ["read"],
-    "git_inspect" => ["read"],
-    "request_command_approval" => ["state_write"],
-    "request_workspace_access" => ["state_write"],
     "artifact_put" => ["state_write"],
     "artifact_get" => ["read"],
     "artifact_list" => ["read"],
@@ -70,12 +67,18 @@ defmodule SuperPi.Tools do
   | `net_write` | Sends data out or changes a remote system. |
   | `state_write` | Changes Super-Pi state (artifacts, todos, memory, schedules), not the workspace. |
 
-  A tool states its effects in an `"effects"` list on its spec. The lookup order is: the spec in
-  `agent_cfg["tools"]` (plugin tools live there), the catalog, then the table for built-in tools.
+  A tool states its effects in an `"effects"` list on its spec. The lookup order is: the trusted
+  plugin declaration, the spec in `agent_cfg["tools"]`, the catalog, then built-in tools.
   `nil` means the tool is unknown, which every policy treats as the most dangerous kind.
   """
   @spec effects(String.t(), map() | nil) :: [String.t()] | nil
   def effects(tool_name, agent_cfg \\ nil) when is_binary(tool_name) do
+    from_plugin =
+      case SuperPi.PluginTools.declaration(tool_name, agent_cfg || %{}) do
+        {_, spec} -> valid_effects(spec["effects"])
+        nil -> nil
+      end
+
     from_cfg =
       with %{} <- agent_cfg,
            [_ | _] = tools <- Map.get(agent_cfg, "tools"),
@@ -85,7 +88,7 @@ defmodule SuperPi.Tools do
         _ -> nil
       end
 
-    from_cfg || from_catalog(tool_name) || Map.get(@builtin_effects, tool_name)
+    from_plugin || from_cfg || from_catalog(tool_name) || Map.get(@builtin_effects, tool_name)
   end
 
   defp from_catalog(tool_name) do
@@ -250,7 +253,17 @@ defmodule SuperPi.Tools do
         {:ok, ws} ->
           if Workspace.supports?(ws, tool_name, agent_cfg(ctx)) do
             try do
-              ws |> then(&run(tool_name, args, &1, ctx || %{})) |> add_notice(ws)
+              result =
+                case SuperPi.PluginTools.execute(
+                       tool_name,
+                       args,
+                       Map.put(ctx || %{}, :workspace, ws)
+                     ) do
+                  :unhandled -> run(tool_name, args, ws, ctx || %{})
+                  result -> result
+                end
+
+              add_notice(result, ws)
             catch
               {:workspace_error, message} -> error_result(tool_name, message)
             end
@@ -295,16 +308,6 @@ defmodule SuperPi.Tools do
     env = ws.env
 
     case tool_name do
-      "request_command_approval" ->
-        SuperPi.CommandApproval.request(args, ctx)
-
-      "request_workspace_access" ->
-        SuperPi.WorkspaceApproval.request(args, ctx)
-
-      "git_inspect" ->
-        cd = ws_dir(ws, fetch_arg(args, [:cd, "cd", :dir, "dir", :cwd, "cwd"]))
-        SuperPi.GitInspection.execute(args, env, cd)
-
       name when name in ["read", "read_file"] ->
         case fetch_arg(args, [:path, "path", :file_path, "file_path"]) do
           nil ->

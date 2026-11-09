@@ -18,6 +18,9 @@ defmodule SuperPi.Plugins.JevRouter do
   """
 
   use SuperPi.Extension
+
+  @impl true
+  def lifecycle_effects, do: []
   require Logger
 
   @default_planning_model "gemini-3.1-pro-preview"

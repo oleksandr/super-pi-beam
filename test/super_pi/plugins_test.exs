@@ -266,7 +266,7 @@ defmodule SuperPi.PluginsTest do
         "systemSections" => [%{"id" => "core", "content" => "Base prompt"}]
       }
 
-      {:ok, updated} = PromptCustomizer.before_agent_start(agent_cfg, %{})
+      {:ok, updated} = PromptCustomizer.prepare_request(agent_cfg, %{})
       guidance = Enum.find(updated["systemSections"], &(&1["id"] == "tool_guidance"))
       assert guidance != nil
       assert guidance["content"] =~ "`read`: Use for file contents"

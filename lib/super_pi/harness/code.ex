@@ -44,7 +44,8 @@ defmodule SuperPi.Harness.Code do
       {Plugins.AutoCommit, commit_prefix: "[super-pi]", enabled: false},
       {Plugins.JevRouter, Defaults.model_route()},
       Plugins.Todo,
-      {Plugins.Profiles, profiles: [:ask, :plan, :build], default: :ask, discover: true},
+      {Plugins.Profiles,
+       profiles: SuperPi.Harness.CodeProfiles.all(), default: :ask, discover: true},
       Plugins.PromptCustomizer,
       Plugins.TranscriptLogger
     ]

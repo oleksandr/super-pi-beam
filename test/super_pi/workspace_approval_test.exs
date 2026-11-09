@@ -25,11 +25,19 @@ defmodule SuperPi.WorkspaceApprovalTest do
       "workspaceApprovalScope" => "conversation",
       "workspacePaths" => [primary],
       "appDataDir" => base,
-      "tools" => [],
+      "tools" => SuperPi.Tools.active_llm_tools(),
       "executionMode" => "accept-edits"
     }
 
-    agent = SuperPi.Plugins.Profiles.configure_agent(agent, %{config: []})
+    agent =
+      SuperPi.Extension.configure_agent(
+        [
+          SuperPi.Plugins.Approvals,
+          {SuperPi.Plugins.Profiles, profiles: SuperPi.Harness.CodeProfiles.all()}
+        ],
+        agent
+      )
+
     {:ok, agent} = SuperPi.Plugins.Profiles.select(agent, "build")
 
     %{agent: agent, primary: primary, secondary: secondary, base: base}

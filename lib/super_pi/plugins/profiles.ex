@@ -2,14 +2,16 @@ defmodule SuperPi.Plugins.Profiles do
   @moduledoc "Persistent, composable personas bounded by the harness tool loadout and permission ceiling."
   use SuperPi.Extension
 
-  alias SuperPi.{Discovery, ExecutionMode, Tools}
+  @impl true
+  def lifecycle_effects, do: []
+
+  alias SuperPi.{Discovery, ExecutionMode}
   alias SuperPi.Durable.{Doc, Storage}
   alias SuperPi.Plugins.Permissions
   alias SuperPi.Plugins.Profiles.Definition
   alias SuperPi.UI.PermissionPrompt
 
-  @administrative ~w(switch_mode request_command_approval request_workspace_access)
-  @selection_keys ~w(profile profilePolicy executionMode maxExecutionMode dangerouslySkipPermissions workflowMode)
+  @selection_keys ~w(profile profilePolicy toolPolicy sessionMode executionMode dangerouslySkipPermissions workflowMode)
 
   def id, do: "profiles"
   def name, do: "Profiles"
@@ -17,7 +19,39 @@ defmodule SuperPi.Plugins.Profiles do
   def supported?(agent), do: is_map(agent["profilesConfig"])
 
   @impl true
-  def agent_start_phase, do: :request
+  def tools(_agent), do: [Map.put(spec(), "administrative", true)]
+
+  @impl true
+  def commands, do: ~w(mode workflow plan)
+
+  @impl true
+  def session_modes(agent, _ctx) do
+    if supported?(agent) do
+      %{
+        "currentModeId" => agent["profile"],
+        "availableModes" =>
+          Enum.map(available(refresh(agent)), fn profile ->
+            Map.take(profile, ["id", "name", "description"])
+            |> Map.put("executionMode", profile["execution_mode"])
+          end)
+      }
+    end
+  end
+
+  @impl true
+  def select_mode(agent, id, _ctx), do: select(refresh(agent), id)
+
+  @impl true
+  def mode_state(agent, _ctx) do
+    if not is_map(agent["profilePolicy"]) and agent["workflowMode"],
+      do: %{
+        "profile" => agent["workflowMode"],
+        "profilePolicy" => nil,
+        "toolPolicy" => nil,
+        "workflowMode" => agent["workflowMode"]
+      },
+      else: changes(agent)
+  end
 
   @impl true
   def configure_agent(agent, ctx) do
@@ -29,19 +63,15 @@ defmodule SuperPi.Plugins.Profiles do
     config =
       agent["profilesConfig"] ||
         %{
-          "profiles" =>
-            Enum.map(opts[:profiles] || [:ask, :plan, :build], &Definition.normalize/1)
-            |> Enum.reject(&is_nil/1),
-          "default" => to_string(opts[:default] || :ask),
+          "profiles" => normalize_profiles!(Keyword.fetch!(opts, :profiles)),
+          "default" => if(opts[:default], do: to_string(opts[:default])),
           "discover" => opts[:discover] != false
         }
 
     agent = agent |> Map.put("profilesConfig", config) |> refresh()
-    tools = Enum.reject(agent["tools"] || [], &(&1["name"] == "switch_mode")) ++ [spec()]
-    agent = Map.put(agent, "tools", tools)
     # Retain the active definition, even if an on-disk file changes its permissions.
     if is_map(agent["profilePolicy"]) and is_binary(agent["profile"]) do
-      ExecutionMode.enforce_workflow(agent)
+      agent |> apply_policy(agent["profilePolicy"]) |> ExecutionMode.enforce_policy()
     else
       explicit = get_in(ctx, [:initial_options, :mode])
 
@@ -69,12 +99,30 @@ defmodule SuperPi.Plugins.Profiles do
                 "profile" => nil,
                 "profilePolicy" => nil,
                 "workflowMode" => nil,
-                "executionMode" => "plan"
+                "executionMode" => "plan",
+                "toolPolicy" => %{
+                  "executionMode" => "plan",
+                  "tools" => %{"only" => []},
+                  "restrictToLoadout" => true
+                }
               })
           end
       end
     end
   end
+
+  defp normalize_profiles!(profiles) when is_list(profiles) do
+    Enum.map(profiles, fn profile ->
+      Definition.normalize(profile) ||
+        raise(
+          ArgumentError,
+          "Profiles requires explicit, valid profile maps; got #{inspect(profile)}"
+        )
+    end)
+  end
+
+  defp normalize_profiles!(_),
+    do: raise(ArgumentError, "Profiles requires a list of profile maps")
 
   def refresh(agent) do
     if supported?(agent) do
@@ -104,13 +152,14 @@ defmodule SuperPi.Plugins.Profiles do
   end
 
   def select(agent, requested) do
-    mode =
-      if requested == "accept-edits" and
-           Enum.any?(agent["profiles"] || [], &(&1["id"] == "build")),
-         do: "build",
-         else: requested
+    profiles = agent["profiles"] || []
 
-    profile = Enum.find(agent["profiles"] || [], &(&1["id"] == mode)) || legacy_profile(mode)
+    profile =
+      Enum.find(profiles, &(&1["id"] == requested)) ||
+        (ExecutionMode.normalize(requested) &&
+           Enum.find(profiles, &(&1["execution_mode"] == requested))) || legacy_profile(requested)
+
+    mode = if profile, do: profile["id"], else: requested
 
     cond do
       not supported?(agent) ->
@@ -130,8 +179,10 @@ defmodule SuperPi.Plugins.Profiles do
            "profilePolicy" => profile,
            "executionMode" => profile["execution_mode"],
            "workflowMode" => nil,
-           "dangerouslySkipPermissions" => false
-         })}
+           "dangerouslySkipPermissions" => false,
+           "sessionMode" => mode
+         })
+         |> apply_policy(profile)}
     end
   end
 
@@ -147,54 +198,29 @@ defmodule SuperPi.Plugins.Profiles do
 
   defp legacy_profile(_), do: nil
 
-  def for_acp(agent) do
-    ceiling = agent["maxExecutionMode"] || "auto"
-    remote = Permissions.remote_mode("auto")
-
-    ceiling =
-      if ExecutionMode.rank_of(remote) < ExecutionMode.rank_of(ceiling), do: remote, else: ceiling
-
-    agent = agent |> Map.put("maxExecutionMode", ceiling) |> refresh()
-
-    if (supported?(agent) and agent["profilePolicy"]) &&
-         ExecutionMode.rank_of(agent["profilePolicy"]["execution_mode"]) >
-           ExecutionMode.rank_of(ceiling) do
-      case Enum.sort_by(available(agent), &ExecutionMode.rank_of(&1["execution_mode"]), :desc) do
-        [first | _] -> select(agent, first["id"]) |> elem(1)
-        [] -> ExecutionMode.clamp(agent)
-      end
-    else
-      ExecutionMode.clamp(agent)
-    end
+  defp apply_policy(agent, profile) do
+    Map.put(agent, "toolPolicy", %{
+      "executionMode" => profile["execution_mode"],
+      "tools" => profile["tools"],
+      "restrictToLoadout" => true
+    })
+    |> Map.put("sessionMode", profile["id"])
   end
 
   def changes(agent), do: Map.take(agent, @selection_keys)
 
   @impl true
-  def before_agent_start(agent, _ctx) do
+  def prepare_request(agent, _ctx) do
     profile = agent["profilePolicy"] || %{}
 
-    removed =
-      if agent["executionMode"] == "plan",
-        do: ["profile", "workflow", "session_start_hooks", "agy_session_start_hooks"],
-        else: ["profile", "workflow"]
-
-    sections =
-      Enum.reject(
-        agent["systemSections"] || [],
-        &(&1["id"] in removed)
-      )
-
-    context =
-      "\nWorkspace roots (JSON): #{Jason.encode!(agent["workspacePaths"] || [])}. Relative paths use the first root. " <>
-        "Use git_inspect for read-only Git queries. For user requests to approve commands or folders, use request_command_approval or request_workspace_access when available. Chat text alone does not change approvals."
+    sections = Enum.reject(agent["systemSections"] || [], &(&1["id"] in ["profile", "workflow"]))
 
     request =
       agent
       |> Map.put("tools", offered_tools(agent["tools"] || [], agent))
       |> Map.put(
         "systemSections",
-        sections ++ [%{"id" => "profile", "content" => (profile["prompt"] || "") <> context}]
+        sections ++ [%{"id" => "profile", "content" => profile["prompt"] || ""}]
       )
 
     request =
@@ -202,7 +228,7 @@ defmodule SuperPi.Plugins.Profiles do
         if profile[key], do: Map.put(acc, key, profile[key]), else: acc
       end)
 
-    {:request, request}
+    {:ok, request}
   end
 
   @impl true
@@ -218,67 +244,40 @@ defmodule SuperPi.Plugins.Profiles do
     {:ok, Map.update(payload, :tools, [], &offered_tools(&1, agent))}
   end
 
-  def offered_tools(tools, agent),
-    do: Enum.filter(tools, &(check_tool(&1["name"], agent) == :allow))
-
-  def check_tool(name, agent) do
-    policy = agent["profilePolicy"]
-
-    cond do
-      supported?(agent) and not is_map(policy) ->
-        {:block, "No usable profile is configured for this harness."}
-
-      not is_map(policy) ->
-        :allow
-
-      not Enum.any?(agent["tools"] || [], &(&1["name"] == name)) ->
-        {:block, "Tool #{name} is outside this harness's loadout."}
-
-      name in @administrative ->
-        :allow
-
-      not matches_filter?(name, policy["tools"]) ->
-        {:block, "Tool #{name} is excluded by profile #{agent["profile"]}."}
-
-      agent["executionMode"] == "plan" and not read_only?(name, agent) ->
-        {:block, "Tool #{name} is blocked by the read-only profile."}
-
-      true ->
-        :allow
-    end
-  end
-
-  defp matches_filter?(_name, "all"), do: true
-  defp matches_filter?(name, %{"only" => names}), do: name in names
-  defp matches_filter?(name, %{"except" => names}), do: name not in names
-  defp matches_filter?(_, _), do: false
-
-  defp read_only?(name, agent) do
-    case Tools.effects(name, agent) do
-      [_ | _] = effects -> Enum.all?(effects, &(&1 in ["read", "net_read"]))
-      _ -> false
-    end
-  end
-
-  @impl true
-  def before_tool(name, _args, ctx) do
-    check_tool(name, Doc.snapshot("conversation", ctx.conversation_id, "pi.agent") || %{})
-  end
+  def offered_tools(tools, agent), do: Permissions.offered_tools(tools, agent)
 
   @impl true
   def on_input(input, ctx) do
     agent = Doc.snapshot("conversation", ctx.conversation_id, "pi.agent") || %{}
 
-    case {agent["disableSlashCommands"],
-          Regex.run(~r/^\/(?:mode|workflow)\s+(\S+)\s*$/, String.trim(input))} do
-      {disabled, [_, id]} when disabled != true ->
-        with {:ok, updated} <- agent |> refresh() |> select(id) do
-          Storage.configure_agent!(ctx.conversation_id, changes(updated))
-          :handled
-        end
+    trimmed = String.trim(input)
 
-      _ ->
-        :continue
+    if agent["disableSlashCommands"] do
+      :continue
+    else
+      case String.split(trimmed, ~r/\s+/, parts: 2) do
+        ["/plan" | rest] ->
+          with {:ok, updated} <- select(refresh(agent), "plan") do
+            Storage.configure_agent!(ctx.conversation_id, changes(updated))
+
+            case rest do
+              [task] when task != "" -> {:transform, task, []}
+              _ -> :handled
+            end
+          end
+
+        [command, id] when command in ["/mode", "/workflow"] ->
+          with {:ok, updated} <- select(refresh(agent), id) do
+            Storage.configure_agent!(ctx.conversation_id, changes(updated))
+            :handled
+          end
+
+        [command] when command in ["/mode", "/workflow"] ->
+          {:error, "Supply a mode id."}
+
+        _ ->
+          :continue
+      end
     end
   end
 
@@ -297,7 +296,7 @@ defmodule SuperPi.Plugins.Profiles do
   end
 
   @impl true
-  def wrap_tool("switch_mode", args, _next, ctx) do
+  def execute_tool("switch_mode", args, ctx) do
     agent = Doc.snapshot("conversation", ctx.conversation_id, "pi.agent") || %{}
     settings = Permissions.load_effective_settings(agent)
 
@@ -325,7 +324,7 @@ defmodule SuperPi.Plugins.Profiles do
     end
   end
 
-  def wrap_tool(_name, args, next, _ctx), do: next.(args)
+  def execute_tool(_, _, _), do: :unhandled
 
   defp approve_switch(agent, target, args, ctx, settings) do
     if ExecutionMode.rank_of(target["executionMode"]) >

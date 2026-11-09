@@ -525,6 +525,8 @@ defmodule SuperPi.ACPTest do
         "workflowMode" => nil,
         "profile" => nil,
         "profilePolicy" => nil,
+        "toolPolicy" => nil,
+        "sessionMode" => nil,
         "profilesConfig" => nil,
         "executionMode" => "auto"
       })
@@ -556,7 +558,7 @@ defmodule SuperPi.ACPTest do
       assert {%{"error" => %{"code" => -32602}}, _} = await_response(3)
 
       assert {:error, _} =
-               SuperPi.Plugins.SlashCommands.on_input("/workflow build", %{
+               SuperPi.Plugins.Profiles.on_input("/workflow build", %{
                  conversation_id: conv_of(sid)
                })
     end

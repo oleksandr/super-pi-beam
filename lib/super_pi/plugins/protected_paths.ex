@@ -12,6 +12,9 @@ defmodule SuperPi.Plugins.ProtectedPaths do
   """
 
   use SuperPi.Extension
+
+  @impl true
+  def lifecycle_effects, do: []
   require Logger
 
   @default_protected_patterns [

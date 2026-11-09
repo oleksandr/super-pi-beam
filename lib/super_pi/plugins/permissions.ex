@@ -59,6 +59,9 @@ defmodule SuperPi.Plugins.Permissions do
 
   use SuperPi.Extension
 
+  @impl true
+  def lifecycle_effects, do: []
+
   def id, do: "permissions"
   def name, do: "Execution Permissions & Workspace Boundary Shield"
 
@@ -72,7 +75,7 @@ defmodule SuperPi.Plugins.Permissions do
   alias SuperPi.ExecutionMode
   alias SuperPi.UI.PermissionPrompt
 
-  @command_tools ~w(bash sh terminal run_command exec git_inspect)
+  @command_tools ~w(bash sh terminal run_command exec)
 
   @read_only_tools ["read", "grep", "find", "ls", "tool_search"]
   @edit_tools ["write", "edit"]
@@ -94,6 +97,11 @@ defmodule SuperPi.Plugins.Permissions do
   @list_tools ["grep", "find", "ls", "search_files", "find_files", "list_dir", "list_directory"]
   @max_symlink_hops 40
   @remote_forbidden_keys [
+    "toolProviders",
+    "pluginToolNames",
+    "modeProviders",
+    "toolPolicy",
+    "sessionMode",
     "profile",
     "profilePolicy",
     "profiles",
@@ -197,12 +205,6 @@ defmodule SuperPi.Plugins.Permissions do
   end
 
   @impl true
-  def wrap_tool("request_command_approval", args, _next, ctx),
-    do: SuperPi.CommandApproval.request(args, ctx)
-
-  def wrap_tool("request_workspace_access", args, _next, ctx),
-    do: SuperPi.WorkspaceApproval.request(args, ctx)
-
   def wrap_tool(tool_name, args, next, ctx) do
     {agent_cfg, settings} = load_state(ctx)
 
@@ -255,17 +257,14 @@ defmodule SuperPi.Plugins.Permissions do
   # `settings.json`. A remote caller cannot send `settingsOverride` (`sanitize_remote_agent/1`), so
   # answering a prompt is the only way it gets there, and only for this conversation.
   defp remember(conversation_id, tool_name, args, kind) do
-    args =
-      if tool_name == "git_inspect",
-        do: Map.put(args, "command", SuperPi.GitInspection.command(args)),
-        else: args
-
     agent = Doc.snapshot("conversation", conversation_id, "pi.agent") || %{}
+    {:ok, policy} = SuperPi.PluginTools.policy(tool_name, args, agent)
+    args = if policy[:command], do: Map.put(args, "command", policy.command), else: args
     override = Map.get(agent, "settingsOverride") || %{}
     perms = Map.get(override, "permissions") || %{}
 
     {key, entry} =
-      case {kind, tool_name in @command_tools} do
+      case {kind, tool_name in @command_tools or is_binary(policy[:command])} do
         {:allow, true} -> {"allow", "command(#{String.trim(command_string(args))})"}
         {:deny, true} -> {"deny", "command(#{String.trim(command_string(args))})"}
         {:allow, false} -> {"allowTools", tool_name}
@@ -305,34 +304,33 @@ defmodule SuperPi.Plugins.Permissions do
   @spec evaluate(String.t(), map(), map(), map()) ::
           :allow | {:block, String.t()} | {:prompt, String.t(), String.t()}
   def evaluate(tool_name, args, agent_cfg, settings) do
-    agent_cfg = ExecutionMode.enforce_workflow(agent_cfg)
+    with {:ok, policy} <- SuperPi.PluginTools.policy(tool_name, args, agent_cfg) do
+      evaluate_policy(tool_name, args, agent_cfg, settings, policy)
+    else
+      {:error, reason} -> {:block, reason}
+    end
+  end
+
+  defp evaluate_policy(tool_name, args, agent_cfg, settings, policy) do
+    agent_cfg = ExecutionMode.enforce_policy(agent_cfg)
     skip_perms? = Map.get(agent_cfg, "dangerouslySkipPermissions", false) == true
     raw_mode = Map.get(agent_cfg, "executionMode", "auto")
     mode = raw_mode |> to_string() |> String.trim() |> String.downcase()
     effects = SuperPi.Tools.effects(tool_name, agent_cfg)
 
-    args =
-      if tool_name == "git_inspect",
-        do: Map.put(args, "command", SuperPi.GitInspection.command(args)),
-        else: args
+    args = if policy[:command], do: Map.put(args, "command", policy.command), else: args
+    command? = tool_name in @command_tools or is_binary(policy[:command])
+    tool_policy = check_tool_policy(tool_name, agent_cfg)
 
     cond do
-      tool_name == "request_workspace_access" ->
-        cond do
-          tool_name in permission_list(settings, "denyTools") ->
-            {:block, "Workspace access requests are disabled by policy."}
+      tool_policy != :allow ->
+        tool_policy
 
-          SuperPi.WorkspaceApproval.available?(agent_cfg) ->
-            :allow
+      tool_name in permission_list(settings, "denyTools") ->
+        {:block, "Tool `#{tool_name}` is blocked by `permissions.denyTools`."}
 
-          true ->
-            {:block, "Workspace approval is available only in local CLI/ACP filesystem sessions."}
-        end
-
-      tool_name in ["request_command_approval", "switch_mode"] ->
-        if tool_name in permission_list(settings, "denyTools"),
-          do: {:block, "Command approval requests are disabled by policy."},
-          else: :allow
+      policy[:administrative] == true ->
+        :allow
 
       skip_perms? ->
         :allow
@@ -340,21 +338,16 @@ defmodule SuperPi.Plugins.Permissions do
       mode not in ["auto", "accept-edits", "plan"] ->
         {:block, "Execution mode `#{raw_mode}` is not recognized or not permitted."}
 
-      tool_name in @command_tools and command_denied?(args, settings) ->
+      command? and command_denied?(args, settings) ->
         {:block, "Command is blocked by `permissions.deny`."}
-
-      tool_name in permission_list(settings, "denyTools") ->
-        {:block, "Tool `#{tool_name}` is blocked by `permissions.denyTools`."}
-
-      tool_name == "git_inspect" and not match?({:ok, _}, SuperPi.GitInspection.argv(args)) ->
-        {:block, "git_inspect only supports read-only Git arguments."}
 
       mode == "plan" and not plan_allowed?(tool_name, effects, settings, args) ->
         {:block, "Tool `#{tool_name}` is blocked in `--mode plan` (read-only planning mode)."}
 
-      not allowed_by_workspace_boundary?(tool_name, args, agent_cfg, settings) ->
+      not Enum.all?(policy[:paths] || [], &path_in_workspace?(&1, agent_cfg, settings)) or
+          not allowed_by_workspace_boundary?(tool_name, args, agent_cfg, settings) ->
         {:block,
-         "Path access outside trusted workspaces is disabled (`allowNonWorkspaceAccess: false`). Use request_workspace_access to request this folder in a local CLI/ACP session, or open it as a session workspace."}
+         "Path access outside trusted workspaces is disabled (`allowNonWorkspaceAccess: false`). Request folder access if the harness supports it, or open it as a session workspace."}
 
       network_denied?(effects, args, settings) ->
         {:block,
@@ -366,10 +359,10 @@ defmodule SuperPi.Plugins.Permissions do
       tool_name in @edit_tools and mode in ["auto", "accept-edits"] ->
         :allow
 
-      tool_name in @command_tools ->
+      command? ->
         cmd_str = command_string(args)
 
-        if mode == "auto" or approved_command?(tool_name, args, settings) do
+        if mode == "auto" or approved_command?(args, settings, policy) do
           :allow
         else
           {:prompt, "Command `#{cmd_str}` is not in `permissions.allow` under mode `#{mode}`.",
@@ -392,24 +385,69 @@ defmodule SuperPi.Plugins.Permissions do
     end
   end
 
-  defp approved_command?("git_inspect", args, settings) do
-    case SuperPi.GitInspection.argv(args) do
-      {:ok, words} ->
-        CommandRules.matches_argv?(words, permission_list(settings, "commandPrefixes")) or
-          command_allowed?(command_string(args), permission_list(settings, "allow"))
-
-      _ ->
-        false
-    end
-  end
-
-  defp approved_command?(_tool, args, settings),
-    do:
+  defp approved_command?(args, settings, policy) do
+    if policy[:argv] do
+      CommandRules.matches_argv?(policy.argv, permission_list(settings, "commandPrefixes")) or
+        command_allowed?(command_string(args), permission_list(settings, "allow"))
+    else
       CommandRules.matches?(
         command_string(args),
         permission_list(settings, "commandPrefixes"),
         permission_list(settings, "allow")
       )
+    end
+  end
+
+  @doc "The same policy used for execution also decides which tools can be offered. Argument-specific checks run at execution."
+  def offered_tools(tools, agent) do
+    settings = load_effective_settings(agent)
+    Enum.filter(tools, &(tool_available(&1["name"], agent, settings) == :allow))
+  end
+
+  def tool_available(name, agent, settings \\ %{}) do
+    agent = ExecutionMode.enforce_policy(agent)
+
+    with :allow <- check_tool_policy(name, agent) do
+      cond do
+        name in permission_list(settings, "denyTools") ->
+          {:block, "Tool is disabled by policy."}
+
+        SuperPi.PluginTools.administrative?(name, agent) ->
+          :allow
+
+        agent["executionMode"] == "plan" and
+            not plan_allowed?(name, SuperPi.Tools.effects(name, agent), settings, %{}) ->
+          {:block, "Tool is blocked by the read-only permission mode."}
+
+        true ->
+          :allow
+      end
+    end
+  end
+
+  defp check_tool_policy(name, agent) do
+    policy = agent["toolPolicy"] || %{}
+
+    cond do
+      policy["restrictToLoadout"] == true and
+          not Enum.any?(agent["tools"] || [], &(&1["name"] == name)) ->
+        {:block, "Tool #{name} is outside the harness loadout."}
+
+      SuperPi.PluginTools.administrative?(name, agent) ->
+        :allow
+
+      not matches_filter?(name, policy["tools"]) ->
+        {:block, "Tool #{name} is excluded by the active tool policy."}
+
+      true ->
+        :allow
+    end
+  end
+
+  defp matches_filter?(_, filter) when filter in [nil, "all"], do: true
+  defp matches_filter?(name, %{"only" => names}), do: name in names
+  defp matches_filter?(name, %{"except" => names}), do: name not in names
+  defp matches_filter?(_, _), do: false
 
   defp risk(nil), do: "high"
 
@@ -607,14 +645,6 @@ defmodule SuperPi.Plugins.Permissions do
     allow_non_ws? = Map.get(settings, "allowNonWorkspaceAccess", false) == true
 
     cond do
-      tool_name == "git_inspect" ->
-        path_in_workspace?(
-          Map.get(args, "cd") || Map.get(args, "dir") || Map.get(args, "cwd") ||
-            SuperPi.WorkspacePaths.primary(agent_cfg),
-          agent_cfg,
-          settings
-        )
-
       allow_non_ws? ->
         true
 

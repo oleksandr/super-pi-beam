@@ -1,9 +1,8 @@
 defmodule SuperPi.Plugins.SlashCommands do
   @moduledoc """
-  Interactive Slash-Command Expansion Plugin (`SuperPi.Extension` behaviour).
+  Fallback Slash-Command Expansion Plugin (`SuperPi.Extension` behaviour).
 
   Intercepts `on_input/2` unless `"disableSlashCommands" => true` is set (`--disable-slash-commands`):
-  - `/workflow <ask|plan|build>` — Selects a coding workflow.
   - `/plan <task>` — Selects read-only Plan, optionally submitting a task.
   - `/goal <task>` — Rewrites prompt into autonomous thorough completion mode and enables goal verification.
   - `/boost <task>` — Enables deep multi-perspective reasoning and architectural verification.
@@ -13,6 +12,9 @@ defmodule SuperPi.Plugins.SlashCommands do
 
   use SuperPi.Extension
 
+  @impl true
+  def lifecycle_effects, do: []
+
   def id, do: "slash_commands"
   def name, do: "Interactive Slash Commands"
 
@@ -21,7 +23,6 @@ defmodule SuperPi.Plugins.SlashCommands do
 
   alias SuperPi.Durable.{Doc, Storage}
   alias SuperPi.Plugins.Permissions
-  alias SuperPi.Plugins.Profiles
 
   @impl true
   def on_input(input, ctx) do
@@ -33,10 +34,6 @@ defmodule SuperPi.Plugins.SlashCommands do
       trimmed = String.trim(input)
 
       cond do
-        Profiles.supported?(agent_cfg) and
-            (String.starts_with?(trimmed, "/mode ") or String.starts_with?(trimmed, "/workflow ")) ->
-          Profiles.on_input(input, ctx)
-
         String.starts_with?(trimmed, "/model ") ->
           new_model = trimmed |> String.replace_prefix("/model ", "") |> String.trim()
           Storage.configure_agent!(ctx.conversation_id, %{"model" => new_model})
@@ -62,13 +59,7 @@ defmodule SuperPi.Plugins.SlashCommands do
         trimmed == "/plan" or String.starts_with?(trimmed, "/plan ") ->
           rest = trimmed |> String.replace_prefix("/plan", "") |> String.trim()
 
-          changes =
-            if Profiles.supported?(agent_cfg) do
-              {:ok, updated} = Profiles.select(agent_cfg, "plan")
-              Profiles.changes(updated)
-            else
-              %{"executionMode" => "plan", "dangerouslySkipPermissions" => false}
-            end
+          changes = %{"executionMode" => "plan", "dangerouslySkipPermissions" => false}
 
           Storage.configure_agent!(ctx.conversation_id, changes)
           if rest == "", do: :handled, else: {:transform, rest, []}

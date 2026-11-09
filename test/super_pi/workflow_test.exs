@@ -37,6 +37,13 @@ defmodule SuperPi.ProfilesIntegrationTest do
     %{agent: agent, dir: dir, sentinel: sentinel}
   end
 
+  defp profile_input(input, ctx) do
+    case SuperPi.Extension.run_on_input([SlashCommands, Workflow], input, ctx) do
+      {:continue, text, media} -> {:transform, text, media}
+      result -> result
+    end
+  end
+
   defp select!(agent, mode) do
     {:ok, selected} = Workflow.select(agent, mode)
     selected
@@ -150,7 +157,7 @@ defmodule SuperPi.ProfilesIntegrationTest do
       {:ok, pid} =
         Machine.start_link(
           conversation_id: conv.id,
-          extensions: [Workflow],
+          extensions: [Permissions, Workflow],
           llm_responder: Faults.tool_then_text_responder(tool, %{}, "done"),
           tool_executor: fn name, _, _ ->
             send(me, {:executed, name})
@@ -188,14 +195,14 @@ defmodule SuperPi.ProfilesIntegrationTest do
   test "slash selection is durable, rejects conflicts, and /plan enters Plan", %{agent: agent} do
     conv = Storage.create_conversation!(agent: agent)
     ctx = %{conversation_id: conv.id}
-    assert :handled = SlashCommands.on_input("/workflow ask", ctx)
-    assert :handled = SlashCommands.on_input("/mode auto", ctx)
-    assert :handled = SlashCommands.on_input("/mode ask", ctx)
-    assert {:error, _} = SlashCommands.on_input("/workflow invalid", ctx)
+    assert :handled = profile_input("/workflow ask", ctx)
+    assert :handled = profile_input("/mode auto", ctx)
+    assert :handled = profile_input("/mode ask", ctx)
+    assert {:error, _} = profile_input("/workflow invalid", ctx)
     assert Doc.snapshot("conversation", conv.id, "pi.agent")["profile"] == "ask"
 
     assert {:transform, "review this code", []} =
-             SlashCommands.on_input("/plan review this code", ctx)
+             profile_input("/plan review this code", ctx)
 
     assert Doc.snapshot("conversation", conv.id, "pi.agent")["profile"] == "plan"
 

@@ -84,7 +84,8 @@ defmodule SuperPi.Harness.Defaults do
       "network" => workspace["network"] != false,
       "effort" => spec[:effort] || "medium",
       "mode" => spec[:mode] || "accept-edits",
-      "maxMode" => spec[:max_mode] || spec[:mode] || "accept-edits"
+      "maxMode" => spec[:max_mode] || spec[:mode] || "accept-edits",
+      "sessionModes" => SuperPi.SessionModes.list(build(module))
     }
   end
 

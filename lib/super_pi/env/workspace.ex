@@ -31,7 +31,8 @@ defmodule SuperPi.Env.Workspace do
   `state_write` need nothing. The built-in file and shell tools are matched by name, because `read`
   is also the effect of tools that read Super-Pi state. Artifact tools need `artifacts`. A tool that
   states no effects needs `fs`, `exec` and `net`, so an unknown tool is not offered where any of
-  them is missing.
+  them is missing. Trusted plugin declarations may add a `"capabilities"` list when a read-only
+  operation needs a filesystem or process runner; those requirements supplement the effects.
 
   Artifact tools (`SuperPi.Artifacts`) are offered with `shared`, `scratch` and `none`, and with
   `local` when the workspace sets `"artifacts" => true`. A tool whose capability the workspace
@@ -60,7 +61,7 @@ defmodule SuperPi.Env.Workspace do
   @type t :: %__MODULE__{}
 
   @file_tools ~w(read read_file write write_file edit edit_file grep search_files find find_files ls list_dir list_directory)
-  @exec_tools ~w(bash sh terminal run_command exec git_inspect)
+  @exec_tools ~w(bash sh terminal run_command exec)
 
   @doc "Resolves the workspace for a tool call. `ctx` has `:conversation_id` and, in a turn, `:active_task_id`."
   @spec resolve(map()) :: {:ok, t()} | {:error, String.t()}
@@ -194,9 +195,28 @@ defmodule SuperPi.Env.Workspace do
   def required_capabilities("artifact_" <> _, _cfg), do: [:artifacts]
 
   def required_capabilities(tool, agent_cfg) do
-    case SuperPi.Tools.effects(tool, agent_cfg) do
-      nil -> [:fs, :exec, :net]
-      effects -> effects |> Enum.flat_map(&effect_capabilities/1) |> Enum.uniq()
+    declared =
+      case SuperPi.PluginTools.declaration(tool, agent_cfg || %{}) do
+        {_, spec} -> Enum.map(spec["capabilities"] || [], &declared_capability/1)
+        nil -> []
+      end
+
+    inferred =
+      case SuperPi.Tools.effects(tool, agent_cfg) do
+        nil -> [:fs, :exec, :net]
+        effects -> Enum.flat_map(effects, &effect_capabilities/1)
+      end
+
+    Enum.uniq(declared ++ inferred)
+  end
+
+  defp declared_capability(capability) do
+    case capability do
+      "fs" -> :fs
+      "exec" -> :exec
+      "net" -> :net
+      "artifacts" -> :artifacts
+      _ -> raise ArgumentError, "Unknown tool capability: #{inspect(capability)}"
     end
   end
 
@@ -225,7 +245,7 @@ defmodule SuperPi.Env.Workspace do
   def offered_tools(tools, agent_cfg) when is_list(tools) do
     case build(Map.get(agent_cfg, "workspace") || %{"kind" => "local"}, %{}) do
       {:ok, ws} ->
-        kept = Enum.filter(tools, &supports?(ws, &1["name"], %{"tools" => tools}))
+        kept = Enum.filter(tools, &supports?(ws, &1["name"], Map.put(agent_cfg, "tools", tools)))
         have = MapSet.new(kept, & &1["name"])
 
         extra =

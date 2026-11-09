@@ -5,7 +5,6 @@ defmodule SuperPi.ExecutionMode do
   """
 
   @ranks %{"plan" => 0, "accept-edits" => 1, "auto" => 2}
-  @workflow_permissions %{"ask" => "plan", "plan" => "plan", "build" => "accept-edits"}
 
   def normalize(mode) when is_binary(mode) do
     mode = mode |> String.trim() |> String.downcase()
@@ -15,7 +14,6 @@ defmodule SuperPi.ExecutionMode do
   def normalize(_), do: nil
 
   def rank_of(mode), do: Map.get(@ranks, normalize(mode), 0)
-  def workflow_permission(workflow), do: Map.get(@workflow_permissions, workflow)
 
   def clamp(agent) do
     with ceiling when not is_nil(ceiling) <- normalize(agent["maxExecutionMode"]),
@@ -27,21 +25,11 @@ defmodule SuperPi.ExecutionMode do
     end
   end
 
-  # A workflow may tighten permissions; a legacy override cannot loosen its boundary.
-  def enforce_workflow(%{"profilePolicy" => %{"execution_mode" => ceiling}} = agent) do
-    mode = agent["executionMode"] || ceiling
-    mode = if rank_of(mode) > rank_of(ceiling), do: ceiling, else: mode
-
-    agent
-    |> Map.put("executionMode", mode)
-    |> Map.put("dangerouslySkipPermissions", false)
-    |> clamp()
-  end
-
-  def enforce_workflow(agent) do
-    case workflow_permission(agent["workflowMode"]) do
+  @doc "Enforces a plugin-independent tool policy and the harness ceiling."
+  def enforce_policy(agent) do
+    case get_in(agent, ["toolPolicy", "executionMode"]) do
       nil ->
-        agent
+        clamp(agent)
 
       ceiling ->
         mode = agent["executionMode"] || ceiling
@@ -51,13 +39,6 @@ defmodule SuperPi.ExecutionMode do
         |> Map.put("executionMode", mode)
         |> Map.put("dangerouslySkipPermissions", false)
         |> clamp()
-        |> tighten_workflow()
     end
   end
-
-  defp tighten_workflow(%{"workflowMode" => "build", "executionMode" => mode} = agent) do
-    if normalize(mode) == "plan", do: Map.put(agent, "workflowMode", "plan"), else: agent
-  end
-
-  defp tighten_workflow(agent), do: agent
 end

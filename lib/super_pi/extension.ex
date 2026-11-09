@@ -2,12 +2,37 @@ defmodule SuperPi.Extension do
   @moduledoc """
   Unified 12-Hook Extension Pipeline behaviour (`09 - Data Flows and Extension Injection Points.md`).
 
-  Configuration also supports `configure_agent/2` (durable defaults) and `lifecycle_effects/0`
-  (declare effects outside the tool pipeline; mutating lifecycle extensions are disabled in plan).
-  A `before_agent_start/2` hook may return `{:request, agent}` to start a request-only phase:
-  its changes and subsequent prompt transformations are not saved in `pi.agent`.
-  `agent_start_phase/0` orders configuration providers before request transformations; within
-  the request phase, put profile filtering before prompt customization.
+  `configure_agent/2` supplies durable defaults. `before_agent_start/2` transforms durable
+  configuration; `prepare_request/2` runs afterwards on a separate, never-persisted copy.
+  Both return `{:ok, agent}`. A request hook cannot change the persistence of another hook.
+  Request hooks follow composition order (for example filter tools before customizing prompts).
+
+  `lifecycle_effects/0` defaults to `[:unknown]`. Undeclared or mutating extensions are inactive
+  in plan mode. Declare `[]` for passive hooks, or `[:audit]` for internal transcript logging only.
+  Tool effects are separate: tool handlers still pass the permission gate.
+  `tools/1`, `tool_policy/3`, and `execute_tool/3` declare and implement plugin-owned tools.
+  `commands/0` reserves slash commands ahead of fallback input handlers.
+  `session_modes/2`, `select_mode/3`, and `mode_state/2` expose modes without coupling clients
+  to a particular plugin. Mode providers persist their configuration in `configure_agent/2`.
+
+  ## Tool and mode declarations
+
+  `tools(agent)` is a pure declaration callback returning specs with `name`, `parameters` and
+  `effects`. An optional `capabilities` list adds workspace requirements (`fs`, `exec`, `net`,
+  `artifacts`). `administrative: true` (a string key on the spec) identifies policy-changing
+  tools that remain available in Plan and outside profile filters, subject to explicit deny rules.
+  Administrative handlers run outside the sandbox timeout so human approval can wait safely.
+  Only server-composed declarations confer this authority; client-supplied metadata cannot.
+  `tool_policy(name, args, agent)` returns `{:ok, policy}` or `{:error, reason}`. The policy may
+  supply atom keys `:command`, `:argv` and `:paths` for standard approval and workspace checks.
+  `execute_tool(name, args, ctx)` owns dispatch. Declarations must not invoke tool/effect lookup
+  recursively. Existing `before_agent_start`/`wrap_tool` providers remain supported.
+
+  `session_modes(agent, ctx)` returns `nil` when unsupported, otherwise a map with `currentModeId`
+  and `availableModes`. Each mode includes `id`, `name`, `description` and its `executionMode`.
+  `select_mode/3` returns `{:ok, agent}` or `{:error, reason}`. `mode_state/2` returns only the
+  provider-owned selection state to restore; `configure_agent/2` must preserve restored state.
+  `commands/0` returns names without `/`; a single owner runs before fallback input handlers.
 
   Every callback is optional; modules that `use SuperPi.Extension` inherit pass-through default
   implementations and can override only the hooks they need.
@@ -31,13 +56,21 @@ defmodule SuperPi.Extension do
 
   @callback configure_agent(map(), context()) :: map()
   @callback lifecycle_effects() :: [atom()]
-  @callback agent_start_phase() :: :configure | :request
+  @callback prepare_request(map(), context()) :: {:ok, map()}
+  @callback tools(map()) :: [map()]
+  @callback tool_policy(String.t(), map(), map()) :: {:ok, map()} | {:error, String.t()}
+  @callback execute_tool(String.t(), map(), context()) :: map() | :unhandled
+  @callback commands() :: [String.t()]
+  @callback session_modes(map(), context()) :: map() | nil
+  @callback select_mode(map(), String.t(), context()) ::
+              {:ok, map()} | {:error, String.t()} | :unsupported
+  @callback mode_state(map(), context()) :: map()
 
   @callback on_input(input :: String.t(), context()) ::
               :continue | {:transform, String.t(), list()} | :handled | {:error, String.t()}
 
   @callback before_agent_start(agent_config :: map(), context()) ::
-              {:ok, map()} | {:request, map()}
+              {:ok, map()}
 
   @callback before_compact(compaction_req :: map(), context()) ::
               :default | {:compacted, String.t(), map()} | :cancel
@@ -75,7 +108,14 @@ defmodule SuperPi.Extension do
   @optional_callbacks [
     configure_agent: 2,
     lifecycle_effects: 0,
-    agent_start_phase: 0,
+    prepare_request: 2,
+    tools: 1,
+    tool_policy: 3,
+    execute_tool: 3,
+    commands: 0,
+    session_modes: 2,
+    select_mode: 3,
+    mode_state: 2,
     on_input: 2,
     before_agent_start: 2,
     before_compact: 2,
@@ -98,10 +138,24 @@ defmodule SuperPi.Extension do
       def configure_agent(agent, _ctx), do: agent
 
       @impl true
-      def lifecycle_effects, do: []
+      def lifecycle_effects, do: [:unknown]
 
       @impl true
-      def agent_start_phase, do: :configure
+      def prepare_request(agent, _ctx), do: {:ok, agent}
+      @impl true
+      def tools(_agent), do: []
+      @impl true
+      def tool_policy(_name, _args, _agent), do: {:ok, %{}}
+      @impl true
+      def execute_tool(_name, _args, _ctx), do: :unhandled
+      @impl true
+      def commands, do: []
+      @impl true
+      def session_modes(_agent, _ctx), do: nil
+      @impl true
+      def select_mode(_agent, _mode, _ctx), do: :unsupported
+      @impl true
+      def mode_state(_agent, _ctx), do: %{}
 
       @impl true
       def on_input(_input, _ctx), do: :continue
@@ -141,7 +195,14 @@ defmodule SuperPi.Extension do
 
       defoverridable configure_agent: 2,
                      lifecycle_effects: 0,
-                     agent_start_phase: 0,
+                     prepare_request: 2,
+                     tools: 1,
+                     tool_policy: 3,
+                     execute_tool: 3,
+                     commands: 0,
+                     session_modes: 2,
+                     select_mode: 3,
+                     mode_state: 2,
                      on_input: 2,
                      before_agent_start: 2,
                      before_compact: 2,
@@ -160,13 +221,28 @@ defmodule SuperPi.Extension do
   # --- Pipeline Runners ---
 
   def configure_agent(extensions, agent, ctx \\ %{}) do
-    Enum.reduce(extensions, agent, fn ext, acc ->
-      {mod, _} = unpack_ext(ext)
+    agent =
+      Enum.reduce(extensions, agent, fn ext, acc ->
+        {mod, _} = unpack_ext(ext)
 
-      if function_exported?(mod, :configure_agent, 2),
-        do: mod.configure_agent(acc, ext_ctx(ext, ctx)),
-        else: acc
-    end)
+        if function_exported?(mod, :configure_agent, 2),
+          do: mod.configure_agent(acc, ext_ctx(ext, ctx)),
+          else: acc
+      end)
+
+    providers =
+      for ext <- extensions,
+          {mod, _} = unpack_ext(ext),
+          function_exported?(mod, :session_modes, 2),
+          mod.session_modes(agent, ext_ctx(ext, ctx)) != nil,
+          do: Atom.to_string(mod)
+
+    if length(providers) > 1,
+      do: raise(ArgumentError, "A harness must compose only one session-mode provider")
+
+    agent
+    |> Map.put("modeProviders", providers)
+    |> then(&SuperPi.PluginTools.declare(extensions, &1))
   end
 
   # Lifecycle effects bypass the tool permission gate, so disable mutating hooks in read-only modes.
@@ -174,7 +250,9 @@ defmodule SuperPi.Extension do
     if agent["executionMode"] == "plan" do
       Enum.reject(extensions, fn ext ->
         {mod, _} = unpack_ext(ext)
-        function_exported?(mod, :lifecycle_effects, 0) and mod.lifecycle_effects() != []
+
+        not function_exported?(mod, :lifecycle_effects, 0) or
+          not Enum.all?(mod.lifecycle_effects(), &(&1 in [:read, :net_read, :audit]))
       end)
     else
       extensions
@@ -202,6 +280,24 @@ defmodule SuperPi.Extension do
   end
 
   def run_on_input(extensions, input, ctx) do
+    command =
+      input
+      |> String.trim()
+      |> String.split(~r/\s+/, parts: 2)
+      |> hd()
+      |> String.trim_leading("/")
+
+    {owners, rest} =
+      Enum.split_with(extensions, fn ext ->
+        {mod, _} = unpack_ext(ext)
+
+        String.starts_with?(String.trim(input), "/") and function_exported?(mod, :commands, 0) and
+          command in mod.commands()
+      end)
+
+    if length(owners) > 1, do: raise(ArgumentError, "Multiple plugins claim /#{command}")
+    extensions = owners ++ rest
+
     Enum.reduce_while(extensions, {:continue, input, []}, fn ext,
                                                              {:continue, cur_input, cur_media} ->
       {mod, _opts} = unpack_ext(ext)
@@ -228,39 +324,34 @@ defmodule SuperPi.Extension do
   end
 
   def run_before_agent_start(extensions, agent_cfg, ctx) do
-    {_stored, request} = run_agent_start(extensions, agent_cfg, ctx)
-    request
+    extensions |> run_agent_start(agent_cfg, ctx) |> elem(1)
   end
 
-  @doc "Request-only transformations leave the durable tool loadout and base model intact."
+  @doc "Runs all durable hooks, then all request-only hooks. Persistence never depends on a previous result."
   def run_agent_start(extensions, agent_cfg, ctx) do
-    # Tool-provider plugins may be supplied via extra_plugins, after the harness's prompt hooks.
-    # Assemble their durable loadout before request-only profile filtering.
-    extensions =
-      Enum.sort_by(extensions, fn ext ->
-        {mod, _} = unpack_ext(ext)
-
-        if function_exported?(mod, :agent_start_phase, 0) and mod.agent_start_phase() == :request,
-          do: 1,
-          else: 0
-      end)
-
-    {stored, request, _} =
-      Enum.reduce(extensions, {agent_cfg, agent_cfg, false}, fn ext, {stored, acc, transient?} ->
-        {mod, _opts} = unpack_ext(ext)
-        mod_ctx = ext_ctx(ext, ctx)
-
-        if function_exported?(mod, :before_agent_start, 2) do
-          case mod.before_agent_start(acc, mod_ctx) do
-            {:ok, next} -> {if(transient?, do: stored, else: next), next, transient?}
-            {:request, next} -> {stored, next, true}
-          end
-        else
-          {stored, acc, transient?}
-        end
-      end)
-
+    agent_cfg = SuperPi.PluginTools.declare(extensions, agent_cfg)
+    stored = run_agent_hook(extensions, :before_agent_start, agent_cfg, ctx)
+    request = run_agent_hook(extensions, :prepare_request, stored, ctx)
     {stored, request}
+  end
+
+  defp run_agent_hook(extensions, hook, agent, ctx) do
+    Enum.reduce(extensions, agent, fn ext, acc ->
+      {mod, _} = unpack_ext(ext)
+
+      if function_exported?(mod, hook, 2) do
+        case apply(mod, hook, [acc, ext_ctx(ext, ctx)]) do
+          {:ok, next} when is_map(next) ->
+            next
+
+          other ->
+            raise ArgumentError,
+                  "#{inspect(mod)}.#{hook}/2 must return {:ok, map}, got #{inspect(other)}; use prepare_request/2 for request-only changes"
+        end
+      else
+        acc
+      end
+    end)
   end
 
   def run_before_compact(extensions, req, ctx) do
@@ -366,6 +457,14 @@ defmodule SuperPi.Extension do
   end
 
   def run_wrap_tool(extensions, tool_name, args, core_exec_fun, ctx) do
+    original = core_exec_fun
+
+    core_exec_fun = fn args ->
+      if SuperPi.PluginTools.administrative?(tool_name, SuperPi.PluginTools.agent(ctx)),
+        do: SuperPi.PluginTools.execute(tool_name, args, ctx),
+        else: original.(args)
+    end
+
     chain =
       Enum.reverse(extensions)
       |> Enum.reduce(core_exec_fun, fn ext, next_fn ->

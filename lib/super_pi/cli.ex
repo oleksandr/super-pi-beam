@@ -17,7 +17,7 @@ defmodule SuperPi.CLI do
   alias SuperPi.Harness
   alias SuperPi.Plugins.TranscriptLogger
   alias SuperPi.TUI.Owl, as: OwlTUI
-  alias SuperPi.Plugins.Profiles
+  alias SuperPi.SessionModes
 
   # `--agent` values of earlier releases and the harness each one selects.
   @agent_aliases %{"self" => "super-pi-code", "research" => "super-pi-planner"}
@@ -391,34 +391,34 @@ defmodule SuperPi.CLI do
         do: Map.put(agent, "settingsOverride", previous["settingsOverride"] || %{}),
         else: agent
 
-    inherited = if Profiles.supported?(agent), do: previous["profile"] || previous["workflowMode"]
-    mode = flags.workflow || flags.mode || inherited
-    profile = Enum.find(agent["profiles"] || [], &(&1["id"] == flags.workflow))
-
     cond do
-      not Profiles.supported?(agent) and flags.workflow ->
-        {:error, "This harness does not include Profiles."}
+      flags.workflow && not SessionModes.custom?(agent) ->
+        {:error, "This harness does not supply custom session modes."}
 
-      flags.workflow &&
-          (flags.dangerously_skip_permissions or
-             (flags.mode && profile && flags.mode != profile["execution_mode"])) ->
-        {:error, "Permission flags conflict with the selected profile."}
+      flags.workflow && flags.dangerously_skip_permissions ->
+        {:error, "Permission flags conflict with the selected mode."}
 
-      Profiles.supported?(agent) and flags.dangerously_skip_permissions ->
-        Profiles.select(agent, "auto")
+      flags.workflow ->
+        with {:ok, updated} <- SessionModes.select(agent, flags.workflow) do
+          if flags.mode && flags.mode != updated["executionMode"],
+            do: {:error, "Permission flags conflict with the selected mode."},
+            else: {:ok, updated}
+        end
 
-      Profiles.supported?(agent) and is_nil(flags.workflow) and is_nil(flags.mode) and
-          is_map(previous["profilePolicy"]) ->
-        {:ok,
-         agent
-         |> Map.merge(Map.take(previous, ["profile", "profilePolicy"]))
-         |> SuperPi.ExecutionMode.enforce_workflow()}
+      SessionModes.custom?(agent) and flags.dangerously_skip_permissions ->
+        SessionModes.select(agent, "auto")
 
-      not Profiles.supported?(agent) or is_nil(mode) ->
+      flags.mode && SessionModes.custom?(agent) ->
+        SessionModes.select(agent, flags.mode)
+
+      flags.mode ->
         {:ok, agent}
 
+      resume ->
+        {:ok, SessionModes.restore(agent, previous)}
+
       true ->
-        Profiles.select(agent, mode)
+        {:ok, agent}
     end
   end
 
@@ -1043,7 +1043,7 @@ defmodule SuperPi.CLI do
       --conversation <id>             Resume a previous conversation by numeric ID
       --model <model>                 Active LLM model
       --mode <mode>                   Execution mode (auto, accept-edits, plan)
-      --workflow <id>                 Profile ID (requires Profiles plugin)
+      --workflow <id>                 Session mode ID
       --effort <level>                Reasoning effort (low, medium, high, xhigh, max)
       --agent <profile>               Deprecated alias of --harness (self is code, research is planner)
       --add-dir <path>                Add a directory to the workspace (repeatable)

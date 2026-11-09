@@ -1,5 +1,7 @@
-defmodule SuperPi.Plugins.Profiles.Presets do
-  @moduledoc "Built-in profiles. Harnesses choose which presets to compose."
+defmodule SuperPi.Harness.CodeProfiles do
+  @moduledoc "Coding profile definitions for the example Code harness."
+
+  def all, do: Enum.map([:ask, :plan, :build], &get/1)
 
   def get(id) do
     case to_string(id) do

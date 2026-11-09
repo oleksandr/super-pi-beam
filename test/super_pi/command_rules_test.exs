@@ -146,7 +146,7 @@ defmodule SuperPi.CommandRulesTest do
                Permissions.evaluate(
                  "bash",
                  %{"command" => @chain},
-                 %{"workflowMode" => mode},
+                 %{"executionMode" => "plan", "sessionMode" => mode},
                  settings
                )
     end
@@ -155,7 +155,7 @@ defmodule SuperPi.CommandRulesTest do
              Permissions.evaluate(
                "bash",
                %{"command" => @chain},
-               %{"workflowMode" => "build"},
+               %{"executionMode" => "accept-edits"},
                settings
              )
   end

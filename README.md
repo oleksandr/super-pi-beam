@@ -30,6 +30,7 @@ Four built-in harnesses show what the engine does. `super-pi-code` changes a rep
 
 5. **Unified 12-Hook Extension Pipeline (`SuperPi.Extension`)**:
    - Supports `on_input`, `before_agent_start`, `before_compact`, `before_request`, `before_provider_request`, `after_response`, `before_tool`, `wrap_tool`, `after_tool`, `after_tools`, `on_yield`, and `after_run`.
+   - `configure_agent` supplies durable defaults; `prepare_request` transforms a separate request copy after durable hooks finish. Plugins declare lifecycle effects, tools, commands and session modes through explicit contracts.
 
 6. **Day-1 `Owl` TUI & JSON-RPC 2.0 Server (`SuperPi.TUI.Owl`, `SuperPi.RPC.Server`)**:
    - Interactive ANSI terminal UI built on `Owl`.
@@ -372,12 +373,19 @@ In chat, use `/mode ask`, `/mode plan`, `/mode build`, or `/mode <custom-id>`. `
 `SuperPi.Plugins.Profiles` can be composed into any harness:
 
 ```elixir
-{Plugins.Profiles, profiles: [:ask, :plan, :build], default: :ask, discover: true}
+{Plugins.Profiles,
+ profiles: [
+   %{id: "quick", name: "Quick answer", prompt: "Answer briefly.", effort: "low"},
+   %{id: "research", name: "Research", prompt: "Compare sources and explain your findings.",
+     execution_mode: "plan", tools: {:only, ["web_search", "web_fetch"]}, effort: "high"}
+ ],
+ default: :quick,
+ discover: false}
 ```
 
-Each profile has `id`, `name`, `description`, `execution_mode`, `tools` (`:all`, `{:only, names}`, or `{:except, names}`), and `prompt`. Optional `model` and `effort` override a request without replacing the base settings. Explicit effort reaches the OpenAI Chat/Responses adapters; support in other providers depends on their adapter. Place Profiles before PromptCustomizer. Tool-provider plugins run in the configuration phase before profile filtering, including providers added through `extra_plugins`.
+Profiles requires an explicit list of valid maps; it has no built-in persona defaults. The Code example supplies `SuperPi.Harness.CodeProfiles.all()` to choose Ask, Plan and Build. Each profile has `id`, `name`, `description`, `execution_mode`, `tools` (`:all`, `{:only, names}`, or `{:except, names}`), and `prompt`. Omitted `execution_mode` defaults to read-only `plan`. Optional `model` and `effort` override a request without replacing the base settings. Explicit effort reaches the OpenAI Chat/Responses adapters; support in other providers depends on their adapter. Place Profiles before PromptCustomizer so its request hook filters tools before prompt assembly. Tool declarations and all durable hooks finish before any request hook runs, including providers added through `extra_plugins`.
 
-Profiles only filter the composed harness loadout and cannot exceed `maxExecutionMode`. The plugin adds the administrative `switch_mode` tool. The separate Approvals plugin supplies command/folder approval requests and constrained Git inspection; these administrative requests remain available across profiles and respect deny rules. Ask and Plan filter out mutating tools and Permissions blocks forced calls. Lifecycle plugins declaring execution effects (Hooks, InlineBash, GitCheckpoint, AutoCommit) are inactive while read-only; other safety plugins stay active. The Planner harness remains read-only even with Profiles installed. Harnesses without Profiles keep the permission-mode picker. Gateway, RPC and MCP entry points retain their existing remote permission defaults; profile selection through those APIs and Markdown subagent roles are outside this phase.
+Profiles only filter the composed harness loadout and cannot exceed `maxExecutionMode`. The plugin adds the administrative `switch_mode` tool and owns `/mode`, `/workflow` and `/plan` regardless of its order relative to SlashCommands. The separate Approvals plugin supplies command/folder approval requests and constrained Git inspection; administrative requests remain available across profiles and respect deny rules. Permissions is the single policy gate for both tool presentation and forced calls, including excluded tools in Build. Lifecycle plugins with undeclared or mutating effects are inactive in Plan. Passive safety hooks explicitly declare `[]`; internal transcript logging declares `[:audit]`. The Planner harness remains read-only even with Profiles installed. ACP and CLI use the generic `SuperPi.SessionModes` contract; harnesses without a mode provider keep the permission-mode picker. Gateway, RPC and MCP entry points retain their existing remote permission defaults; mode selection through those APIs and Markdown subagent roles are outside this phase.
 
 With discovery enabled, a Markdown file adds a mode without Elixir. Search order is nearest workspace ancestor first (up to the Git root), `.agents/agents`, `.opencode/agents`, then `.claude/agents`; configured profiles take precedence. Global `<config-dir>/agents` is also searched. For example, `.agents/agents/reviewer.md`:
 
@@ -972,6 +980,8 @@ No path is hardcoded. Global config, app data and extra discovery roots resolve 
 ### First-Class Plugin Configuration Architecture
 
 Plugins accept declarative configuration via `{PluginModule, opts}` or `{:alias, opts}` tuples. The `SuperPi.Extension` pipeline runner automatically unpacks these tuples and injects the options into `ctx[:config]` for all 12 extension lifecycle hooks (`run_on_input`, `run_before_agent_start`, `run_before_tool`, `run_after_run`, etc.).
+
+The extension contracts also include `configure_agent/2` for durable defaults, `prepare_request/2` for request-only changes, `tools/1`, `tool_policy/3` and `execute_tool/3` for plugin-owned tools, `commands/0` for slash-command ownership, and `session_modes/2`, `select_mode/3` and `mode_state/2` for client-independent modes. Declare `lifecycle_effects/0` explicitly: the default `[:unknown]` disables lifecycle hooks in Plan. Use `[]` for passive hooks, read effects for inspection, and `[:audit]` only for internal transcript logging. Tool effects are checked separately by Permissions. See `SuperPi.Extension` for declaration schemas and migration from request results to `prepare_request/2`.
 
 ```elixir
 defmodule MyCompanyHarness do

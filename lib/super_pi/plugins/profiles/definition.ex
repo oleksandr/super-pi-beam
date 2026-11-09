@@ -1,9 +1,6 @@
 defmodule SuperPi.Plugins.Profiles.Definition do
   @moduledoc "Normalizes profile maps and reads the supported agent Markdown front-matter subset."
   alias SuperPi.ExecutionMode
-  alias SuperPi.Plugins.Profiles.Presets
-
-  def normalize(id) when is_atom(id) or is_binary(id), do: Presets.get(id)
 
   def normalize(profile) when is_map(profile) do
     p = Map.new(profile, fn {k, v} -> {to_string(k), v} end)
