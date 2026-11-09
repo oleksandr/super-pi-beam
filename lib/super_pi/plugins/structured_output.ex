@@ -9,6 +9,9 @@ defmodule SuperPi.Plugins.StructuredOutput do
 
   use SuperPi.Extension
 
+  @impl true
+  def lifecycle_effects, do: []
+
   def id, do: "structured_output"
   def name, do: "Structured Output & Early Termination"
 

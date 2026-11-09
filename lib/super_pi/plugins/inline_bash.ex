@@ -12,6 +12,9 @@ defmodule SuperPi.Plugins.InlineBash do
   """
 
   use SuperPi.Extension
+
+  @impl true
+  def lifecycle_effects, do: [:execute]
   require Logger
 
   @default_max_output_bytes 8_192

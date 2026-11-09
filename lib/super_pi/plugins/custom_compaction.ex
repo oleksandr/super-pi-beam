@@ -11,6 +11,9 @@ defmodule SuperPi.Plugins.CustomCompaction do
 
   use SuperPi.Extension
 
+  @impl true
+  def lifecycle_effects, do: []
+
   def id, do: "custom_compaction"
   def name, do: "Tiered Custom Compaction"
 

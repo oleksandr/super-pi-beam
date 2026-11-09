@@ -18,6 +18,9 @@ defmodule SuperPi.Plugins.Hooks do
 
   use SuperPi.Extension
 
+  @impl true
+  def lifecycle_effects, do: [:execute]
+
   def id, do: "hooks"
   def name, do: "Lifecycle Hooks"
 

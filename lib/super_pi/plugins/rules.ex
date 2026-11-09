@@ -15,6 +15,9 @@ defmodule SuperPi.Plugins.Rules do
 
   use SuperPi.Extension
 
+  @impl true
+  def lifecycle_effects, do: []
+
   def id, do: "rules"
   def name, do: "Agent & Project Rules Injector"
 

@@ -37,12 +37,15 @@ defmodule SuperPi.Harness.Code do
       Plugins.Skills,
       Plugins.Hooks,
       Plugins.Permissions,
+      Plugins.Approvals,
       Plugins.ProtectedPaths,
       {Plugins.ConfirmDestructive, tools: ["bash", "sh", "terminal", "run_command", "exec"]},
       Plugins.GitCheckpoint,
       {Plugins.AutoCommit, commit_prefix: "[super-pi]", enabled: false},
       {Plugins.JevRouter, Defaults.model_route()},
       Plugins.Todo,
+      {Plugins.Profiles,
+       profiles: SuperPi.Harness.CodeProfiles.all(), default: :ask, discover: true},
       Plugins.PromptCustomizer,
       Plugins.TranscriptLogger
     ]

@@ -53,6 +53,9 @@ defmodule SuperPi.Plugins.Memory do
 
   use SuperPi.Extension
 
+  @impl true
+  def lifecycle_effects, do: [:state_write]
+
   require Logger
   import Ecto.Query, only: [from: 2]
 

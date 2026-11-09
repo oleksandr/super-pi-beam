@@ -933,7 +933,9 @@ defmodule SuperPi.RPC.Server do
           model_opts = if model = Map.get(base_agent, "model"), do: [model: model], else: []
 
           defaults =
-            harness.agent_defaults(model_opts)
+            harness.agent_defaults(
+              Keyword.put(model_opts, :mode, Permissions.remote_mode(base_agent["executionMode"]))
+            )
             |> Permissions.apply_remote_mode(Map.get(base_agent, "executionMode"))
 
           agent_cfg = Map.merge(defaults, base_agent)

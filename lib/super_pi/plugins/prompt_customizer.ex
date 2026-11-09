@@ -9,12 +9,15 @@ defmodule SuperPi.Plugins.PromptCustomizer do
 
   use SuperPi.Extension
 
+  @impl true
+  def lifecycle_effects, do: []
+
   def id, do: "prompt_customizer"
   def name, do: "Adaptive Tool Guidance & Prompt Customizer"
   def description, do: "Injects modular operational rules dynamically based on active tools"
 
   @impl true
-  def before_agent_start(agent_cfg, _ctx) do
+  def prepare_request(agent_cfg, _ctx) do
     tools = Map.get(agent_cfg, "tools") || Map.get(agent_cfg, :tools) || []
     tool_names = Enum.map(tools, &Map.get(&1, "name")) |> MapSet.new()
 

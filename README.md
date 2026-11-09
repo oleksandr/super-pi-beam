@@ -48,6 +48,7 @@ end
 
 5. **Unified 12-Hook Extension Pipeline (`SuperPi.Extension`)**:
    - Supports `on_input`, `before_agent_start`, `before_compact`, `before_request`, `before_provider_request`, `after_response`, `before_tool`, `wrap_tool`, `after_tool`, `after_tools`, `on_yield`, and `after_run`.
+   - `configure_agent` supplies durable defaults; `prepare_request` transforms a separate request copy after durable hooks finish. Plugins declare lifecycle effects, tools, commands and session modes through explicit contracts.
 
 6. **Day-1 `Owl` TUI & JSON-RPC 2.0 Server (`SuperPi.TUI.Owl`, `SuperPi.RPC.Server`)**:
    - Interactive ANSI terminal UI built on `Owl`.
@@ -357,15 +358,99 @@ ACP is bidirectional: the agent also sends requests to the editor and waits. `Su
 | ACP | Super-Pi |
 |---|---|
 | `initialize` | Agent capabilities, `authMethods` (a token when the gateway needs one), the harness capabilities in `_meta.superPi.harnesses` |
-| `session/new` | A conversation with `workspacePaths: [cwd]`. `_meta.harness` selects the harness (default: `super-pi-code`). The `sessionId` is an opaque string (`acp_...`), stored in the session table, so an editor can resume it after a restart |
+| `session/new` | A conversation with `workspacePaths` from `cwd` and `additionalDirectories`. `_meta.harness` selects the harness (default: `super-pi-code`). The `sessionId` is an opaque string (`acp_...`), stored in the session table, so an editor can resume it after a restart |
 | `session/load` | Resumes the conversation and replays its history as `session/update` notifications |
 | `_superpi/session/fork` | Forks the conversation at its latest entry into a new session |
 | `session/prompt` | Runs in a supervised task, so `session/cancel` can arrive during the prompt. `stopReason`: `end_turn`, `cancelled`, or `refusal` for an error |
 | `session/cancel` | Cancels pending questions first, then the turn |
-| `session/set_mode` | `plan`, `accept-edits` or `auto`, up to the remote ceiling and the harness ceiling |
+| `session/set_mode`, `session/set_config_option` | Select a configured profile, or a permission mode for harnesses without Profiles; both respect remote and harness ceilings |
 | `session/request_permission` | The `permission_request` event, with the four ACP option kinds |
 
 Super-Pi does not delegate `terminal/*` to the editor. `SandboxRunner` gives process-group kill, output spill and the sandbox, and an editor terminal gives none of that and bypasses `permissions.deny`. A running command shows as a tool call of kind `execute`. File reads use the editor only for the unsaved buffer: `config :super_pi, :acp, fs_delegation: :unsaved_only | :never | :always` (default `:unsaved_only`). `SuperPi.Env.ClientFS` asks the editor only when the editor advertised `fs/read_text_file`, the machine runs on the same node, and the path is inside the workspace. Writes stay on the server. A minimal client is in `examples/acp_client.exs`.
+
+#### Ask, Plan and Build
+
+Select **Super-Pi** in Zed's agent panel, then use its mode picker. New local CLI and ACP Code sessions start in **Ask**. Set the external agent's `default_mode` to `"ask"` and use **⋯ → Reload Agent** after upgrading. Both ACP `modes` and `configOptions` (category `mode`) describe the same selection; `session/set_mode` and `session/set_config_option` share the selector and emit both update notifications.
+
+| Profile | Use it for | Behavior |
+| --- | --- | --- |
+| **Ask** | Repository questions, architecture discussion, code review | Inspects files and read-only documentation, answers with file references. Does not force an implementation plan. |
+| **Plan** | Designing a change before implementation | Inspects code, compares options, proposes an implementation and verification plan. Calls `switch_mode` with that plan to request Build. |
+| **Build** | Implementation and verification | Offers the full harness tool set; edits are permitted, commands outside the allow list ask first. |
+
+The model's `switch_mode` request requires human approval whenever the permission rank increases. The dialog includes the proposed plan. Rejection, cancellation, timeout, or no connected client leaves the mode unchanged. Lowering permissions needs no dialog. Explicit user selection through the picker or `/mode` switches directly. History, approved command prefixes, and trusted folders stay in the same conversation.
+
+```sh
+bin/super-pi --workflow ask -p "Review the authentication code for correctness"
+bin/super-pi --workflow plan -p "Design cache invalidation for this service"
+bin/super-pi chat --workflow build
+```
+
+In chat, use `/mode ask`, `/mode plan`, `/mode build`, or `/mode <custom-id>`. `/workflow` is a compatibility alias. `/plan <task>` selects Plan and submits the task. Legacy `/mode plan`, `/mode accept-edits`, and `/mode auto` still work within the harness ceiling. `--continue` and `--conversation` preserve the active profile, including its definition snapshot; explicit flags can select another. Existing `workflowMode` sessions migrate to `pi.agent.profile`.
+
+`SuperPi.Plugins.Profiles` can be composed into any harness:
+
+```elixir
+{Plugins.Profiles,
+ profiles: [
+   %{id: "quick", name: "Quick answer", prompt: "Answer briefly.", effort: "low"},
+   %{id: "research", name: "Research", prompt: "Compare sources and explain your findings.",
+     execution_mode: "plan", tools: {:only, ["web_search", "web_fetch"]}, effort: "high"}
+ ],
+ default: :quick,
+ discover: false}
+```
+
+Profiles requires an explicit list of valid maps; it has no built-in persona defaults. The Code example supplies `SuperPi.Harness.CodeProfiles.all()` to choose Ask, Plan and Build. Each profile has `id`, `name`, `description`, `execution_mode`, `tools` (`:all`, `{:only, names}`, or `{:except, names}`), and `prompt`. Omitted `execution_mode` defaults to read-only `plan`. Optional `model` and `effort` override a request without replacing the base settings. Explicit effort reaches the OpenAI Chat/Responses adapters; support in other providers depends on their adapter. Place Profiles before PromptCustomizer so its request hook filters tools before prompt assembly. Tool declarations and all durable hooks finish before any request hook runs, including providers added through `extra_plugins`.
+
+Profiles only filter the composed harness loadout and cannot exceed `maxExecutionMode`. The plugin adds the administrative `switch_mode` tool and owns `/mode`, `/workflow` and `/plan` regardless of its order relative to SlashCommands. The separate Approvals plugin supplies command/folder approval requests and constrained Git inspection; administrative requests remain available across profiles and respect deny rules. Permissions is the single policy gate for both tool presentation and forced calls, including excluded tools in Build. Lifecycle plugins with undeclared or mutating effects are inactive in Plan. Passive safety hooks explicitly declare `[]`; internal transcript logging declares `[:audit]`. The Planner harness remains read-only even with Profiles installed. ACP and CLI use the generic `SuperPi.SessionModes` contract; harnesses without a mode provider keep the permission-mode picker. Gateway, RPC and MCP entry points retain their existing remote permission defaults; mode selection through those APIs and Markdown subagent roles are outside this phase.
+
+With discovery enabled, a Markdown file adds a mode without Elixir. Search order is nearest workspace ancestor first (up to the Git root), `.agents/agents`, `.opencode/agents`, then `.claude/agents`; configured profiles take precedence. Global `<config-dir>/agents` is also searched. For example, `.agents/agents/reviewer.md`:
+
+```markdown
+---
+description: Review changes for correctness and maintainability
+mode: primary
+tools: [Read, Grep, Glob]
+model: gpt-6-astra
+---
+Report prioritized actionable findings with file references and supporting evidence.
+```
+
+The supported common front matter is `description`, `mode` (`primary` or `all`; `subagent` is reserved for phase 2), `model`, and `tools` (comma-separated names, lists, or OpenCode boolean maps). The body is the prompt. Imported profiles default to read-only; native `execution_mode` and `effort` fields are supported too. Invalid files are ignored. A changed file updates the catalog on reload or selection but cannot silently raise an active profile's permissions; reselect it to apply the new definition.
+
+#### Approve commands from chat
+
+In **Ask, Plan or Build**, say, for example:
+
+> Allow commands beginning with git log, git status and git diff for future sessions.
+
+The agent calls `request_command_approval`, which shows the exact argument prefixes in Zed's permission dialog (or the CLI). Choose **Allow for this conversation**, **Save for future sessions**, or **Reject**. Chat text alone does not grant permission, and this request executes no commands. After upgrading, use the agent panel’s **⋯ → Reload Agent** in Zed to load the new tools; existing conversations get them on their next turn.
+
+Conversation approvals live in `pi.agent.settingsOverride.permissions.commandPrefixes` and survive resume. **Save for future sessions** merges rules into `<app data dir>/command-rules.json`; on macOS the default is `~/Library/Application Support/super-pi/command-rules.json`, configurable with `SUPER_PI_DATA_DIR`. Rules apply across projects for the local CLI and Zed/ACP. New Gateway/RPC sessions cannot enable, save or inherit these user rules; their existing session approvals remain available. A saved file looks like:
+
+```json
+{
+  "version": 1,
+  "allow": [["git", "log"], ["git", "status"], ["git", "diff"]]
+}
+```
+
+Remove a prefix from that file to revoke the persistent approval. Rules are reread for each tool call. Existing `settings.json` entries such as `permissions.allow: ["command(git diff)"]` still work; explicit deny rules take precedence. Prefix matching compares literal argument words. An `&&` chain is allowed in Build when **every command** matches an approved prefix or a `command(...)` rule; rules from both sources can be combined. For example, approving `git status`, `git fetch`, and `git log` covers `git status --short --branch && git fetch origin && git log --oneline --max-count=5 HEAD && git log --oneline HEAD..origin/main`. A missing approval prompts for the whole chain; a denied command blocks it. Quoted `&&` stays part of its argument. Other shell operators (`||`, `;`, pipes and backgrounding), redirects, escapes, and expansions still require approval of the exact whole command in Build. An exact approval of a script never approves a longer script with appended commands.
+
+**Ask** and **Plan** can update approvals and use `git_inspect` for `git log`, `git status` and `git diff` with supported read-only flags; approved prefixes skip its prompt. Git inspection disables pagers, external diff/textconv helpers and optional Git locks, and refuses output-file options and `--no-index`. Other commands and edits still require Build. **Build** uses saved prefixes for shell commands. The ordinary execution prompt's **Always allow** continues to remember that command for the current conversation; use `request_command_approval` to propose a reusable prefix or save it across sessions.
+
+### Multiple folders and workspace approval
+
+Super-Pi advertises ACP `agentCapabilities.sessionCapabilities.additionalDirectories` and accepts the absolute paths Zed sends in `additionalDirectories` on session creation and load. All supplied folders become workspace roots. Relative file paths and commands use the primary `cwd`; use absolute paths or an explicit command `cd` to target another root. Editor buffer reads work in secondary roots too. Reloading refreshes the editor-supplied roots, and forks retain the current roots.
+
+In **Ask**, **Plan**, or **Build**, you can also say:
+
+> Trust /absolute/path/to/another-repository for this conversation.
+
+The agent calls `request_workspace_access`, which shows the resolved directory and a **Trust folder for this conversation** / **Reject** dialog. Approval adds that folder to `pi.agent.workspacePaths` and records it in `approvedWorkspacePaths`, so it survives reloads and forks. It does not grant access to other conversations, change the primary working directory, or update Zed's own project-trust settings. New Gateway/RPC sessions and shared/scratch/none workspaces cannot use this approval flow. Policy can disable it with `permissions.denyTools: ["request_workspace_access"]`.
+
+Command approval and folder access are separate. After trusting a folder, Ask and Plan can inspect it without editing, and Build can edit it subject to existing protected-path and command rules. General shell execution is not a filesystem sandbox; see *Limits of confinement*. After upgrading, use **⋯ → Reload Agent** in Zed so it receives the multi-root capability and the new tool. An existing thread can request folder access without moving to another project or starting over.
 
 ### AG-UI: Stream a Run to a Web Front End
 
@@ -703,7 +788,7 @@ So the artifact tools, `todo`, `delegate_subagent`, `ask_question` and the memor
 
 **Asking a person.** Two blocks can be lifted by a person: a shell command that is not in `permissions.allow`, and a tool that `accept-edits` does not allow by default (every MCP tool that its server does not mark read-only). When a client can answer, the call goes ahead to the tool task and the task asks. The client sees `tool_started`, then a `permission_request` event with four options (`allow_once`, `allow_always`, `reject_once`, `reject_always`, the ACP option kinds). The machine keeps answering `cancel`, `steer`, `get_state` and `compact` while the question is open. `allow_always` and `reject_always` change the session's `settingsOverride` (`permissions.allow`, `allowTools`, `deny`, `denyTools`). They never write `settings.json`, and a remote caller cannot send `settingsOverride`.
 
-These blocks are never askable: a `permissions.deny` match, a mode block (`plan` blocks every non-read tool), a workspace boundary, and the network policy.
+These blocks are never askable: a `permissions.deny` match, a mode block (Plan blocks edits and general shell execution), a workspace boundary, and the network policy.
 
 **It fails closed.** With no client that can answer (the HTTP Gateway, headless `-p` runs, MCP tool calls, an RPC conversation nobody watches), a timeout, a cancel, or an answer that is not one of the four options, the call is blocked with the same message as before. `config :super_pi, :permissions, interactive_prompts: false` turns prompting off. `config :super_pi, permission_prompt_timeout_ms: 120_000` sets the wait. A `hooks.json` `PreToolUse` hook that answers `"decision": "ask"` uses the same path.
 
@@ -913,6 +998,8 @@ No path is hardcoded. Global config, app data and extra discovery roots resolve 
 ### First-Class Plugin Configuration Architecture
 
 Plugins accept declarative configuration via `{PluginModule, opts}` or `{:alias, opts}` tuples. The `SuperPi.Extension` pipeline runner automatically unpacks these tuples and injects the options into `ctx[:config]` for all 12 extension lifecycle hooks (`run_on_input`, `run_before_agent_start`, `run_before_tool`, `run_after_run`, etc.).
+
+The extension contracts also include `configure_agent/2` for durable defaults, `prepare_request/2` for request-only changes, `tools/1`, `tool_policy/3` and `execute_tool/3` for plugin-owned tools, `commands/0` for slash-command ownership, and `session_modes/2`, `select_mode/3` and `mode_state/2` for client-independent modes. Declare `lifecycle_effects/0` explicitly: the default `[:unknown]` disables lifecycle hooks in Plan. Use `[]` for passive hooks, read effects for inspection, and `[:audit]` only for internal transcript logging. Tool effects are checked separately by Permissions. See `SuperPi.Extension` for declaration schemas and migration from request results to `prepare_request/2`.
 
 ```elixir
 defmodule MyCompanyHarness do

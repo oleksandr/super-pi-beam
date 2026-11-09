@@ -192,7 +192,16 @@ defmodule SuperPi.Harness.WorkspaceTest do
 
       {code, out} =
         CLI.run(
-          ["--add-dir", tmp_ws, "-p", "test hooks", "--output-format", "json"],
+          [
+            "--workflow",
+            "build",
+            "--add-dir",
+            tmp_ws,
+            "-p",
+            "test hooks",
+            "--output-format",
+            "json"
+          ],
           llm_responder: responder,
           tool_executor: executor,
           app_data_dir: tmp_ws
