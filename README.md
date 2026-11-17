@@ -6,7 +6,39 @@
 
 **Super-Pi-BEAM** is a durable, fault-tolerant, general-purpose agent framework built on **Erlang/OTP 28** and **Elixir 1.20**. It implements an always-durable, crash-resilient agent architecture natively on the BEAM virtual machine.
 
-Four built-in harnesses show what the engine does. `super-pi-code` changes a repository and can undo the change. `super-pi-assistant` works with a person, reaches the web and third-party services, and has no filesystem. `super-pi-librarian` runs with no person present and remembers across sessions. `super-pi-planner` cannot write. Three optional capability blocks (web access, scheduling, durable memory) can join any harness. Every interface (OpenAI gateway, JSON-RPC, MCP, ACP, AG-UI, terminal) renders one typed event stream.
+Four built-in harnesses show what the engine does. `super-pi-code` changes a repository and can undo the change. `super-pi-assistant` works with a person, reaches the web and third-party services, and has no filesystem. `super-pi-librarian` runs with no person present and remembers across sessions. `super-pi-planner` cannot write. Three optional capability blocks (web access, scheduling, durable memory) can join any harness.
+
+Every interface renders the same typed event stream, so a harness works the same behind each one:
+
+| Interface | Use it to | Example client | Start |
+|---|---|---|---|
+| **OpenAI gateway** | Use Super-Pi as a model provider that runs the full agent loop | OpenCode, AI SDK, LiteLLM, `curl` | `bin/super-pi gateway 4000` |
+| **AG-UI** | Stream a run to a web front end: text, tool calls, live state, permission prompts | `@ag-ui/client`, CopilotKit, `examples/agui_client.exs` | `bin/super-pi gateway 4000` |
+| **ACP** | Run the agent inside an editor | Zed, JetBrains | `bin/super-pi acp` |
+| **MCP** | Give another agent Super-Pi's sandboxed tools | OpenCode and other MCP hosts | `bin/super-pi mcp`, or `POST /mcp` on the gateway |
+| **JSON-RPC** | Build a custom client or full-screen TUI with session control (open, watch, fork) | `examples/rpc_showcase_client.exs` | `bin/super-pi rpc` |
+| **Terminal** | Chat or run one prompt from a shell | `bin/super-pi chat`, `bin/super-pi run` | `bin/super-pi` |
+
+---
+
+## Contents
+
+- [Installation](#installation)
+- [Key Capabilities](#key-capabilities)
+- [Prerequisites & Setup](#prerequisites--setup)
+- [Recommended Harness Evaluation: OpenCode](#recommended-harness-evaluation-opencode)
+  - [Mode 1: Upstream Model Provider (OpenAI-Compatible HTTP Gateway)](#mode-1-upstream-model-provider-openai-compatible-http-gateway)
+  - [Mode 2: Native Model Context Protocol (MCP) Server](#mode-2-native-model-context-protocol-mcp-server)
+  - [JSON-RPC Server](#json-rpc-server)
+  - [MCP: Client and Server](#mcp-client-and-server)
+  - [The Event Stream (`SuperPi.Event`)](#the-event-stream-superpievent)
+  - [ACP: Use Super-Pi in Zed, JetBrains and Other Editors](#acp-use-super-pi-in-zed-jetbrains-and-other-editors)
+  - [AG-UI: Stream a Run to a Web Front End](#ag-ui-stream-a-run-to-a-web-front-end)
+- [Pluggable Harness Architecture (`SuperPi.Harness`)](#pluggable-harness-architecture-superpiharness)
+- [Alternative Demos & Interactive Modes](#alternative-demos--interactive-modes)
+- [Running the Property-Based Test Suite](#running-the-property-based-test-suite)
+- [Project Structure](#project-structure)
+- [License](#license)
 
 ---
 
