@@ -54,7 +54,7 @@ end
    - JSON-RPC 2.0 server with `K = 2` ack-clocked backpressure (`session.watch` / `session.ack`) for external clients.
 
 7. **One Typed Event Stream, Many Interfaces (`SuperPi.Event`)**:
-   - The conversation machine publishes typed events (`turn_started`, `text_delta`, `tool_started`, `permission_request`, `turn_completed`, and more). Each interface renders them through a pure state machine (`SuperPi.Event.Renderer`): OpenAI SSE, JSON-RPC, the chat terminal, **ACP** (editors such as Zed and JetBrains), and **AG-UI** (web front ends). See *Interfaces*.
+   - The conversation machine publishes typed events (`turn_started`, `text_delta`, `tool_started`, `permission_request`, `turn_completed`, and more). Each interface renders them through a pure state machine (`SuperPi.Event.Renderer`): OpenAI SSE, JSON-RPC, the chat terminal, **ACP** (editors such as Zed and JetBrains), and **AG-UI** (web front ends, with a live terminal client in `examples/agui_client.exs`). See *Interfaces*.
 
 8. **Human Approval Without Blocking the Machine**:
    - A blocked tool call can ask a person. The question travels as a `permission_request` event, and the answer decides the call. With no client to ask, the call stays blocked, with the same message as before. See *Permissions and Remote Modes*.
@@ -379,7 +379,56 @@ The Gateway also serves [AG-UI](https://docs.ag-ui.com) over Server-Sent Events.
 
 Mapping: `text_delta` becomes `TEXT_MESSAGE_START` and `TEXT_MESSAGE_CONTENT`. `thinking_delta` becomes the `REASONING_*` events. `toolcall_delta` becomes `TOOL_CALL_START` and `TOOL_CALL_ARGS`. `tool_started` becomes `TOOL_CALL_END`, because in AG-UI that event means *arguments complete*. `tool_completed` becomes `TOOL_CALL_RESULT`. The turn events become `RUN_STARTED`, `RUN_FINISHED` and `RUN_ERROR`. `compaction_completed` becomes `MESSAGES_SNAPSHOT`. `permission_request` and `ui_request` become `CUSTOM` events.
 
-State goes out as `STATE_SNAPSHOT` (status, mode, model, usage, plan, pending permission) and then `STATE_DELTA` events, JSON Patch computed in the renderer. The durable document layer does not give a patch stream: only `pi.agent` keeps ops, and `pi.live` and `pi.usage` do not. After a disconnect, `GET .../events` sends a fresh snapshot. The snapshot covers whatever the gap lost. There is no ack window as in the JSON-RPC server: SSE is one-way, and a failed write cancels the turn. Deltas within about 16 ms merge into one content event. A client is in `examples/agui_client.exs`.
+State goes out as `STATE_SNAPSHOT` (status, mode, model, usage, plan, pending permission) and then `STATE_DELTA` events, JSON Patch computed in the renderer. The durable document layer does not give a patch stream: only `pi.agent` keeps ops, and `pi.live` and `pi.usage` do not. After a disconnect, `GET .../events` sends a fresh snapshot. The snapshot covers whatever the gap lost. There is no ack window as in the JSON-RPC server: SSE is one-way, and a failed write cancels the turn. Deltas within about 16 ms merge into one content event.
+
+#### Try it: a live AG-UI terminal client
+
+`examples/agui_client.exs` is a terminal front end for this stream. It shows what a web app gets from `/agui/v1`:
+
+- streamed text and reasoning
+- tool calls as cards (arguments, run time, result)
+- a plan checklist, status and token usage, from a client-side state store (`STATE_SNAPSHOT` plus `STATE_DELTA` applied as JSON Patch)
+- permission requests, `ask_question` prompts, notices and subagents (`CUSTOM` events), answered through `/input`
+- a summary per run, with a tally of the AG-UI events received
+
+Use two terminals in the repository root.
+
+```bash
+# Terminal 1: gateway. Needs a provider key (for example GEMINI_API_KEY) or SUPER_PI_OPENAI_*.
+bin/super-pi gateway 4000
+
+# Terminal 2: one run, or a REPL (no argument: every line is a run on one thread)
+mise exec -- mix run examples/agui_client.exs "what is 15 plus 27?"
+mise exec -- mix run examples/agui_client.exs
+```
+
+A prompt that shows most event types: `Plan three steps with the todo tool, list the files here, read mix.exs, then ask me with ask_question which dependency to explain.` Answer a permission or question box with its number.
+
+**Without an API key**, start the gateway with the echo provider. It replies `Echo: <prompt>`, so you see the run, state and summary output but no tools:
+
+```bash
+SUPER_PI_SQLITE_PATH=/tmp/agui-mock.db mise exec -- mix run --no-halt -e '
+Application.put_env(:super_pi, :mock_llm, true)
+{:ok, _} = Supervisor.start_child(SuperPi.Supervisor, {SuperPi.Gateway.Server, port: 4000})
+Process.sleep(:infinity)'
+```
+
+**See the raw protocol**: `SUPER_PI_RAW=1` prints each SSE frame before the line it produced. Or use curl:
+
+```bash
+curl -N -X POST http://127.0.0.1:4000/agui/v1/run -H 'content-type: application/json' \
+  -d '{"threadId":"t1","runId":"r1","messages":[{"id":"m1","role":"user","content":"hi"}]}'
+```
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SUPER_PI_URL` | `http://127.0.0.1:4000` | Gateway base URL |
+| `SUPER_PI_GATEWAY_TOKEN` | none | Bearer token |
+| `SUPER_PI_THREAD` | fresh id | Reuse to continue a conversation |
+| `SUPER_PI_HARNESS`, `SUPER_PI_MODE` | server default | `forwardedProps.harness`, `forwardedProps.executionMode` |
+| `SUPER_PI_RAW` | off | `1` prints raw frames |
+
+If the client prints `connection refused`, the gateway is not up yet. Wait for its `Running SuperPi.Gateway.Router` log line.
 
 ## Pluggable Harness Architecture (`SuperPi.Harness`)
 
@@ -994,7 +1043,7 @@ mise exec -- mix run examples/acp_client.exs "list the files in this directory"
 ```
 
 ### 5. AG-UI Client
-Needs a running gateway (`bin/super-pi gateway 4000`). Posts a run, prints text, tool calls and state changes from the SSE stream, and answers a permission request through the input route:
+A terminal front end for the AG-UI stream: tool cards, plan checklist, live state, permission prompts. Needs a running gateway (`bin/super-pi gateway 4000`), or the echo-provider gateway for a run with no API key. Setup and options are in *AG-UI: Try it*.
 
 ```bash
 mise exec -- mix run examples/agui_client.exs "what is 15 plus 27?"
@@ -1137,7 +1186,7 @@ lib/
 │       └── schedule_workers.ex    # Cron tick and scheduled run workers
 examples/
 ├── acp_client.exs                 # Minimal ACP client: starts `bin/super-pi acp`, prompts, answers permissions
-├── agui_client.exs                # Minimal AG-UI client for the gateway
+├── agui_client.exs                # Terminal AG-UI client for the gateway
 ├── gemini_live_demo.exs           # Live Gemini 3 Flash tool-calling demo
 ├── interactive_tui.exs            # Interactive Owl TUI loop
 └── rpc_showcase_client.exs        # External JSON-RPC 2.0 client showcase
