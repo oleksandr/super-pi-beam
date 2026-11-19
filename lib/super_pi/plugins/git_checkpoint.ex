@@ -7,6 +7,9 @@ defmodule SuperPi.Plugins.GitCheckpoint do
   """
 
   use SuperPi.Extension
+
+  @impl true
+  def lifecycle_effects, do: [:execute]
   require Logger
 
   @doc """

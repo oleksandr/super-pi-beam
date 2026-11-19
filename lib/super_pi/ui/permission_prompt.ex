@@ -41,7 +41,7 @@ defmodule SuperPi.UI.PermissionPrompt do
       |> Map.take(["tool_name", "arguments", "reason", "risk"])
       |> Map.merge(%{
         "tool_call_id" => Map.get(ctx, :tool_call_id),
-        "options" => SuperPi.Event.permission_options()
+        "options" => Map.get(fields, "options", SuperPi.Event.permission_options())
       })
 
     case Broker.ask(Map.get(ctx, :conversation_id), request, timeout,

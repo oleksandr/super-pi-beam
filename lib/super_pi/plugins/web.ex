@@ -59,6 +59,9 @@ defmodule SuperPi.Plugins.Web do
 
   use SuperPi.Extension
 
+  @impl true
+  def lifecycle_effects, do: []
+
   alias SuperPi.Artifacts
   alias SuperPi.Env.SandboxRunner
   alias SuperPi.Web.{Extract, Fetch, Search}

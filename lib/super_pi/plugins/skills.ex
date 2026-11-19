@@ -11,6 +11,9 @@ defmodule SuperPi.Plugins.Skills do
 
   use SuperPi.Extension
 
+  @impl true
+  def lifecycle_effects, do: []
+
   def id, do: "skills"
   def name, do: "Progressive Disclosure Skills Injector"
 

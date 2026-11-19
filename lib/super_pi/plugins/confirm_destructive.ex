@@ -11,6 +11,9 @@ defmodule SuperPi.Plugins.ConfirmDestructive do
   """
 
   use SuperPi.Extension
+
+  @impl true
+  def lifecycle_effects, do: []
   require Logger
 
   @destructive_patterns [

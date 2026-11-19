@@ -13,6 +13,9 @@ defmodule SuperPi.Plugins.TranscriptLogger do
 
   use SuperPi.Extension
 
+  @impl true
+  def lifecycle_effects, do: [:audit]
+
   def id, do: "transcript_logger"
   def name, do: "JSONL Dual-Write Transcript Logger"
 

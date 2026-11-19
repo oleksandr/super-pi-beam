@@ -587,9 +587,9 @@ defmodule SuperPi.Harness.WorkspaceMoreDefectsTest do
       assert mode(conv) == "auto", "stored executionMode #{inspect(mode(conv))}"
     end
 
-    test "/plan does not permanently switch the conversation to plan mode", %{conv: conv} do
+    test "/plan selects read-only permission mode", %{conv: conv} do
       _ = SlashCommands.on_input("/plan do it", %{conversation_id: conv.id})
-      assert mode(conv) == "auto"
+      assert mode(conv) == "plan"
     end
 
     test "/goal enables goal verification (moduledoc line 8)", %{conv: conv} do

@@ -19,6 +19,9 @@ defmodule SuperPi.Plugins.Questionnaire do
   """
 
   use SuperPi.Extension
+
+  @impl true
+  def lifecycle_effects, do: []
   def id, do: "questionnaire"
   def name, do: "Questionnaire & Human Clarification"
   def description, do: "Asks the user multiple-choice questions through a connected client"

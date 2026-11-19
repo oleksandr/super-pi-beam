@@ -13,25 +13,12 @@ defmodule SuperPi.ACP.Session do
   alias SuperPi.Gateway.Sessions
   alias SuperPi.Harness
   alias SuperPi.Plugins.Permissions
+  alias SuperPi.SessionModes
 
   @enforce_keys [:id, :conversation_id]
   defstruct [:id, :conversation_id, :renderer, :prompt, :last_end, cwd: nil]
 
   @type t :: %__MODULE__{}
-
-  @modes [
-    %{
-      "id" => "plan",
-      "name" => "Plan",
-      "description" => "Read-only. Inspect and plan, change nothing."
-    },
-    %{
-      "id" => "accept-edits",
-      "name" => "Accept edits",
-      "description" => "Edit files. Other tools ask first."
-    },
-    %{"id" => "auto", "name" => "Auto", "description" => "Run every tool without asking."}
-  ]
 
   @doc "Creates a session and its conversation. `harness` is the harness module."
   @spec create(String.t(), String.t(), module(), keyword()) :: t()
@@ -39,9 +26,14 @@ defmodule SuperPi.ACP.Session do
     session_id = "acp_" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
 
     agent =
-      harness.agent_defaults(workspace_paths: [cwd])
+      harness.agent_defaults(
+        workspace_paths: Enum.uniq([cwd | Keyword.get(opts, :additional_directories, [])])
+      )
       |> Permissions.apply_remote_mode(Keyword.get(opts, :mode))
       |> Map.put("harness", harness.id())
+      |> Map.put("commandRulesScope", "user")
+      |> Map.put("workspaceApprovalScope", "conversation")
+      |> SessionModes.with_ceiling(Permissions.remote_mode("auto"))
 
     {conv_id, true} =
       Sessions.fetch_or_create(principal, session_id, fn ->
@@ -52,11 +44,32 @@ defmodule SuperPi.ACP.Session do
   end
 
   @doc "Finds an existing session. Returns `{:ok, session}` or `:error`."
-  @spec load(String.t(), String.t(), String.t()) :: {:ok, t()} | :error
-  def load(principal, session_id, cwd) do
+  @spec load(String.t(), String.t(), String.t(), keyword()) :: {:ok, t()} | :error
+  def load(principal, session_id, cwd, opts \\ []) do
     case Sessions.lookup(principal, session_id) do
-      nil -> :error
-      conv_id -> {:ok, build(session_id, conv_id, cwd)}
+      nil ->
+        :error
+
+      conv_id ->
+        agent = Doc.snapshot("conversation", conv_id, "pi.agent") || %{}
+
+        updated =
+          agent
+          |> Map.put_new("harness", Harness.default().id())
+          |> Map.put("commandRulesScope", "user")
+          |> Map.put("workspaceApprovalScope", "conversation")
+          |> Map.put(
+            "workspacePaths",
+            Enum.uniq(
+              [cwd | Keyword.get(opts, :additional_directories, [])] ++
+                (agent["approvedWorkspacePaths"] || [])
+            )
+          )
+          |> configure_extensions()
+          |> SessionModes.with_ceiling(Permissions.remote_mode("auto"))
+
+        if updated != agent, do: Storage.configure_agent!(conv_id, updated)
+        {:ok, build(session_id, conv_id, cwd)}
     end
   end
 
@@ -96,21 +109,53 @@ defmodule SuperPi.ACP.Session do
   @spec modes(integer()) :: %{String.t() => term()}
   def modes(conversation_id) do
     agent = Doc.snapshot("conversation", conversation_id, "pi.agent") || %{}
-    ceiling = Permissions.rank_of(Permissions.remote_mode("auto"))
-    max_rank = min(ceiling, Permissions.rank_of(Map.get(agent, "maxExecutionMode", "auto")))
-    available = Enum.filter(@modes, &(Permissions.rank_of(&1["id"]) <= max_rank))
 
-    %{"currentModeId" => Map.get(agent, "executionMode"), "availableModes" => available}
+    agent
+    |> SessionModes.with_ceiling(Permissions.remote_mode("auto"))
+    |> SessionModes.list()
+    |> Map.update!(
+      "availableModes",
+      &Enum.map(&1, fn mode -> Map.take(mode, ["id", "name", "description"]) end)
+    )
   end
 
-  @doc "Sets the mode. The mode must be one of `modes/1`."
-  @spec set_mode(integer(), String.t()) :: :ok | {:error, String.t()}
+  @doc "Sets an advertised mode through the harness's mode provider."
   def set_mode(conversation_id, mode_id) do
-    if Enum.any?(modes(conversation_id)["availableModes"], &(&1["id"] == mode_id)) do
-      Storage.configure_agent!(conversation_id, %{"executionMode" => mode_id})
-      :ok
+    agent = Doc.snapshot("conversation", conversation_id, "pi.agent") || %{}
+    agent = SessionModes.with_ceiling(agent, Permissions.remote_mode("auto"))
+
+    if Enum.any?(SessionModes.list(agent)["availableModes"], &(&1["id"] == mode_id)) do
+      with {:ok, updated} <- SessionModes.select(agent, mode_id) do
+        Storage.configure_agent!(conversation_id, updated)
+        :ok
+      end
     else
       {:error, "Mode #{inspect(mode_id)} is not available for this session"}
+    end
+  end
+
+  def config_options(conversation_id) do
+    modes = modes(conversation_id)
+
+    [
+      %{
+        "id" => "mode",
+        "name" => "Session Mode",
+        "category" => "mode",
+        "type" => "select",
+        "currentValue" => modes["currentModeId"],
+        "options" =>
+          Enum.map(modes["availableModes"], fn mode ->
+            %{"value" => mode["id"], "name" => mode["name"], "description" => mode["description"]}
+          end)
+      }
+    ]
+  end
+
+  defp configure_extensions(agent) do
+    case Harness.fetch(agent["harness"]) do
+      {:ok, harness} -> SuperPi.Extension.configure_agent(harness.extensions(), agent)
+      _ -> agent
     end
   end
 

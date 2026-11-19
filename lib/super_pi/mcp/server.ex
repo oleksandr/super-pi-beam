@@ -639,7 +639,13 @@ defmodule SuperPi.MCP.Server do
 
   defp tool_session(state) do
     harness = connection_harness(state)
-    agent = SuperPi.Plugins.Permissions.apply_remote_mode(harness.agent_defaults(), nil)
+
+    agent =
+      SuperPi.Plugins.Permissions.apply_remote_mode(
+        harness.agent_defaults(mode: SuperPi.Plugins.Permissions.remote_mode()),
+        nil
+      )
+
     conv = Storage.create_conversation!(agent: agent, owner: principal(state))
 
     session = %{
@@ -720,7 +726,13 @@ defmodule SuperPi.MCP.Server do
 
   defp execute_harness_task(prompt, harness, principal) do
     extensions = Harness.remote_extensions(harness)
-    agent = SuperPi.Plugins.Permissions.apply_remote_mode(harness.agent_defaults(), nil)
+
+    agent =
+      SuperPi.Plugins.Permissions.apply_remote_mode(
+        harness.agent_defaults(mode: SuperPi.Plugins.Permissions.remote_mode()),
+        nil
+      )
+
     conv = Storage.create_conversation!(agent: agent, owner: principal)
     timeout = Application.get_env(:super_pi, :mcp_harness_task_timeout_ms, 60_000)
 

@@ -28,6 +28,37 @@ defmodule SuperPi.Discovery do
 
   @dot_dirs [".agents", ".agent", "_agents", "_agent"]
 
+  @doc "Discover primary profiles, nearest workspace first. Subagent definitions are reserved for phase 2."
+  def discover_agents(roots, opts \\ []) do
+    dirs =
+      Enum.flat_map(roots, fn root ->
+        for ancestor <- ancestor_chain(root),
+            dir <- [".agents/agents", ".opencode/agents", ".claude/agents"],
+            do: {Path.join(ancestor, dir), ancestor}
+      end) ++ Enum.map(global_dirs(opts), &{Path.join(&1, "agents"), &1})
+
+    dirs
+    |> Enum.uniq()
+    |> Enum.flat_map(fn {dir, root} ->
+      # Do not import a definition through a symlink outside the discovery directory.
+      canonical = canonical_realpath(dir)
+
+      paths =
+        if String.starts_with?(canonical, canonical_realpath(root) <> "/"),
+          do: list_markdown_files(dir),
+          else: []
+
+      paths
+      |> Enum.sort()
+      |> Enum.filter(
+        &(String.starts_with?(canonical_realpath(&1), canonical <> "/") and File.regular?(&1))
+      )
+    end)
+    |> Enum.map(&SuperPi.Plugins.Profiles.Definition.read/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq_by(& &1["id"])
+  end
+
   @doc "Global configuration directory. See the module doc for how it resolves."
   def default_global_config_dir do
     configured_dir(:global_config_dir, "SUPER_PI_CONFIG_DIR") ||

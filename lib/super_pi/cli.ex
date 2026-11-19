@@ -13,10 +13,11 @@ defmodule SuperPi.CLI do
 
   alias SuperPi.Conversation.Machine
   alias SuperPi.Discovery
-  alias SuperPi.Durable.Storage
+  alias SuperPi.Durable.{Doc, Storage}
   alias SuperPi.Harness
   alias SuperPi.Plugins.TranscriptLogger
   alias SuperPi.TUI.Owl, as: OwlTUI
+  alias SuperPi.SessionModes
 
   # `--agent` values of earlier releases and the harness each one selects.
   @agent_aliases %{"self" => "super-pi-code", "research" => "super-pi-planner"}
@@ -47,7 +48,8 @@ defmodule SuperPi.CLI do
     remote_control: :boolean,
     sandbox: :boolean,
     settings: :string,
-    strict: :boolean
+    strict: :boolean,
+    workflow: :string
   ]
 
   @aliases [
@@ -60,11 +62,19 @@ defmodule SuperPi.CLI do
 
   @slash_commands [
     %{"name" => "/plan", "description" => "Switch to read-only architectural planning mode"},
+    %{
+      "name" => "/workflow",
+      "description" => "Select coding workflow (/workflow ask|plan|build)"
+    },
     %{"name" => "/goal", "description" => "Run autonomous multi-step goal with verification"},
     %{"name" => "/boost", "description" => "Maximize reasoning effort (effort=max)"},
     %{"name" => "/compact", "description" => "Compact conversation context"},
     %{"name" => "/model", "description" => "Switch active LLM model (/model <name>)"},
-    %{"name" => "/mode", "description" => "Switch execution mode (/mode auto|plan|accept-edits)"},
+    %{
+      "name" => "/mode",
+      "description" =>
+        "Switch profile (/mode ask|plan|build|<id>); legacy permission modes also work"
+    },
     %{"name" => "/fork", "description" => "Fork current conversation branch"},
     %{"name" => "/help", "description" => "Display keyboard shortcuts and slash commands"}
   ]
@@ -307,6 +317,13 @@ defmodule SuperPi.CLI do
   end
 
   defp start_session(flags, positional, opts, harness_mod, workspace_dirs, global_dir, app_dir) do
+    resume =
+      cond do
+        is_integer(flags.conversation) -> %{id: flags.conversation}
+        flags.continue -> Storage.latest_conversation()
+        true -> nil
+      end
+
     base_agent_defaults =
       harness_mod.agent_defaults(
         Enum.reject(
@@ -323,6 +340,9 @@ defmodule SuperPi.CLI do
     agent_cfg =
       base_agent_defaults
       |> Map.merge(%{
+        "harness" => harness_mod.id(),
+        "commandRulesScope" => "user",
+        "workspaceApprovalScope" => "conversation",
         "dangerouslySkipPermissions" => flags.dangerously_skip_permissions,
         "disableSlashCommands" => flags.disable_slash_commands,
         "workspacePaths" => workspace_dirs,
@@ -337,24 +357,87 @@ defmodule SuperPi.CLI do
       # `--mode` never lifts a harness above its ceiling (`maxExecutionMode`).
       |> SuperPi.Plugins.Permissions.clamp_mode()
 
+    case configure_workflow(flags, agent_cfg, resume) do
+      {:ok, agent_cfg} ->
+        start_configured_session(
+          flags,
+          positional,
+          opts,
+          harness_mod,
+          workspace_dirs,
+          app_dir,
+          resume,
+          agent_cfg
+        )
+
+      {:error, message} ->
+        {1, message}
+    end
+  end
+
+  defp configure_workflow(flags, agent, resume) do
+    previous =
+      if resume, do: Doc.snapshot("conversation", resume.id, "pi.agent") || %{}, else: %{}
+
+    agent =
+      Map.put(
+        agent,
+        "workspacePaths",
+        Enum.uniq((agent["workspacePaths"] || []) ++ (previous["approvedWorkspacePaths"] || []))
+      )
+
+    agent =
+      if resume && is_nil(flags.settings),
+        do: Map.put(agent, "settingsOverride", previous["settingsOverride"] || %{}),
+        else: agent
+
+    cond do
+      flags.workflow && not SessionModes.custom?(agent) ->
+        {:error, "This harness does not supply custom session modes."}
+
+      flags.workflow && flags.dangerously_skip_permissions ->
+        {:error, "Permission flags conflict with the selected mode."}
+
+      flags.workflow ->
+        with {:ok, updated} <- SessionModes.select(agent, flags.workflow) do
+          if flags.mode && flags.mode != updated["executionMode"],
+            do: {:error, "Permission flags conflict with the selected mode."},
+            else: {:ok, updated}
+        end
+
+      SessionModes.custom?(agent) and flags.dangerously_skip_permissions ->
+        SessionModes.select(agent, "auto")
+
+      flags.mode && SessionModes.custom?(agent) ->
+        SessionModes.select(agent, flags.mode)
+
+      flags.mode ->
+        {:ok, agent}
+
+      resume ->
+        {:ok, SessionModes.restore(agent, previous)}
+
+      true ->
+        {:ok, agent}
+    end
+  end
+
+  defp start_configured_session(
+         flags,
+         positional,
+         opts,
+         harness_mod,
+         workspace_dirs,
+         app_dir,
+         resume,
+         agent_cfg
+       ) do
     conv =
-      cond do
-        is_integer(flags.conversation) ->
-          Storage.configure_agent!(flags.conversation, agent_cfg)
-          %{id: flags.conversation}
-
-        flags.continue ->
-          case Storage.latest_conversation() do
-            nil ->
-              Storage.create_conversation!(agent: agent_cfg)
-
-            latest ->
-              Storage.configure_agent!(latest.id, agent_cfg)
-              latest
-          end
-
-        true ->
-          Storage.create_conversation!(agent: agent_cfg)
+      if resume do
+        Storage.configure_agent!(resume.id, agent_cfg)
+        resume
+      else
+        Storage.create_conversation!(agent: agent_cfg)
       end
 
     active_extensions = Keyword.get(opts, :extensions, harness_mod.extensions())
@@ -540,7 +623,19 @@ defmodule SuperPi.CLI do
   defp answer_permission(%{"request_id" => request_id} = request, read, write) do
     write.("\n? Allow #{request["tool_name"]}? (#{request["reason"]})\n")
     write.("  #{inspect(request["arguments"])}\n")
-    write.("  [o] allow once  [a] always allow  [r] reject  [n] always reject\n")
+
+    keys = %{
+      "allow_once" => "o",
+      "allow_always" => "a",
+      "reject_once" => "r",
+      "reject_always" => "n"
+    }
+
+    options = Map.get(request, "options", SuperPi.Event.permission_options())
+
+    write.(
+      "  " <> Enum.map_join(options, "  ", &"[#{keys[&1["option_id"]]}] #{&1["name"]}") <> "\n"
+    )
 
     choice =
       case read.("permission> ") do
@@ -876,7 +971,8 @@ defmodule SuperPi.CLI do
       prompt: Keyword.get(parsed, :prompt),
       prompt_interactive: Keyword.get(parsed, :prompt_interactive),
       sandbox: Keyword.get(parsed, :sandbox, false),
-      settings: Keyword.get(parsed, :settings)
+      settings: Keyword.get(parsed, :settings),
+      workflow: Keyword.get(parsed, :workflow)
     }
   end
 
@@ -947,6 +1043,7 @@ defmodule SuperPi.CLI do
       --conversation <id>             Resume a previous conversation by numeric ID
       --model <model>                 Active LLM model
       --mode <mode>                   Execution mode (auto, accept-edits, plan)
+      --workflow <id>                 Session mode ID
       --effort <level>                Reasoning effort (low, medium, high, xhigh, max)
       --agent <profile>               Deprecated alias of --harness (self is code, research is planner)
       --add-dir <path>                Add a directory to the workspace (repeatable)

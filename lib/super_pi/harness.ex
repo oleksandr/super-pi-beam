@@ -37,6 +37,23 @@ defmodule SuperPi.Harness do
   `agent_defaults/1`, all overridable. Register the module with
   `config :super_pi, extra_harnesses: [MyApp.Harness.Triage]`.
 
+  ## Optional session profiles
+
+  A harness chooses explicit definitions and composes `Profiles` alongside `Permissions`:
+
+      {SuperPi.Plugins.Profiles,
+       profiles: [
+         %{id: "quick", prompt: "Answer briefly.", effort: "low"},
+         %{id: "explain", prompt: "Explain step by step.", effort: "high"}
+       ],
+       default: :quick,
+       discover: false}
+
+  These definitions default to read-only `plan` and cannot exceed the harness loadout or ceiling.
+  The Code example explicitly chooses `SuperPi.Harness.CodeProfiles.all()` for its coding personas.
+  `capabilities/0` includes `sessionModes`; clients use `SuperPi.SessionModes` to list and select
+  modes without importing the provider plugin. A harness may compose at most one mode provider.
+
   | Option | Meaning |
   |---|---|
   | `:id`, `:name`, `:description` | Required. Metadata for model listings and discovery. |
